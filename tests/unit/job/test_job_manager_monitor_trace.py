@@ -192,3 +192,89 @@ async def test_monitor_reuses_polled_pending_job_info(monkeypatch) -> None:
 
     manager._job_info_client.get_info.assert_awaited_once_with('job-1')
     supervisor.ping.assert_awaited_once()
+
+
+async def test_monitor_uses_fresh_job_info_before_polling(monkeypatch) -> None:
+    manager = object.__new__(JobManager)
+    manager.logger = Mock()
+    manager._terminal_notifications = {}
+    manager._terminal_wake_events = {}
+    manager._job_info_client = SimpleNamespace(get_info=AsyncMock())
+    supervisor = SimpleNamespace(ping=AsyncMock())
+    events: list[tuple[str, dict]] = []
+
+    async def finish_during_sleep(_delay: float) -> None:
+        manager._terminal_notifications['job-1'] = JobStatus.SUCCEEDED
+
+    monkeypatch.setattr('marie.job.job_manager.asyncio.sleep', finish_during_sleep)
+    monkeypatch.setattr(
+        'marie.job.job_manager.scheduler_trace',
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    initial_job_info = JobInfo(
+        entrypoint='test',
+        status=JobStatus.PENDING,
+        start_time=int(time.time() * 1000),
+    )
+    await manager._monitor_job_internal(
+        'job-1',
+        supervisor,
+        initial_job_info=initial_job_info,
+    )
+
+    manager._job_info_client.get_info.assert_not_awaited()
+    supervisor.ping.assert_awaited_once()
+    assert events[0] == (
+        'job_monitor_status_observed',
+        {
+            'job_id': 'job-1',
+            'status': 'PENDING',
+            'terminal': False,
+            'source': 'fresh_submission',
+        },
+    )
+
+
+async def test_submit_passes_committed_job_info_to_fresh_tasks(monkeypatch) -> None:
+    manager = object.__new__(JobManager)
+    manager.logger = Mock()
+    manager.event_logger = None
+    manager.event_publisher = Mock()
+    manager._job_distributor = Mock()
+    manager._etcd_client = Mock()
+    manager._desired_state_executor = Mock()
+    manager._job_info_client = SimpleNamespace(put_info=AsyncMock(return_value=True))
+    manager._get_scheduling_strategy = AsyncMock()
+    manager._monitor_job = AsyncMock()
+    manager._active_tasks = set()
+    manager._published_terminal_events = {}
+    manager._committed_terminal_events = {}
+    manager._terminal_notifications = {}
+    manager._active_run_attempts = {}
+    manager._recover_running_jobs_event = asyncio.Event()
+    manager._recover_running_jobs_event.set()
+
+    supervisor = SimpleNamespace(run=AsyncMock())
+    supervisor_factory = Mock(return_value=supervisor)
+    monkeypatch.setattr(
+        'marie.job.job_manager.JobSupervisor',
+        supervisor_factory,
+    )
+
+    await manager.submit_job(
+        entrypoint='mock_executor_a:///document/extract',
+        submission_id='job-1',
+    )
+    await asyncio.sleep(0)
+
+    stored_job_info = manager._job_info_client.put_info.await_args.args[1]
+    supervisor.run.assert_awaited_once_with(
+        _start_signal_actor=None,
+        initial_job_info=stored_job_info,
+    )
+    manager._monitor_job.assert_awaited_once_with(
+        'job-1',
+        job_supervisor=supervisor,
+        initial_job_info=stored_job_info,
+    )

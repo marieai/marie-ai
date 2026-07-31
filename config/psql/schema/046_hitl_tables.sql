@@ -32,7 +32,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS marie_scheduler.hitl_request (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    -- Link to job/dag (job uses composite key due to partitioning)
+    -- Link to job/dag. The composite key remains an API compatibility key.
     job_name TEXT,
     job_id UUID,
     dag_id UUID REFERENCES marie_scheduler.dag(id) ON DELETE CASCADE,

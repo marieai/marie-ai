@@ -352,32 +352,6 @@ def resume_jobs(schema: str, name: str, ids: list):
     """
 
 
-def fetch_next_job(schema: str):
-    def query(
-        name: str,
-        batch_size: int = 1,
-        include_metadata: bool = False,
-        priority: bool = True,
-    ) -> str:
-        """
-        Constructs a SQL query that calls the stored function to fetch the next job(s),
-        using the standardized DAG-aware dependency logic and state transitions.
-        """
-        function_call = f"{schema}.fetch_next_job('{name}', {batch_size})"
-
-        # Select only relevant columns if include_metadata is False
-        if include_metadata:
-            return f"SELECT * FROM {function_call};"
-        else:
-            return (
-                "SELECT id, name, priority, state, retry_limit, start_after, expire_in, "
-                "data, retry_delay, retry_backoff, keep_until, dag_id, job_level "
-                f"FROM {function_call};"
-            )
-
-    return query
-
-
 def mark_as_active_jobs(
     schema: str, name: str, ids: list, include_metadata: bool = False
 ):

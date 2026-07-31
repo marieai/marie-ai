@@ -12,8 +12,6 @@ TRUNCATE  event_tracking
 
 DROP SCHEMA marie_scheduler CASCADE;
 
-select * from marie_scheduler.fetch_next_job('extract', 25000)
-
    SELECT d.id, d.state, COUNT(j.*) as job_count,
           COUNT(CASE WHEN j.state = 'completed' THEN 1 END) as completed_jobs
    FROM marie_scheduler.dag d

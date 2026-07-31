@@ -13,13 +13,19 @@ CREATE INDEX IF NOT EXISTS job_attempt_operational_updated_idx
 CREATE INDEX IF NOT EXISTS job_attempt_operational_activated_idx
     ON {schema}.job_attempt (activated_at DESC, run_attempt_id DESC);
 
-CREATE INDEX IF NOT EXISTS job_operational_created_idx
+CREATE INDEX IF NOT EXISTS job_u_operational_created_idx
     ON {schema}.job (created_on DESC);
 
-CREATE INDEX IF NOT EXISTS job_operational_started_idx
+CREATE INDEX IF NOT EXISTS job_u_operational_started_idx
     ON {schema}.job (started_on DESC)
     WHERE started_on IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS job_operational_completed_idx
+CREATE INDEX IF NOT EXISTS job_u_operational_completed_idx
     ON {schema}.job (completed_on DESC)
     WHERE completed_on IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS job_u_operational_terminal_attempt_idx
+    ON {schema}.job (created_on DESC, id)
+    INCLUDE (state, run_attempt_id)
+    WHERE run_attempt_id IS NOT NULL
+      AND state IN ('completed', 'skipped', 'failed', 'expired', 'cancelled');

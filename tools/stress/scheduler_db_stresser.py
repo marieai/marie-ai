@@ -814,17 +814,15 @@ class CorpusGenerator:
             )
             cursor.execute(
                 f"""
-                SELECT partition_name
+                SELECT name
                 FROM {SCHEDULER_SCHEMA}.queue
                 WHERE name = %s
                 """,
                 (config.queue_name,),
             )
             row = cursor.fetchone()
-            if not row or not row["partition_name"]:
-                raise RuntimeError(
-                    f"Queue partition was not created: {config.queue_name}"
-                )
+            if not row:
+                raise RuntimeError(f"Queue was not created: {config.queue_name}")
         self.connection.commit()
 
     def create_staging_tables(self) -> None:
@@ -1256,13 +1254,7 @@ class CorpusGenerator:
             wal = cursor.fetchone()
             cursor.execute(
                 f"""
-                WITH queue_partition AS (
-                    SELECT format(
-                        '{SCHEDULER_SCHEMA}.%%I', partition_name
-                    ) AS relation_name
-                    FROM {SCHEDULER_SCHEMA}.queue
-                    WHERE name = %s
-                ), relations(logical_name, relation_name) AS (
+                WITH relations(logical_name, relation_name) AS (
                     VALUES
                         ('dag', '{SCHEDULER_SCHEMA}.dag'),
                         ('job_root', '{SCHEDULER_SCHEMA}.job'),
@@ -1271,9 +1263,7 @@ class CorpusGenerator:
                         ('job_attempt', '{SCHEDULER_SCHEMA}.job_attempt'),
                         ('job_search_document',
                             '{SCHEDULER_SCHEMA}.job_search_document'),
-                        ('run_manifest', '{STRESS_SCHEMA}.run_manifest'),
-                        ('queue_partition',
-                            (SELECT relation_name FROM queue_partition))
+                        ('run_manifest', '{STRESS_SCHEMA}.run_manifest')
                 )
                 SELECT
                     logical_name,
@@ -1290,8 +1280,7 @@ class CorpusGenerator:
                 FROM relations
                 WHERE to_regclass(relation_name) IS NOT NULL
                 ORDER BY logical_name
-                """,
-                (config.queue_name,),
+                """
             )
             relations = cursor.fetchall()
             cursor.execute(

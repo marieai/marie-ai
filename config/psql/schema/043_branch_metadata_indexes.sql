@@ -13,15 +13,15 @@ COMMENT ON COLUMN {schema}.job_history.branch_metadata IS
 'Historical branch execution metadata for audit and debugging.';
 
 -- Create GIN index for efficient JSON queries
-CREATE INDEX IF NOT EXISTS job_branch_metadata_idx
+CREATE INDEX IF NOT EXISTS job_u_branch_metadata_idx
 ON {schema}.job USING gin(branch_metadata);
 
 -- Create partial index for quickly finding skipped jobs
-CREATE INDEX IF NOT EXISTS job_branch_skipped_idx
+CREATE INDEX IF NOT EXISTS job_u_branch_skipped_idx
 ON {schema}.job ((branch_metadata->>'skipped'))
 WHERE branch_metadata->>'skipped' = 'true';
 
 -- Create partial index for finding BRANCH/SWITCH nodes
-CREATE INDEX IF NOT EXISTS job_branch_node_type_idx
+CREATE INDEX IF NOT EXISTS job_u_branch_node_type_idx
 ON {schema}.job ((branch_metadata->>'node_type'))
 WHERE branch_metadata->>'node_type' IN ('BRANCH', 'SWITCH');

@@ -157,7 +157,8 @@ class JobSupervisor:
         self,
         # Signal actor used in testing to capture PENDING -> RUNNING cases
         _start_signal_actor: Optional[ActorHandle] = None,
-    ):
+        initial_job_info: JobInfo | None = None,
+    ) -> None:
         """
         Stop and start both happen asynchronously, coordinated by asyncio event
         and coroutine, respectively.
@@ -170,7 +171,9 @@ class JobSupervisor:
         # Capture the main event loop so callbacks from worker threads
         # self._loop = asyncio.get_running_loop()
 
-        curr_info = await self._job_info_client.get_info(self._job_id)
+        curr_info = initial_job_info
+        if curr_info is None:
+            curr_info = await self._job_info_client.get_info(self._job_id)
         if curr_info is None:
             raise RuntimeError(f"Status could not be retrieved for job {self._job_id}.")
         curr_status = curr_info.status

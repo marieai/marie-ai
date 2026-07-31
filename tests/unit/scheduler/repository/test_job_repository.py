@@ -186,7 +186,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('82')" in schema_query
+    assert "VALUES ('84')" in schema_query
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput("
         in schema_query
@@ -231,8 +231,11 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
     assert "task_count INTEGER NOT NULL DEFAULT 0" in schema_query
     assert "backfill_dag_projection_on_job_insert" not in schema_query
     assert "CREATE INDEX IF NOT EXISTS dag_admission_order_idx" in schema_query
-    assert "job_expired_acquisition_lease_idx" in schema_query
-    assert "job_expired_run_lease_idx" in schema_query
+    assert "job_u_expired_acquisition_lease_idx" in schema_query
+    assert "job_u_expired_run_lease_idx" in schema_query
+    assert "PARTITION BY LIST (name)" not in schema_query
+    assert "PRIMARY KEY (id)" in schema_query
+    assert "UNIQUE (name, id)" in schema_query
     assert "FOR UPDATE OF j SKIP LOCKED" in schema_query
     assert "'refresh_job_durations'" in schema_query
     assert "'refresh_dag_durations'" in schema_query
@@ -240,7 +243,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_tables_installs_safe_queue_partition_deletion() -> None:
+async def test_create_tables_installs_logical_queue_deletion() -> None:
     connection = FakeConnection(fetchval=[True, True])
     repository = build_repository(connection)
 
@@ -253,13 +256,13 @@ async def test_create_tables_installs_safe_queue_partition_deletion() -> None:
         and "CREATE OR REPLACE FUNCTION marie_scheduler.delete_queue" in query
     )
     delete_jobs = delete_queue_query.index("DELETE FROM marie_scheduler.job AS job")
-    detach_partition = delete_queue_query.index("DETACH PARTITION")
-    drop_partition = delete_queue_query.index("DROP TABLE IF EXISTS")
     delete_registration = delete_queue_query.index(
         "DELETE FROM marie_scheduler.queue AS queue"
     )
 
-    assert delete_jobs < detach_partition < drop_partition < delete_registration
+    assert delete_jobs < delete_registration
+    assert "DETACH PARTITION" not in delete_queue_query
+    assert "DROP TABLE" not in delete_queue_query
     assert "CASCADE" not in delete_queue_query
 
 

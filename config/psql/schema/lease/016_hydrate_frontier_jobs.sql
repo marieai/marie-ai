@@ -5,6 +5,8 @@ RETURNS TABLE (
 )
 LANGUAGE sql
 STABLE
+SET jit = off
+SET work_mem = '16MB'
 AS $$
 SELECT
   j.dag_id,
@@ -33,8 +35,10 @@ LEFT JOIN LATERAL (
          ) AS deps
   FROM {schema}.job_dependencies jd
   LEFT JOIN {schema}.job p
-         ON p.id = jd.depends_on_id
-  WHERE jd.job_id = j.id
+         ON p.name = jd.depends_on_name
+        AND p.id = jd.depends_on_id
+  WHERE jd.job_name = j.name
+    AND jd.job_id = j.id
 ) dep ON TRUE
 WHERE j.dag_id = ANY(dag_ids)
   AND j.state IN ('created','retry')

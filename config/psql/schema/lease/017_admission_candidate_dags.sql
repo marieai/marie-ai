@@ -9,38 +9,46 @@ RETURNS TABLE
             dag_id         uuid,
             serialized_dag jsonb
         )
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SET jit = off
+SET plan_cache_mode = force_custom_plan
 AS
 $$
-SELECT
-    d.id,
-    d.serialized_dag
-FROM {schema}.dag d
-WHERE d.state IN ('created', 'active')
-  AND NOT (
-      d.id = ANY(COALESCE(p_excluded_dag_ids, ARRAY[]::uuid[]))
-  )
-  AND EXISTS (
-      SELECT 1
-      FROM {schema}.job ready
-      WHERE ready.dag_id = d.id
-        AND ready.state IN ('created', 'retry')
-        AND ready.start_after <= CURRENT_TIMESTAMP
-  )
-  AND NOT EXISTS (
-      SELECT 1
-      FROM {schema}.job blocker
-      WHERE blocker.dag_id = d.id
-        AND blocker.state IN ('failed', 'expired', 'cancelled')
-  )
-ORDER BY
-    d.priority DESC,
-    COALESCE(d.soft_sla, d.hard_sla) ASC NULLS LAST,
-    d.created_on,
-    d.id
-LIMIT GREATEST(0, p_limit);
+BEGIN
+    RETURN QUERY
+    SELECT
+        d.id,
+        d.serialized_dag
+    FROM {schema}.dag d
+    WHERE d.state IN ('created', 'active')
+      AND NOT EXISTS (
+          SELECT 1
+          FROM unnest(
+              COALESCE(p_excluded_dag_ids, ARRAY[]::uuid[])
+          ) AS excluded(dag_id)
+          WHERE excluded.dag_id = d.id
+      )
+      AND EXISTS (
+          SELECT 1
+          FROM {schema}.job ready
+          WHERE ready.dag_id = d.id
+            AND ready.state IN ('created', 'retry')
+            AND ready.start_after <= CURRENT_TIMESTAMP
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM {schema}.job blocker
+          WHERE blocker.dag_id = d.id
+            AND blocker.state IN ('failed', 'expired', 'cancelled')
+      )
+    ORDER BY
+        d.priority DESC,
+        COALESCE(d.soft_sla, d.hard_sla) ASC NULLS LAST,
+        d.created_on,
+        d.id
+    LIMIT GREATEST(0, p_limit);
+END;
 $$;
 
 COMMENT ON FUNCTION {schema}.admission_candidate_dags(integer, integer, uuid[])

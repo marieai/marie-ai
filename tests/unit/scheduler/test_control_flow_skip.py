@@ -98,3 +98,6 @@ def test_frontier_hydration_treats_skipped_parents_as_satisfied() -> None:
 
     assert "p.state NOT IN ('completed','failed','cancelled','skipped')" in sql
     assert "'expire_in_seconds', EXTRACT(EPOCH FROM j.expire_in)::integer" in sql
+    assert "SET jit = off" in sql
+    assert "p.name = jd.depends_on_name" in sql
+    assert "jd.job_name = j.name" in sql

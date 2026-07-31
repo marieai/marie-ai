@@ -552,3 +552,63 @@ FROM pg_stat_activity AS a
 WHERE a.state <> 'idle'
   AND a.pid <> pg_backend_pid()
 ORDER BY a.query_start;
+
+
+
+
+
+
+
+
+
+
+----------- BLCOKING
+SELECT
+    blocked.pid                              AS blocked_pid,
+    blocked.usename                          AS blocked_user,
+    blocked.application_name                 AS blocked_application,
+    blocked.client_addr                      AS blocked_client,
+    now() - blocked.query_start              AS blocked_duration,
+    blocked.wait_event_type,
+    blocked.wait_event,
+    blocked.query                            AS blocked_query,
+
+    blocker.pid                              AS blocker_pid,
+    blocker.usename                          AS blocker_user,
+    blocker.application_name                 AS blocker_application,
+    blocker.client_addr                      AS blocker_client,
+    blocker.state                            AS blocker_state,
+    now() - blocker.xact_start               AS blocker_transaction_age,
+    blocker.query                            AS blocker_query
+
+FROM pg_stat_activity AS blocked
+CROSS JOIN LATERAL
+    unnest(pg_blocking_pids(blocked.pid)) AS blocking_pid
+JOIN pg_stat_activity AS blocker
+    ON blocker.pid = blocking_pid
+ORDER BY blocked_duration DESC;
+
+--- IDEL
+
+-- Look for dangerous idle transactions
+
+SELECT
+    pid,
+    usename,
+    application_name,
+    client_addr,
+    state,
+    now() - xact_start AS transaction_age,
+    now() - state_change AS idle_duration,
+    query
+FROM pg_stat_activity
+WHERE state = 'idle in transaction'
+ORDER BY xact_start;
+
+
+cancellation first:
+
+SELECT pg_cancel_backend(<blocker_pid>);
+If the blocking connection is idle or cancellation does not work:
+
+SELECT pg_terminate_backend(<blocker_pid>);

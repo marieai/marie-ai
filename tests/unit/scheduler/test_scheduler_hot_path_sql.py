@@ -46,9 +46,9 @@ def test_lease_expiration_indexes_match_maintenance_predicates() -> None:
         PROJECT_ROOT / "config/psql/schema/073_scheduler_hot_path_indexes.sql"
     ).read_text()
 
-    assert "job_expired_acquisition_lease_idx" in sql
+    assert "job_u_expired_acquisition_lease_idx" in sql
     assert "ON {schema}.job (lease_expires_at, id)" in sql
     assert "state IN ('created', 'retry')" in sql
-    assert "job_expired_run_lease_idx" in sql
+    assert "job_u_expired_run_lease_idx" in sql
     assert "ON {schema}.job (run_lease_expires_at, id)" in sql
     assert "state = 'active'" in sql

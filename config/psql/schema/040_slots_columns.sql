@@ -101,7 +101,7 @@ ALTER TABLE {schema}.job
 -- Composite index for fast time-slot queries
 -- Most queries filter by day and group by slot
 -- =========================================================
-CREATE INDEX IF NOT EXISTS job_day_local_effective_slot_idx15_effective_idx
+CREATE INDEX IF NOT EXISTS job_u_effective_slot_idx
 ON {schema}.job (day_local_effective, slot_idx15_effective);
 
 

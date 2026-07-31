@@ -26,6 +26,38 @@ def make_supervisor(confirmation_event: asyncio.Event) -> JobSupervisor:
 
 
 @pytest.mark.asyncio
+async def test_run_uses_fresh_job_info_without_database_read() -> None:
+    supervisor = make_supervisor(asyncio.Event())
+    supervisor._job_info_client.get_info = AsyncMock()
+    supervisor._submit_job_in_background = AsyncMock()
+    initial_job_info = JobInfo(
+        status=JobStatus.PENDING,
+        entrypoint='mock_executor_a:///document/extract',
+    )
+
+    await supervisor.run(initial_job_info=initial_job_info)
+
+    supervisor._job_info_client.get_info.assert_not_awaited()
+    supervisor._submit_job_in_background.assert_awaited_once_with(initial_job_info)
+
+
+@pytest.mark.asyncio
+async def test_run_reads_job_info_when_initial_value_is_absent() -> None:
+    supervisor = make_supervisor(asyncio.Event())
+    stored_job_info = JobInfo(
+        status=JobStatus.PENDING,
+        entrypoint='mock_executor_a:///document/extract',
+    )
+    supervisor._job_info_client.get_info = AsyncMock(return_value=stored_job_info)
+    supervisor._submit_job_in_background = AsyncMock()
+
+    await supervisor.run()
+
+    supervisor._job_info_client.get_info.assert_awaited_once_with('test-job-id')
+    supervisor._submit_job_in_background.assert_awaited_once_with(stored_job_info)
+
+
+@pytest.mark.asyncio
 async def test_confirmation_is_signaled_immediately_on_owning_loop() -> None:
     confirmation_event = asyncio.Event()
     supervisor = make_supervisor(confirmation_event)

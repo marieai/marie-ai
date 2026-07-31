@@ -9,13 +9,20 @@ def test_admission_candidate_function_uses_dag_projection_ordering() -> None:
     normalized = " ".join(sql.lower().split())
 
     assert "create or replace function {schema}.admission_candidate_dags(" in normalized
-    assert "stable set jit = off" in normalized
+    assert "language plpgsql stable set jit = off" in normalized
+    assert "set plan_cache_mode = force_custom_plan" in normalized
+    assert "begin return query select" in normalized
     assert "d.priority desc" in normalized
     assert "coalesce(d.soft_sla, d.hard_sla) asc nulls last" in normalized
     assert "d.created_on, d.id" in normalized
     assert "from {schema}.job ready" in normalized
     assert "ready.state in ('created', 'retry')" in normalized
     assert "ready.start_after <= current_timestamp" in normalized
+    assert "from unnest(" in normalized
+    assert "coalesce(p_excluded_dag_ids, array[]::uuid[])" in normalized
+    assert "as excluded(dag_id)" in normalized
+    assert "excluded.dag_id = d.id" in normalized
+    assert "d.id = any" not in normalized
     assert "from {schema}.job blocker" in normalized
     assert "blocker.state in ('failed', 'expired', 'cancelled')" in normalized
     assert "max(" not in normalized

@@ -1,5 +1,5 @@
 -- File: 005_job.sql
--- Description: Main job queue table with list partitioning
+-- Description: Unpartitioned active scheduler job table
 -- Dependencies: 001_schema.sql, 002_enums.sql (job_state enum)
 
 CREATE TABLE IF NOT EXISTS {schema}.job (
@@ -36,16 +36,10 @@ CREATE TABLE IF NOT EXISTS {schema}.job (
     lease_epoch BIGINT DEFAULT 0,
     run_owner TEXT,
     run_attempt_id UUID,
-    run_lease_expires_at TIMESTAMP WITH TIME ZONE
-) PARTITION BY LIST (name);
+    run_lease_expires_at TIMESTAMP WITH TIME ZONE,
+    PRIMARY KEY (id),
+    UNIQUE (name, id)
+);
 
--- Primary key added separately to support partitioning (idempotent)
-DO $$ BEGIN
-    ALTER TABLE {schema}.job ADD PRIMARY KEY (name, id);
-EXCEPTION
-    WHEN duplicate_object THEN NULL;
-    WHEN duplicate_table THEN NULL;
-    WHEN invalid_table_definition THEN NULL;
-END $$;
-
-COMMENT ON TABLE {schema}.job IS 'Main job queue table - partitioned by queue name';
+COMMENT ON TABLE {schema}.job IS
+    'Unpartitioned active scheduler jobs; queue names remain logical routing metadata';

@@ -4,15 +4,22 @@ RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    dag_count INTEGER;
-    job_count INTEGER;
+    reset_at TIMESTAMPTZ := statement_timestamp();
+    dag_count BIGINT;
+    job_count BIGINT;
 BEGIN
+    ALTER TABLE {schema}.job
+        DISABLE TRIGGER job_update_state_trigger;
+    ALTER TABLE {schema}.dag
+        DISABLE TRIGGER dag_update_state_trigger;
+    ALTER TABLE {schema}.dag
+        DISABLE TRIGGER trg_dag_state_changed;
+
     UPDATE {schema}.job
     SET state = 'created',
         started_on = NULL,
-        created_on = now(),
         completed_on = NULL,
-        start_after = now(),
+        start_after = reset_at,
         retry_count = 0,
         output = NULL,
         duration = NULL,
@@ -24,18 +31,43 @@ BEGIN
         run_owner = NULL,
         run_attempt_id = NULL,
         run_lease_expires_at = NULL
-    WHERE dag_id IN (SELECT id FROM {schema}.dag);
+    WHERE state IS DISTINCT FROM 'created'
+       OR started_on IS NOT NULL
+       OR completed_on IS NOT NULL
+       OR start_after > reset_at
+       OR retry_count <> 0
+       OR output IS NOT NULL
+       OR duration IS NOT NULL
+       OR sla_miss_logged
+       OR branch_metadata IS NOT NULL
+       OR lease_owner IS NOT NULL
+       OR lease_expires_at IS NOT NULL
+       OR lease_epoch IS DISTINCT FROM 0
+       OR run_owner IS NOT NULL
+       OR run_attempt_id IS NOT NULL
+       OR run_lease_expires_at IS NOT NULL;
     GET DIAGNOSTICS job_count = ROW_COUNT;
 
     UPDATE {schema}.dag
     SET state = 'created',
         started_on = NULL,
-        created_on = now(),
         completed_on = NULL,
-        updated_on = now(),
+        updated_on = reset_at,
         duration = NULL,
-        sla_miss_logged = FALSE;
+        sla_miss_logged = FALSE
+    WHERE state IS DISTINCT FROM 'created'
+       OR started_on IS NOT NULL
+       OR completed_on IS NOT NULL
+       OR duration IS NOT NULL
+       OR sla_miss_logged;
     GET DIAGNOSTICS dag_count = ROW_COUNT;
+
+    ALTER TABLE {schema}.job
+        ENABLE TRIGGER job_update_state_trigger;
+    ALTER TABLE {schema}.dag
+        ENABLE TRIGGER dag_update_state_trigger;
+    ALTER TABLE {schema}.dag
+        ENABLE TRIGGER trg_dag_state_changed;
 
     RAISE NOTICE 'Reset % DAG(s) and % job(s) to a fresh schedulable state.',
         dag_count, job_count;
@@ -43,4 +75,4 @@ END;
 $$;
 
 COMMENT ON FUNCTION {schema}.reset_all() IS
-'Reset every DAG and its jobs for rerun while preserving dependency and attempt audit history.';
+'Reset DAGs and jobs with execution residue while preserving existing dependency and audit rows. Run with scheduler writers stopped; bulk resets do not append per-row history or DAG notifications.';

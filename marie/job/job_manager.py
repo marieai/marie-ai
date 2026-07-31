@@ -281,8 +281,11 @@ class JobManager:
             self._recover_running_jobs_event.set()
 
     async def _monitor_job(
-        self, job_id: str, job_supervisor: Optional[ActorHandle] = None
-    ):
+        self,
+        job_id: str,
+        job_supervisor: Optional[ActorHandle] = None,
+        initial_job_info: JobInfo | None = None,
+    ) -> None:
         """Monitors the specified job until it enters a terminal state.
 
         This is necessary because we need to handle the case where the
@@ -296,7 +299,11 @@ class JobManager:
         self.monitored_jobs.add(job_id)
         wake_event = self._terminal_wake_events.setdefault(job_id, asyncio.Event())
         try:
-            await self._monitor_job_internal(job_id, job_supervisor)
+            await self._monitor_job_internal(
+                job_id,
+                job_supervisor,
+                initial_job_info=initial_job_info,
+            )
         finally:
             self.monitored_jobs.remove(job_id)
             if self._terminal_wake_events.get(job_id) is wake_event:
@@ -304,8 +311,11 @@ class JobManager:
             self._terminal_notifications.pop(job_id, None)
 
     async def _monitor_job_internal(
-        self, job_id: str, job_supervisor: Optional[ActorHandle] = None
-    ):
+        self,
+        job_id: str,
+        job_supervisor: Optional[ActorHandle] = None,
+        initial_job_info: JobInfo | None = None,
+    ) -> None:
         """Monitors the specified job until it enters a terminal state.
         @param job_id: The id of the job to monitor.
         @param job_supervisor: The actor handle for the job supervisor.
@@ -323,12 +333,16 @@ class JobManager:
 
         while is_alive:
             try:
-                job_info: Optional[JobInfo] = None
+                job_info = initial_job_info
+                initial_job_info = None
                 job_status = self._terminal_notifications.pop(job_id, None)
                 observation_source = 'postgres_notify'
                 if job_status is None:
-                    observation_source = 'postgres_poll'
-                    job_info = await self._job_info_client.get_info(job_id)
+                    if job_info is None:
+                        observation_source = 'postgres_poll'
+                        job_info = await self._job_info_client.get_info(job_id)
+                    else:
+                        observation_source = 'fresh_submission'
                     job_status = job_info.status if job_info is not None else None
                 if job_status is None:
                     self.logger.warning(
@@ -610,7 +624,10 @@ class JobManager:
             )
 
             task = asyncio.create_task(
-                supervisor.run(_start_signal_actor=_start_signal_actor)
+                supervisor.run(
+                    _start_signal_actor=_start_signal_actor,
+                    initial_job_info=job_info,
+                )
             )
             task.set_name(f"supervisor:{submission_id}")
             self._active_tasks.add(task)
@@ -629,7 +646,11 @@ class JobManager:
             # requiring a client to poll.
             self.logger.debug(f"Started job with submission_id: {submission_id}")
             run_background_task(
-                self._monitor_job(submission_id, job_supervisor=supervisor)
+                self._monitor_job(
+                    submission_id,
+                    job_supervisor=supervisor,
+                    initial_job_info=job_info,
+                )
             )
         except Exception as e:
             tb_str = get_exception_traceback()

@@ -69,7 +69,8 @@ def test_seed_resume_and_verify_against_scheduler_schema(
             generator.create_staging_tables()
             snapshot = generator.database_snapshot(first)
             relation_names = {row["logical_name"] for row in snapshot["relations"]}
-            assert {"queue_partition", "run_manifest"} <= relation_names
+            assert {"job_root", "run_manifest"} <= relation_names
+            assert snapshot["job_partition_count"] == 0
             original_copy = generator._copy_chunk
 
             def fail_second_chunk(

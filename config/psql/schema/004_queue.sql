@@ -11,9 +11,8 @@ CREATE TABLE IF NOT EXISTS {schema}.queue (
     expire_seconds INT,
     retention_minutes INT,
     dead_letter TEXT REFERENCES {schema}.queue (name),
-    partition_name TEXT,
     created_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE {schema}.queue IS 'Queue configuration and metadata for job partitions';
+COMMENT ON TABLE {schema}.queue IS 'Logical scheduler queue configuration and routing metadata';
