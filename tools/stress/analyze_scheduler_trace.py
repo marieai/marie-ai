@@ -5,10 +5,19 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import heapq
 import json
-from collections import Counter, defaultdict
+import random
+import sys
+from collections import Counter, defaultdict, deque
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+
+_DEFAULT_EVENT_SAMPLE_SIZE = 5_000
+_DEFAULT_GROUP_SAMPLE_SIZE = 25_000
+_TAIL_READ_CHUNK_BYTES = 1024 * 1024
+_PROGRESS_BYTES = 4 * 1024 * 1024 * 1024
 
 EVENTS = (
     "gateway_submit_received",
@@ -495,13 +504,179 @@ def _job_key(row: dict[str, Any]) -> str | None:
     return None
 
 
-def load_trace(
+class _SampledRows(list[dict[str, Any]]):
+    def __init__(
+        self,
+        rows: Iterable[dict[str, Any]],
+        *,
+        correlated_rows: list[dict[str, Any]],
+        event_counts: Counter[str],
+        executor_counts: Counter[str],
+        first_ts: float | None,
+        last_ts: float | None,
+        rate_stats: dict[str, tuple[int, float | None, float | None]],
+        total_rows: int,
+        event_sample_size: int,
+    ) -> None:
+        super().__init__(rows)
+        self.correlated_rows = correlated_rows
+        self.event_counts = event_counts
+        self.executor_counts = executor_counts
+        self.first_ts = first_ts
+        self.last_ts = last_ts
+        self.rate_stats = rate_stats
+        self.total_rows = total_rows
+        self.event_sample_size = event_sample_size
+
+    def has_complete_event(self, event: str) -> bool:
+        return self.event_counts.get(event, 0) <= self.event_sample_size
+
+
+class _WholeTraceSampler:
+    def __init__(self, *, event_sample_size: int, group_sample_size: int) -> None:
+        self.event_sample_size = event_sample_size
+        self.group_sample_size = group_sample_size
+        self.total_rows = 0
+        self.event_counts: Counter[str] = Counter()
+        self.executor_request_counts: Counter[str] = Counter()
+        self.executor_terminal_counts: Counter[str] = Counter()
+        self.first_ts: float | None = None
+        self.last_ts: float | None = None
+        self.rate_bounds: dict[str, list[float]] = defaultdict(list)
+        self.event_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        self.grouped: dict[str, list[dict[str, Any]]] = {}
+        self._group_heap: list[tuple[int, str]] = []
+        self._random = random.Random(0)
+
+    def _sample_event(self, event: str, row: dict[str, Any]) -> None:
+        sample = self.event_rows[event]
+        count = self.event_counts[event]
+        if len(sample) < self.event_sample_size:
+            sample.append(row)
+            return
+        replacement = self._random.randrange(count)
+        if replacement < self.event_sample_size:
+            sample[replacement] = row
+
+    def _sample_group(self, key: str, row: dict[str, Any]) -> None:
+        group = self.grouped.get(key)
+        if group is not None:
+            group.append(row)
+            return
+
+        score = hash(key) & ((1 << 63) - 1)
+        if len(self._group_heap) < self.group_sample_size:
+            heapq.heappush(self._group_heap, (-score, key))
+            self.grouped[key] = [row]
+            return
+        if score >= -self._group_heap[0][0]:
+            return
+
+        _, removed_key = heapq.heapreplace(self._group_heap, (-score, key))
+        del self.grouped[removed_key]
+        self.grouped[key] = [row]
+
+    def consume(self, row: dict[str, Any]) -> None:
+        self.total_rows += 1
+        event = row.get("event")
+        ts = row.get("ts_unix")
+        if isinstance(ts, (int, float)):
+            timestamp = float(ts)
+            self.first_ts = (
+                timestamp if self.first_ts is None else min(self.first_ts, timestamp)
+            )
+            self.last_ts = (
+                timestamp if self.last_ts is None else max(self.last_ts, timestamp)
+            )
+        else:
+            timestamp = None
+
+        if isinstance(event, str):
+            self.event_counts[event] += 1
+            self._sample_event(event, row)
+            if event in RATE_EVENTS and timestamp is not None:
+                bounds = self.rate_bounds[event]
+                if not bounds:
+                    bounds.extend((timestamp, timestamp))
+                else:
+                    bounds[0] = min(bounds[0], timestamp)
+                    bounds[1] = max(bounds[1], timestamp)
+
+            pid = row.get("pid")
+            if pid is not None:
+                if event == "executor_request_received":
+                    self.executor_request_counts[str(pid)] += 1
+                elif event in {"executor_success_recorded", "executor_failed_recorded"}:
+                    self.executor_terminal_counts[str(pid)] += 1
+
+        if event not in EVENTS:
+            return
+        key = _job_key(row)
+        if key:
+            self._sample_group(key, row)
+            return
+        job_ids = row.get("job_ids")
+        if isinstance(job_ids, list):
+            for job_id in job_ids:
+                if isinstance(job_id, str) and job_id:
+                    self._sample_group(job_id, row)
+
+    def finish(self) -> tuple[dict[str, list[dict[str, Any]]], _SampledRows]:
+        rate_stats: dict[str, tuple[int, float | None, float | None]] = {}
+        for event in RATE_EVENTS:
+            count = self.event_counts.get(event, 0)
+            bounds = self.rate_bounds.get(event)
+            if count < 2 or not bounds:
+                rate_stats[event] = (count, None, None)
+                continue
+            span = bounds[1] - bounds[0]
+            rate_stats[event] = (count, count / span if span > 0 else None, span)
+
+        sampled_rows = [
+            row for event_rows in self.event_rows.values() for row in event_rows
+        ]
+        correlated_rows: list[dict[str, Any]] = []
+        seen_rows: set[int] = set()
+        for group_rows in self.grouped.values():
+            for row in group_rows:
+                row_id = id(row)
+                if row_id in seen_rows:
+                    continue
+                seen_rows.add(row_id)
+                correlated_rows.append(row)
+
+        rows = _SampledRows(
+            sampled_rows,
+            correlated_rows=correlated_rows,
+            event_counts=self.event_counts,
+            executor_counts=(
+                self.executor_request_counts or self.executor_terminal_counts
+            ),
+            first_ts=self.first_ts,
+            last_ts=self.last_ts,
+            rate_stats=rate_stats,
+            total_rows=self.total_rows,
+            event_sample_size=self.event_sample_size,
+        )
+        return self.grouped, rows
+
+
+def sample_whole_trace(
     path: Path,
-) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
-    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    rows: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8") as fp:
+    *,
+    event_sample_size: int,
+    group_sample_size: int,
+) -> tuple[dict[str, list[dict[str, Any]]], _SampledRows]:
+    sampler = _WholeTraceSampler(
+        event_sample_size=event_sample_size,
+        group_sample_size=group_sample_size,
+    )
+    file_size = path.stat().st_size
+    bytes_read = 0
+    next_progress = _PROGRESS_BYTES
+    with path.open("rb") as fp:
         for line_no, line in enumerate(fp, start=1):
+            bytes_read += len(line)
             line = line.strip()
             if not line:
                 continue
@@ -509,16 +684,92 @@ def load_trace(
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
                 raise ValueError(f"{path}:{line_no}: invalid JSONL row") from exc
-            rows.append(row)
-            key = _job_key(row)
-            if key:
-                grouped[key].append(row)
-                continue
-            job_ids = row.get("job_ids")
-            if isinstance(job_ids, list):
-                for job_id in job_ids:
-                    if isinstance(job_id, str) and job_id:
-                        grouped[job_id].append(row)
+            sampler.consume(row)
+            if bytes_read >= next_progress:
+                print(
+                    f"scanned {bytes_read / (1024**3):.1f} GiB "
+                    f"of {file_size / (1024**3):.1f} GiB",
+                    file=sys.stderr,
+                )
+                next_progress += _PROGRESS_BYTES
+    return sampler.finish()
+
+
+def _parse_trace_lines(
+    path: Path,
+    lines: Iterable[str | bytes],
+    *,
+    location: str = "",
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    rows: list[dict[str, Any]] = []
+    for line_no, line in enumerate(lines, start=1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            row_location = f"{location} {line_no}" if location else str(line_no)
+            raise ValueError(f"{path}:{row_location}: invalid JSONL row") from exc
+        rows.append(row)
+        key = _job_key(row)
+        if key:
+            grouped[key].append(row)
+            continue
+        job_ids = row.get("job_ids")
+        if isinstance(job_ids, list):
+            for job_id in job_ids:
+                if isinstance(job_id, str) and job_id:
+                    grouped[job_id].append(row)
+    return grouped, rows
+
+
+def _read_tail_lines(path: Path, limit: int) -> tuple[list[bytes], bool]:
+    chunks: deque[bytes] = deque()
+    newline_count = 0
+
+    with path.open("rb") as fp:
+        fp.seek(0, 2)
+        position = fp.tell()
+        while position > 0 and newline_count <= limit:
+            read_size = min(_TAIL_READ_CHUNK_BYTES, position)
+            position -= read_size
+            fp.seek(position)
+            chunk = fp.read(read_size)
+            chunks.appendleft(chunk)
+            newline_count += chunk.count(b"\n")
+
+    lines = b"".join(chunks).splitlines()
+    truncated = position > 0 or len(lines) > limit
+    return lines[-limit:], truncated
+
+
+def load_trace_window(
+    path: Path,
+    *,
+    tail_events: int | None,
+) -> tuple[
+    dict[str, list[dict[str, Any]]],
+    list[dict[str, Any]],
+    bool,
+]:
+    if tail_events is None:
+        with path.open("r", encoding="utf-8") as fp:
+            grouped, rows = _parse_trace_lines(path, fp)
+        return grouped, rows, False
+    if tail_events <= 0:
+        raise ValueError("tail_events must be greater than zero")
+
+    lines, truncated = _read_tail_lines(path, tail_events)
+    grouped, rows = _parse_trace_lines(path, lines, location="tail row")
+    return grouped, rows, truncated
+
+
+def load_trace(
+    path: Path,
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    grouped, rows, _ = load_trace_window(path, tail_events=None)
     return grouped, rows
 
 
@@ -887,6 +1138,8 @@ def summarize_job(
 def _rate_stats(
     rows: list[dict[str, Any]],
 ) -> dict[str, tuple[int, float | None, float | None]]:
+    if isinstance(rows, _SampledRows):
+        return rows.rate_stats
     by_event: dict[str, list[float]] = defaultdict(list)
     for row in rows:
         event = row.get("event")
@@ -992,6 +1245,8 @@ def _capacity_per_second(duration_ms: float | None) -> float | None:
 
 
 def _event_intervals_ms(rows: list[dict[str, Any]], event_name: str) -> list[float]:
+    if isinstance(rows, _SampledRows) and not rows.has_complete_event(event_name):
+        return []
     times = sorted(
         float(row["ts_unix"])
         for row in rows
@@ -1004,6 +1259,11 @@ def _event_intervals_ms(rows: list[dict[str, Any]], event_name: str) -> list[flo
 def _next_event_delays_ms(
     rows: list[dict[str, Any]], start_event: str, end_event: str
 ) -> list[float]:
+    if isinstance(rows, _SampledRows) and (
+        not rows.has_complete_event(start_event)
+        or not rows.has_complete_event(end_event)
+    ):
+        return []
     starts = sorted(
         float(row["ts_unix"])
         for row in rows
@@ -1025,6 +1285,8 @@ def _next_event_delays_ms(
 
 
 def _workload_executors(rows: list[dict[str, Any]]) -> set[str]:
+    if isinstance(rows, _SampledRows):
+        rows = rows.correlated_rows
     reserved = {
         str(row["executor"])
         for row in rows
@@ -1048,6 +1310,8 @@ def _workload_executors(rows: list[dict[str, Any]]) -> set[str]:
 
 
 def _job_executors(rows: list[dict[str, Any]]) -> dict[str, str]:
+    if isinstance(rows, _SampledRows):
+        rows = rows.correlated_rows
     executors: dict[str, str] = {}
     for row in rows:
         job_id = row.get("job_id")
@@ -1072,10 +1336,11 @@ def _job_executors(rows: list[dict[str, Any]]) -> dict[str, str]:
 def _candidate_slot_capacity(
     rows: list[dict[str, Any]], workload_executors: set[str]
 ) -> tuple[list[float], list[float]]:
+    source_rows = rows.correlated_rows if isinstance(rows, _SampledRows) else rows
     job_executors = _job_executors(rows)
     free_slots: list[float] = []
     compatible_slots: list[float] = []
-    for row in rows:
+    for row in source_rows:
         if row.get("event") != "candidate_built":
             continue
         slots = row.get("slots_by_executor")
@@ -1114,6 +1379,8 @@ def _candidate_slot_capacity(
 def _max_observed_free_slots(
     rows: list[dict[str, Any]], workload_executors: set[str]
 ) -> int | None:
+    if isinstance(rows, _SampledRows):
+        rows = rows.correlated_rows
     max_slots: int | None = None
     per_executor_max: dict[str, int] = {}
     for row in rows:
@@ -1156,6 +1423,8 @@ def _max_observed_free_slots(
 def _candidate_selection_attempts(
     rows: list[dict[str, Any]],
 ) -> tuple[list[float], list[float]]:
+    if isinstance(rows, _SampledRows):
+        rows = rows.correlated_rows
     candidate_times: dict[str, list[float]] = defaultdict(list)
     selected_times: dict[str, float] = {}
     for row in sorted(rows, key=lambda item: item.get("ts_unix", 0.0)):
@@ -1191,10 +1460,14 @@ def _candidate_selection_attempts(
 
 
 def _event_counts(rows: list[dict[str, Any]]) -> Counter[str]:
+    if isinstance(rows, _SampledRows):
+        return rows.event_counts.copy()
     return Counter(row["event"] for row in rows if isinstance(row.get("event"), str))
 
 
 def _executor_counts(rows: list[dict[str, Any]]) -> Counter[str]:
+    if isinstance(rows, _SampledRows):
+        return rows.executor_counts.copy()
     request_counts: Counter[str] = Counter()
     terminal_counts: Counter[str] = Counter()
     for row in rows:
@@ -1235,6 +1508,8 @@ def _slot_counts(rows: list[dict[str, Any]]) -> dict[str, Counter[int]]:
 
 
 def _executor_slot_idle_ms(rows: list[dict[str, Any]]) -> dict[str, list[float]]:
+    if isinstance(rows, _SampledRows):
+        return {}
     releases_by_executor: dict[str, list[float]] = defaultdict(list)
     reserves_by_executor: dict[str, list[float]] = defaultdict(list)
 
@@ -1271,6 +1546,8 @@ def _executor_slot_idle_ms(rows: list[dict[str, Any]]) -> dict[str, list[float]]
 
 
 def _slot_hold_ms(rows: list[dict[str, Any]]) -> list[float]:
+    if isinstance(rows, _SampledRows):
+        rows = rows.correlated_rows
     by_job: dict[str, dict[str, float]] = defaultdict(dict)
     for row in rows:
         job_id = row.get("job_id")
@@ -1292,6 +1569,8 @@ def _slot_hold_ms(rows: list[dict[str, Any]]) -> list[float]:
 
 
 def _slot_cycle_ms(rows: list[dict[str, Any]]) -> dict[str, list[float]]:
+    if isinstance(rows, _SampledRows):
+        rows = rows.correlated_rows
     by_job: dict[str, dict[str, Any]] = defaultdict(dict)
     for row in rows:
         job_id = row.get("job_id")
@@ -1572,32 +1851,46 @@ def _print_trace_coverage(rows: list[dict[str, Any]]) -> None:
     executor_terminal = events.get("executor_success_recorded", 0) + events.get(
         "executor_failed_recorded", 0
     )
-    scheduler_pids = {
-        row.get("pid")
-        for row in rows
-        if row.get("event") == "scheduler_job_event_received"
-        and row.get("status") in TERMINAL_STATUSES
-        and isinstance(row.get("pid"), int)
-    }
-    event_bus = Counter(
-        row["event"]
-        for row in rows
-        if row.get("pid") in scheduler_pids
-        and row.get("status") in TERMINAL_STATUSES
-        and row.get("event")
-        in {
-            "job_status_event_enqueued",
-            "job_status_event_dropped",
-            "job_status_event_dequeued",
-            "job_status_event_dispatch_completed",
+    if isinstance(rows, _SampledRows):
+        event_bus = Counter(
+            {
+                event: events.get(event, 0)
+                for event in (
+                    "job_status_event_enqueued",
+                    "job_status_event_dropped",
+                    "job_status_event_dequeued",
+                    "job_status_event_dispatch_completed",
+                )
+            }
+        )
+        scheduler_terminal_received = events.get("scheduler_job_event_received", 0)
+    else:
+        scheduler_pids = {
+            row.get("pid")
+            for row in rows
+            if row.get("event") == "scheduler_job_event_received"
+            and row.get("status") in TERMINAL_STATUSES
+            and isinstance(row.get("pid"), int)
         }
-    )
-    scheduler_terminal_received = sum(
-        1
-        for row in rows
-        if row.get("event") == "scheduler_job_event_received"
-        and row.get("status") in TERMINAL_STATUSES
-    )
+        event_bus = Counter(
+            row["event"]
+            for row in rows
+            if row.get("pid") in scheduler_pids
+            and row.get("status") in TERMINAL_STATUSES
+            and row.get("event")
+            in {
+                "job_status_event_enqueued",
+                "job_status_event_dropped",
+                "job_status_event_dequeued",
+                "job_status_event_dispatch_completed",
+            }
+        )
+        scheduler_terminal_received = sum(
+            1
+            for row in rows
+            if row.get("event") == "scheduler_job_event_received"
+            and row.get("status") in TERMINAL_STATUSES
+        )
     print("\nTrace Coverage")
     print(
         "scheduler: "
@@ -2934,6 +3227,8 @@ def print_report(
     trace_path: Path,
     rows: list[dict[str, Any]],
     summaries: list[dict[str, Any]],
+    *,
+    input_truncated: bool = False,
 ) -> None:
     events = _event_counts(rows)
     rates = _rate_stats(rows)
@@ -2944,30 +3239,45 @@ def print_report(
     if executors and success_rate is not None and service:
         utilization = success_rate * ((_avg(service) or 0.0) / 1000.0) / len(executors)
 
-    first_ts = min(
-        (
-            float(row["ts_unix"])
-            for row in rows
-            if isinstance(row.get("ts_unix"), (int, float))
-        ),
-        default=None,
-    )
-    last_ts = max(
-        (
-            float(row["ts_unix"])
-            for row in rows
-            if isinstance(row.get("ts_unix"), (int, float))
-        ),
-        default=None,
-    )
+    if isinstance(rows, _SampledRows):
+        first_ts = rows.first_ts
+        last_ts = rows.last_ts
+    else:
+        first_ts = min(
+            (
+                float(row["ts_unix"])
+                for row in rows
+                if isinstance(row.get("ts_unix"), (int, float))
+            ),
+            default=None,
+        )
+        last_ts = max(
+            (
+                float(row["ts_unix"])
+                for row in rows
+                if isinstance(row.get("ts_unix"), (int, float))
+            ),
+            default=None,
+        )
     window = (
         (last_ts - first_ts) if first_ts is not None and last_ts is not None else None
     )
 
     print("Scheduler Trace Report")
     print(f"trace: {trace_path}")
-    print(f"events: {len(rows)}")
-    print(f"trace groups: {len(summaries)}")
+    if isinstance(rows, _SampledRows):
+        print("scope: entire file")
+        print(f"events: {rows.total_rows}")
+        print(
+            f"detail rows: {len(rows)} "
+            f"(uniform sample, up to {rows.event_sample_size} per event)"
+        )
+        print(f"trace groups: {len(summaries)} sampled groups")
+        print("top-level event counts and rates: exact; detailed sections: sampled")
+    else:
+        event_scope = " (newest events; input truncated)" if input_truncated else ""
+        print(f"events: {len(rows)}{event_scope}")
+        print(f"trace groups: {len(summaries)}")
     print(f"dispatches: {rates['gateway_dispatch_start'][0]}")
     print(f"window: {_fmt_s(window)}")
 
@@ -3014,6 +3324,32 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("trace_path", type=Path)
     parser.add_argument("--limit", type=int, default=25)
+    parser.add_argument(
+        "--tail-events",
+        type=int,
+        metavar="COUNT",
+        help=("Analyze only the newest COUNT events instead of the entire trace."),
+    )
+    parser.add_argument(
+        "--event-sample-size",
+        type=int,
+        default=_DEFAULT_EVENT_SAMPLE_SIZE,
+        metavar="COUNT",
+        help=(
+            "Keep up to COUNT uniformly sampled rows per event for detailed "
+            f"whole-file distributions (default: {_DEFAULT_EVENT_SAMPLE_SIZE})."
+        ),
+    )
+    parser.add_argument(
+        "--group-sample-size",
+        type=int,
+        default=_DEFAULT_GROUP_SAMPLE_SIZE,
+        metavar="COUNT",
+        help=(
+            "Keep up to COUNT uniformly sampled job/DAG groups for correlated "
+            f"whole-file latency analysis (default: {_DEFAULT_GROUP_SAMPLE_SIZE})."
+        ),
+    )
     parser.add_argument(
         "--report",
         action="store_true",
@@ -3074,9 +3410,31 @@ def main() -> int:
         default="dispatch_to_executor",
     )
     args = parser.parse_args()
+    if args.tail_events is not None and args.tail_events <= 0:
+        parser.error("--tail-events must be greater than zero")
+    if args.event_sample_size <= 0:
+        parser.error("--event-sample-size must be greater than zero")
+    if args.group_sample_size <= 0:
+        parser.error("--group-sample-size must be greater than zero")
     sort_key = SORT_ALIASES.get(args.sort, args.sort)
 
-    grouped, rows = load_trace(args.trace_path)
+    if args.tail_events is None:
+        grouped, rows = sample_whole_trace(
+            args.trace_path,
+            event_sample_size=args.event_sample_size,
+            group_sample_size=args.group_sample_size,
+        )
+        input_truncated = False
+    else:
+        grouped, rows, input_truncated = load_trace_window(
+            args.trace_path,
+            tail_events=args.tail_events,
+        )
+        if input_truncated:
+            print(
+                f"note: analyzing only the newest {len(rows):,} events",
+                file=sys.stderr,
+            )
     dag_events_by_id = {
         key: _event_times(rows)
         for key, rows in grouped.items()
@@ -3087,8 +3445,20 @@ def main() -> int:
         for job_id, rows in grouped.items()
     ]
     if args.report:
-        print_report(args.trace_path, rows, summaries)
+        print_report(
+            args.trace_path,
+            rows,
+            summaries,
+            input_truncated=input_truncated,
+        )
         return 0
+
+    if isinstance(rows, _SampledRows):
+        print(
+            "note: ranking the bounded whole-file group sample; increase "
+            "--group-sample-size for broader coverage",
+            file=sys.stderr,
+        )
 
     summaries.sort(
         key=lambda item: (
