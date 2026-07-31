@@ -25,16 +25,19 @@ class RecordingTransaction:
 
 
 class RecordingConnection:
-    def __init__(self, *, fail_notification: bool = False) -> None:
+    def __init__(
+        self, *, fail_notification: bool = False, inserted: bool = True
+    ) -> None:
         self.events: list[tuple] = []
         self.fail_notification = fail_notification
+        self.inserted = inserted
 
     def transaction(self) -> RecordingTransaction:
         return RecordingTransaction(self.events)
 
-    async def fetchrow(self, query: str, *args: object) -> dict[str, str]:
+    async def fetchrow(self, query: str, *args: object) -> dict[str, str] | None:
         self.events.append(('upsert', query, args))
-        return {'id': 'row-1'}
+        return {'id': 'row-1'} if self.inserted else None
 
     async def execute(self, query: str, *args: object) -> str:
         self.events.append(('notify', query, args))
@@ -157,6 +160,27 @@ async def test_terminal_put_rolls_back_when_notification_fails() -> None:
         'notify',
         'rollback',
     ]
+
+
+async def test_non_overwrite_put_ignores_existing_key() -> None:
+    connection = RecordingConnection(inserted=False)
+    storage = make_storage(RecordingPool(connection))
+
+    result = await storage.internal_kv_put(
+        b'key-1',
+        b'{}',
+        overwrite=False,
+        namespace=b'test',
+    )
+
+    assert result == 0
+    assert [event[0] for event in connection.events] == [
+        'begin',
+        'upsert',
+        'commit',
+    ]
+    query = connection.events[1][1]
+    assert 'ON CONFLICT (namespace, key) DO NOTHING' in query
 
 
 async def test_db_operation_reports_async_pool_and_database_time(

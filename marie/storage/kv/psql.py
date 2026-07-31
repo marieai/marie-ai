@@ -263,11 +263,15 @@ class PostgreSQLKV(PostgresqlMixin, StorageArea):
 
             if overwrite:
                 insert_q += f"""
-                    ON CONFLICT (key, namespace)
+                    ON CONFLICT (namespace, key)
                     DO
                     UPDATE SET value = %s, updated_at = current_timestamp
                 """
                 params.append(v)
+            else:
+                insert_q += """
+                    ON CONFLICT (namespace, key) DO NOTHING
+                """
 
             insert_q += " RETURNING id"
             notify_started: float | None = None
