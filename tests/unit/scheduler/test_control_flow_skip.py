@@ -98,6 +98,11 @@ def test_frontier_hydration_treats_skipped_parents_as_satisfied() -> None:
 
     assert "p.state NOT IN ('completed','failed','cancelled','skipped')" in sql
     assert "'expire_in_seconds', EXTRACT(EPOCH FROM j.expire_in)::integer" in sql
+    assert "LANGUAGE plpgsql" in sql
     assert "SET jit = off" in sql
+    assert "SET plan_cache_mode = force_custom_plan" in sql
+    assert "RETURN QUERY" in sql
+    assert "FROM unnest(COALESCE(dag_ids, ARRAY[]::uuid[]))" in sql
+    assert "ON j.dag_id = requested.dag_id" in sql
     assert "p.name = jd.depends_on_name" in sql
     assert "jd.job_name = j.name" in sql
