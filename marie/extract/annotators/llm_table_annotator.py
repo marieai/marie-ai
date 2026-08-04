@@ -1,4 +1,3 @@
-import os
 from typing import Any, List
 
 from marie.executor.extract.util import setup_table_directories
@@ -69,9 +68,10 @@ class LLMTableAnnotator(LLMAnnotator):
         # highlight_tables(document, frames, htables_output_dir)
         # extract_tables(document, frames, metadata={}, output_dir=table_annotated_dir)
         #
-        if False and os.listdir(table_annotated_fragments_dir):
+        if self._has_completed_results(table_output_dir):
             self.logger.info(
-                f"Output directory '{table_annotated_fragments_dir}' contains results. Skipping annotation..."
+                f"Output directory '{table_output_dir}' contains completed results. "
+                "Skipping annotation..."
             )
             return
 
@@ -89,7 +89,9 @@ class LLMTableAnnotator(LLMAnnotator):
             completion_params=self.completion_params,
             mm_processor_kwargs=self.mm_processor_kwargs,
             mini_batch_size=self.mini_batch_size,
+            system_prompt=self.system_prompt_text,
         )
+        self._write_success_marker(table_output_dir)
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
         """Asynchronously annotate tables in the document.
@@ -107,9 +109,10 @@ class LLMTableAnnotator(LLMAnnotator):
             table_output_dir,
         ) = setup_table_directories(self.working_dir, self.name)
 
-        if False and os.listdir(table_annotated_fragments_dir):
+        if self._has_completed_results(table_output_dir):
             self.logger.info(
-                f"Output directory '{table_annotated_fragments_dir}' contains results. Skipping annotation..."
+                f"Output directory '{table_output_dir}' contains completed results. "
+                "Skipping annotation..."
             )
             return
 
@@ -127,7 +130,9 @@ class LLMTableAnnotator(LLMAnnotator):
             completion_params=self.completion_params,
             mm_processor_kwargs=self.mm_processor_kwargs,
             mini_batch_size=self.mini_batch_size,
+            system_prompt=self.system_prompt_text,
         )
+        self._write_success_marker(table_output_dir)
 
     def parse_output(self, raw_output: str):
         """Parse the raw output from the LLM.

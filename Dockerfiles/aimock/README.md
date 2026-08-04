@@ -335,6 +335,7 @@ The programmatic server supports explicit fault profiles for gateway and schedul
 - `normal` - deterministic successful responses
 - `timeout` - every request sleeps for `AIMOCK_TIMEOUT_MS`
 - `error` - every request throws an error
+- `invalid_json` - every request succeeds with an invalid structured response
 - `chaos` - randomized monkey-style mix of slow, timeout, error, and normal responses
 
 You can set the startup profile with environment variables:
@@ -363,6 +364,10 @@ Supported admin fields:
 - `chaosTimeoutRate`
 - `chaosSlowRate`
 - `chaosSlowMs`
+- `resetCounters` - reset the request counters returned by the admin endpoint
+
+The admin response includes `requestCount` and `requestsByProfile`. Stress tests
+use these counters to detect unintended retries and duplicate inference calls.
 
 ## Advanced Features
 

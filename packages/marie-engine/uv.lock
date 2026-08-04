@@ -423,6 +423,15 @@ wheels = [
 ]
 
 [[package]]
+name = "json5"
+version = "0.15.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/e4/7d/05c46a96a78147ae3bf99c2f4169ce144a70220b8d6fcd56f6ec368b8ce9/json5-0.15.0.tar.gz", hash = "sha256:7424d1f1eb1d56da6e3d70643f53619862b4ce81440bdb8ecfd6f875e5ba4a71", size = 53278, upload-time = "2026-06-19T20:08:27.716Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/eb/be/59527c99478aade6bb33a68d72e6e18dd4e6ff6eacfc7d01bdb15bc76912/json5-0.15.0-py3-none-any.whl", hash = "sha256:56636a30c0e8a4665fe2179c0212f32eae3796dea89ea6f649b9436ecdb39618", size = 36570, upload-time = "2026-06-19T20:08:26.748Z" },
+]
+
+[[package]]
 name = "marie-agent"
 version = "0.1.0"
 source = { editable = "../marie-agent" }
@@ -467,13 +476,13 @@ source = { editable = "." }
 dependencies = [
     { name = "diskcache" },
     { name = "json-repair" },
+    { name = "json5" },
     { name = "marie-instrumentation" },
     { name = "openinference-semantic-conventions" },
     { name = "opentelemetry-api" },
     { name = "pillow" },
     { name = "platformdirs" },
     { name = "pydantic" },
-    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -507,7 +516,8 @@ transformers = [
 [package.metadata]
 requires-dist = [
     { name = "diskcache", specifier = ">=5.6.0" },
-    { name = "json-repair", specifier = ">=0.30.0" },
+    { name = "json-repair", specifier = ">=0.55.0" },
+    { name = "json5", specifier = ">=0.12.0" },
     { name = "marie-agent", marker = "extra == 'agent'", editable = "../marie-agent" },
     { name = "marie-agent", marker = "extra == 'dev'", editable = "../marie-agent" },
     { name = "marie-instrumentation", editable = "../marie-instrumentation" },
@@ -520,7 +530,6 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11.0" },
     { name = "tenacity", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "tenacity", marker = "extra == 'openai'", specifier = ">=8.0.0" },

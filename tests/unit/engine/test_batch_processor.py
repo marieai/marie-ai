@@ -240,6 +240,7 @@ def test_openai_engine_normalizes_calls_before_strategy_split():
 
             responses = engine.batch_generate(
                 ["hello"],
+                system_prompt="Return only the requested data.",
                 guided_json={"type": "object"},
                 metadata={"source": "unit-test"},
                 request_contexts=[context],
@@ -251,6 +252,7 @@ def test_openai_engine_normalizes_calls_before_strategy_split():
     call = captured["calls"][0]
     assert isinstance(call, CompletionCallParams)
     assert call.messages[0]["role"] == "system"
+    assert call.messages[0]["content"] == "Return only the requested data."
     assert call.messages[1]["role"] == "user"
     assert call.messages[1]["content"] == "hello"
     assert call.temperature == 0.25
@@ -331,7 +333,7 @@ def test_circuit_breaker_fast_fail_when_open():
         # Should never be called
         raise AssertionError("Should not reach completion when circuit is open")
 
-    processor.acompletion_call_with_retry = fake_completion
+    processor.completion_non_streaming_call = fake_completion
 
     async def run():
         results = await processor.load_batched_completion_calls(
@@ -377,7 +379,7 @@ def test_half_open_probe_slot_reservation():
         task_id = kwargs["task_id"]
         return task_id, f"response:{task_id}"
 
-    processor.acompletion_call_with_retry = fake_completion
+    processor.completion_non_streaming_call = fake_completion
 
     async def run():
         results = await processor.load_batched_completion_calls(
@@ -495,6 +497,180 @@ def test_batch_timeout_cancels_tasks():
 
 
 # ---------------------------------------------------------------------------
+# Test: callback failure cancels unfinished inference
+# ---------------------------------------------------------------------------
+def test_callback_failure_cancels_pending_tasks():
+    processor = _build_processor(max_concurrency=2)
+    second_started = asyncio.Event()
+    second_cancelled = asyncio.Event()
+
+    async def fake_completion(**kwargs):
+        task_id = kwargs["task_id"]
+        if task_id.endswith("_0"):
+            await second_started.wait()
+            return task_id, "invalid response"
+
+        second_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            second_cancelled.set()
+            raise
+
+    def failing_callback(task_id, response):
+        raise ValueError("invalid structured response")
+
+    processor.acompletion_call_with_retry = fake_completion
+
+    async def run():
+        with pytest.raises(ValueError, match="invalid structured response"):
+            await processor.load_batched_completion_calls(
+                calls=[_call("a"), _call("b")],
+                request_id="req-callback",
+                on_result=failing_callback,
+            )
+
+        assert second_cancelled.is_set()
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: failed inference does not invoke result callback
+# ---------------------------------------------------------------------------
+def test_failed_inference_does_not_invoke_result_callback():
+    processor = _build_processor(max_concurrency=1)
+    callbacks = []
+
+    async def fake_completion(**kwargs):
+        raise RuntimeError("simulated inference failure")
+
+    processor.acompletion_call_with_retry = fake_completion
+
+    async def run():
+        results = await processor.load_batched_completion_calls(
+            calls=[_call("a")],
+            request_id="req-failed",
+            on_result=lambda task_id, response: callbacks.append((task_id, response)),
+        )
+        assert isinstance(results[0].error, RuntimeError)
+
+    asyncio.run(run())
+
+    assert callbacks == []
+
+
+# ---------------------------------------------------------------------------
+# Test: retries re-check the circuit breaker
+# ---------------------------------------------------------------------------
+def test_retry_stops_when_circuit_opens():
+    """A retry must not call a backend after its first failure opens the circuit."""
+    import os
+    import unittest.mock as mock
+
+    import httpx
+    import marie.engine.batch_processor as batch_processor_module
+    from openai import APIConnectionError
+
+    processor = _build_processor(max_concurrency=1)
+    processor._circuit_breaker = CircuitBreaker(
+        config=CircuitBreakerConfig(failure_threshold=1),
+        logger=_Logger(),
+    )
+    attempts = 0
+    wait_calls = 0
+
+    def wait_strategy(retry_state):
+        nonlocal wait_calls
+        wait_calls += 1
+        return 0
+
+    async def failing_call(client, call):
+        nonlocal attempts
+        attempts += 1
+        raise APIConnectionError(request=httpx.Request("POST", "http://test"))
+
+    async def run():
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=failing_call,
+            ),
+            mock.patch.object(
+                batch_processor_module,
+                "wait_exponential",
+                return_value=wait_strategy,
+            ),
+        ):
+            with pytest.raises(CircuitOpenError):
+                await processor.acompletion_call_with_retry(
+                    max_retries=3,
+                    call=_call("hello"),
+                    task_id="task-1",
+                    request_id="request-1",
+                )
+
+    asyncio.run(run())
+
+    assert attempts == 1
+    assert wait_calls == 0
+
+
+# ---------------------------------------------------------------------------
+# Test: timed-out inference is not replayed
+# ---------------------------------------------------------------------------
+def test_api_timeout_is_not_retried():
+    import unittest.mock as mock
+
+    import httpx
+    import marie.engine.batch_processor as batch_processor_module
+    from openai import APITimeoutError
+
+    processor = _build_processor(max_concurrency=1)
+    attempts = 0
+    wait_calls = 0
+
+    def wait_strategy(retry_state):
+        nonlocal wait_calls
+        wait_calls += 1
+        return 0
+
+    async def timing_out_call(client, call):
+        nonlocal attempts
+        attempts += 1
+        raise APITimeoutError(request=httpx.Request("POST", "http://test"))
+
+    async def run():
+        with (
+            mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=timing_out_call,
+            ),
+            mock.patch.object(
+                batch_processor_module,
+                "wait_exponential",
+                return_value=wait_strategy,
+            ),
+        ):
+            with pytest.raises(APITimeoutError):
+                await processor.acompletion_call_with_retry(
+                    max_retries=3,
+                    call=_call("hello"),
+                    task_id="task-1",
+                    request_id="request-1",
+                )
+
+    asyncio.run(run())
+
+    assert attempts == 1
+    assert wait_calls == 0
+
+
+# ---------------------------------------------------------------------------
 # Test: process_batch does not retry BatchExecutionError
 # ---------------------------------------------------------------------------
 def test_process_batch_does_not_retry_batch_execution_error():
@@ -537,25 +713,257 @@ def test_process_batch_does_not_retry_batch_execution_error():
 
 
 # ---------------------------------------------------------------------------
-# Test: process_batch uses await asyncio.sleep instead of time.sleep
+# Test: process_batch does not replay a timed-out batch
 # ---------------------------------------------------------------------------
-def test_process_batch_uses_async_sleep_on_retry():
-    """Verify process_batch does not block the event loop on retry backoff."""
-    import inspect
-    import textwrap
+def test_process_batch_does_not_retry_batch_timeout():
+    """A batch timeout should propagate without replaying completed requests."""
+    import unittest.mock as mock
+
+    from marie.extract.annotators.util import process_batch
+
+    call_count = 0
+
+    async def fake_acall(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        raise asyncio.TimeoutError("simulated timeout")
+
+    mock_engine = mock.MagicMock()
+    batch = [(mock.MagicMock(), "prompt", "img.png")]
+
+    async def run():
+        with mock.patch("marie.engine.llm_ops.LLMCall.acall", side_effect=fake_acall):
+            with pytest.raises(asyncio.TimeoutError, match="simulated timeout"):
+                await process_batch(
+                    batch=batch,
+                    engine=mock_engine,
+                    output_path="/tmp/test",
+                    is_multimodal=False,
+                    expect_output="json",
+                )
+
+    asyncio.run(run())
+
+    assert call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Test: process_batch forwards its system prompt
+# ---------------------------------------------------------------------------
+def test_process_batch_forwards_system_prompt(tmp_path):
+    import unittest.mock as mock
 
     from marie.extract.annotators import util
 
-    source = inspect.getsource(util.process_batch)
+    captured = {}
 
-    # Should NOT contain time.sleep
-    assert "time.sleep" not in source, (
-        "process_batch still uses blocking time.sleep for retry backoff"
-    )
-    # Should contain asyncio.sleep
-    assert "asyncio.sleep" in source, (
-        "process_batch should use asyncio.sleep for retry backoff"
-    )
+    class FakeLLMCall:
+        def __init__(self, engine, system_prompt=None):
+            captured["system_prompt"] = system_prompt
+
+        async def acall(self, prompts, **kwargs):
+            kwargs["on_result"]("request_task_0", '{"ok": true}')
+            return ['{"ok": true}']
+
+    async def run():
+        with mock.patch.object(util, "LLMCall", FakeLLMCall):
+            await util.process_batch(
+                batch=[(mock.MagicMock(), "prompt", "00001.png")],
+                engine=mock.MagicMock(),
+                output_path=str(tmp_path),
+                is_multimodal=False,
+                expect_output="json",
+                system_prompt="Return valid JSON only.",
+            )
+
+    asyncio.run(run())
+
+    assert captured["system_prompt"] == "Return valid JSON only."
+    assert (tmp_path / "00001.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Test: one malformed result does not discard completed siblings
+# ---------------------------------------------------------------------------
+def test_process_batch_finishes_siblings_before_raising_parse_error(tmp_path):
+    import unittest.mock as mock
+
+    from marie.engine.output_parser import JSONOutputParserError
+
+    from marie.extract.annotators import util
+
+    class FakeLLMCall:
+        def __init__(self, engine, system_prompt=None):
+            pass
+
+        async def acall(self, prompts, **kwargs):
+            kwargs["on_result"]("request_task_0", "invalid JSON")
+            kwargs["on_result"]("request_task_1", '{"ok": true}')
+            return ["invalid JSON", '{"ok": true}']
+
+    async def run():
+        with mock.patch.object(util, "LLMCall", FakeLLMCall):
+            with pytest.raises(JSONOutputParserError):
+                await util.process_batch(
+                    batch=[
+                        (mock.MagicMock(), "prompt", "00001.png"),
+                        (mock.MagicMock(), "prompt", "00002.png"),
+                    ],
+                    engine=mock.MagicMock(),
+                    output_path=str(tmp_path),
+                    is_multimodal=False,
+                    expect_output="json",
+                )
+
+    asyncio.run(run())
+
+    assert not (tmp_path / "00001.json").exists()
+    assert (tmp_path / "00002.json").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Test: invalid JSON never creates a result file
+# ---------------------------------------------------------------------------
+def test_invalid_json_does_not_create_result_file(tmp_path):
+    import unittest.mock as mock
+
+    from marie.engine.output_parser import JSONOutputParserError
+
+    from marie.extract.annotators.util import _write_single_result
+
+    with pytest.raises(JSONOutputParserError):
+        _write_single_result(
+            b_image=mock.MagicMock(),
+            b_prompt="prompt",
+            b_image_path="00001.png",
+            task_id="request_task_0",
+            response="This response contains no JSON.",
+            output_path=str(tmp_path),
+            expect_output="json",
+        )
+
+    assert not (tmp_path / "00001.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Test: failed mini-batch lets active siblings finish
+# ---------------------------------------------------------------------------
+def test_scan_stops_new_work_and_finishes_active_batches(tmp_path):
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from marie.extract.annotators import util
+
+    (tmp_path / "00001.png").touch()
+    (tmp_path / "00002.png").touch()
+    (tmp_path / "00003.png").touch()
+    second_started = asyncio.Event()
+    second_finished = asyncio.Event()
+    processed = []
+
+    def fake_prepare_batch(*, file_batch, **kwargs):
+        yield file_batch
+
+    async def fake_process_batch(batch, *args, **kwargs):
+        processed.extend(batch)
+        if batch == ["00001.png"]:
+            await second_started.wait()
+            raise RuntimeError("first mini-batch failed")
+        if batch == ["00002.png"]:
+            second_started.set()
+            await asyncio.sleep(0.01)
+            second_finished.set()
+            return
+        raise AssertionError("new work started after a batch failure")
+
+    async def run():
+        with (
+            mock.patch.object(util, "frames_from_file", return_value=[object()]),
+            mock.patch.object(
+                util,
+                "prepare_batch_with_meta_units",
+                side_effect=fake_prepare_batch,
+            ),
+            mock.patch.object(
+                util,
+                "process_batch",
+                side_effect=fake_process_batch,
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="first mini-batch failed"):
+                await util.ascan_and_process_images(
+                    source_dir=str(tmp_path),
+                    output_dir=str(tmp_path),
+                    prompt=mock.MagicMock(),
+                    document=mock.MagicMock(),
+                    engine=SimpleNamespace(
+                        batch_processor=SimpleNamespace(max_concurrency=2)
+                    ),
+                    expect_output="json",
+                    mini_batch_size=1,
+                )
+
+        assert second_finished.is_set()
+        assert processed == ["00001.png", "00002.png"]
+
+    asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# Test: reruns process only missing or invalid outputs
+# ---------------------------------------------------------------------------
+def test_scan_resumes_missing_and_invalid_outputs(tmp_path):
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from marie.extract.annotators import util
+
+    source_dir = tmp_path / "source"
+    output_dir = tmp_path / "output"
+    source_dir.mkdir()
+    output_dir.mkdir()
+    for name in ("00001.png", "00002.png", "00003.png"):
+        (source_dir / name).touch()
+    (output_dir / "00001.json").write_text('{"complete": true}')
+    (output_dir / "00002.json").write_text("incomplete")
+
+    processed = []
+
+    def fake_prepare_batch(*, file_batch, **kwargs):
+        yield file_batch
+
+    async def fake_process_batch(batch, *args, **kwargs):
+        processed.extend(batch)
+
+    async def run():
+        with (
+            mock.patch.object(util, "frames_from_file", return_value=[object()]),
+            mock.patch.object(
+                util,
+                "prepare_batch_with_meta_units",
+                side_effect=fake_prepare_batch,
+            ),
+            mock.patch.object(
+                util,
+                "process_batch",
+                side_effect=fake_process_batch,
+            ),
+        ):
+            await util.ascan_and_process_images(
+                source_dir=str(source_dir),
+                output_dir=str(output_dir),
+                prompt=mock.MagicMock(),
+                document=mock.MagicMock(),
+                engine=SimpleNamespace(
+                    batch_processor=SimpleNamespace(max_concurrency=1)
+                ),
+                expect_output="json",
+                mini_batch_size=1,
+            )
+
+    asyncio.run(run())
+
+    assert processed == ["00002.png", "00003.png"]
 
 
 # ---------------------------------------------------------------------------

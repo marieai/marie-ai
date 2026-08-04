@@ -7,10 +7,15 @@ import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import yaml
-
-from marie.constants import __config_dir__
 from marie.engine import EngineLM
 from marie.engine.completion_contract import RequestContext
+from marie.instrumentation import (
+    MarieSpanAttributes,
+    get_tracer,
+    start_as_current_span,
+)
+
+from marie.constants import __config_dir__
 from marie.extract.annotators.base import AnnotatorCapabilities, DocumentAnnotator
 from marie.extract.annotators.context_provider import ContextProviderManager
 from marie.extract.annotators.refinement_provider import (
@@ -26,11 +31,6 @@ from marie.extract.annotators.util import (
 )
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
-from marie.instrumentation import (
-    MarieSpanAttributes,
-    get_tracer,
-    start_as_current_span,
-)
 from marie.logging_core.logger import MarieLogger
 from marie.prompt import PromptTemplate
 from marie.utils.types import to_bool
@@ -337,34 +337,67 @@ class LLMAnnotator(DocumentAnnotator):
         return [AnnotatorCapabilities.EXTRACTOR, AnnotatorCapabilities.SEGMENTER]
 
     def _has_completed_results(self, live_output_dir: str) -> bool:
-        """Check whether a completed run exists in the live output directory.
-
-        A completed run requires:
-        - At least one parser-visible result artifact (.json or .md)
-        - A ``_SUCCESS.yaml`` marker proving promotion completed
-
-        When refinement is disabled (refine_passes == 0), falls back to the
-        original behavior: any file in the directory counts as complete.
-        """
-        if not os.path.isdir(live_output_dir):
+        """Return whether the output marker references files that still exist."""
+        marker_path = self._success_marker_path(live_output_dir)
+        if not os.path.isfile(marker_path):
             return False
 
-        entries = os.listdir(live_output_dir)
-        if not entries:
+        try:
+            with open(marker_path, "r", encoding="utf-8") as f:
+                marker = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError):
             return False
 
-        # Legacy mode: no refinement - any content means done
-        if self.refine_passes <= 0:
-            return True
+        files = marker.get("files")
+        if not isinstance(files, list):
+            files = [
+                name
+                for name in os.listdir(live_output_dir)
+                if name.endswith((".json", ".md")) and not name.startswith("_")
+            ]
+            if not files:
+                return False
 
-        has_marker = _SUCCESS_MARKER in entries
-        has_result = any(
-            f.endswith((".json", ".md"))
-            and not f.startswith("_")
-            and os.path.isfile(os.path.join(live_output_dir, f))
-            for f in entries
+        for name in files:
+            if not isinstance(name, str):
+                return False
+            result_path = os.path.join(live_output_dir, name)
+            if not os.path.isfile(result_path):
+                return False
+            if name.endswith(".json"):
+                try:
+                    with open(result_path, "r", encoding="utf-8") as f:
+                        value = json.load(f)
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                    return False
+                if not isinstance(value, (dict, list)):
+                    return False
+        return True
+
+    def _write_success_marker(self, output_dir: str) -> None:
+        files = sorted(
+            name
+            for name in os.listdir(output_dir)
+            if name.endswith((".json", ".md"))
+            and not name.startswith("_")
+            and os.path.isfile(os.path.join(output_dir, name))
         )
-        return has_marker and has_result
+        marker_path = self._success_marker_path(output_dir)
+        temp_path = f"{marker_path}.tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
+                yaml.safe_dump(
+                    {"file_count": len(files), "files": files},
+                    f,
+                    default_flow_style=False,
+                )
+            os.replace(temp_path, marker_path)
+        except OSError:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
+            raise
 
     def _maybe_purge_output(self) -> None:
         """Selectively purge output if this annotator is in the purge list,
@@ -490,6 +523,7 @@ class LLMAnnotator(DocumentAnnotator):
             mini_batch_size=self.mini_batch_size,
             metadata=self._build_span_metadata(actual_engine),
             request_context=self._build_model_request_context(),
+            system_prompt=self.system_prompt_text,
         )
 
     def _build_pass_context_manager(
@@ -973,10 +1007,14 @@ class LLMAnnotator(DocumentAnnotator):
                     mini_batch_size=self.mini_batch_size,
                     metadata=self._build_span_metadata(),
                     request_context=self._build_model_request_context(),
+                    system_prompt=self.system_prompt_text,
                 )
 
             if self.output_transform:
                 self._apply_output_transform()
+
+            if self.refine_passes <= 0:
+                self._write_success_marker(self.output_dir)
 
     async def aannotate(self, document: UnstructuredDocument, frames: List) -> None:
         """
@@ -1021,10 +1059,14 @@ class LLMAnnotator(DocumentAnnotator):
                     mini_batch_size=self.mini_batch_size,
                     metadata=self._build_span_metadata(),
                     request_context=self._build_model_request_context(),
+                    system_prompt=self.system_prompt_text,
                 )
 
             if self.output_transform:
                 self._apply_output_transform()
+
+            if self.refine_passes <= 0:
+                self._write_success_marker(self.output_dir)
 
     def _apply_output_transform(self) -> None:
         """Apply the configured output_transform function in-place to each JSON output file.

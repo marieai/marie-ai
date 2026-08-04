@@ -10,6 +10,22 @@ For the production-rate mock qualification that submits 25,000 DAGs in 30
 minutes while preserving the 64-active-DAG production limit, see
 [50K DAGs/Hour Mock Gateway Qualification](gateway-50kph-mock-qualification.md).
 
+## LLM Failure And Resume E2E
+
+Run the annotator through the real OpenAI-compatible HTTP client against AIMock:
+
+```bash
+docker compose -f Dockerfiles/docker-compose.mock-llm-programmatic.yml up -d --build
+OPENAI_API_KEY=mock-key \
+MARIE_STRESS_PYTHON=packages/marie-engine/.venv/bin/python \
+  ./stress-test.sh llm-aimock-e2e
+```
+
+The test switches AIMock between `normal`, `invalid_json`, and `timeout`. It
+verifies atomic outputs, completion markers, preservation of valid results,
+missing/invalid-only resume, prompt timeout propagation, retry recovery, and
+the exact HTTP request count for every phase.
+
 ## Reproduce The Dispatch-Confirmation Race
 
 Run the focused reproducer before changing scheduler behavior:

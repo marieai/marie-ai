@@ -9,7 +9,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "5.0.0-cuda"
+      tag: "5.0.1-cuda"
     logging:
       level: INFO
     debugQueryPlanner: "FALSE"
@@ -79,7 +79,7 @@ global:
 marie:
   image:
     repository: marieai/marie
-    tag: "5.0.0-cuda"
+    tag: "5.0.1-cuda"
     pullPolicy: IfNotPresent
   discovery:
     mechanism: etcd
@@ -89,7 +89,7 @@ server:
   replicas: 2
   image:
     repository: marieai/marie-gateway
-    tag: "5.0.0-cpu"
+    tag: "5.0.1-cpu"
   config:
     configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
     extraSearchPaths: /etc/marie/config/extra_py_modules

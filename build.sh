@@ -177,9 +177,9 @@ show_help() {
     echo
     echo "Examples:"
     echo "  $0                                    # Interactive mode with default version"
-    echo "  $0 --version 5.0.0 marie-cuda        # Build CUDA image with version 5.0.0"
-    echo "  $0 -v 5.0.0 all                      # Build all images with version 5.0.0"
-    echo "  MARIE_VERSION=5.0.0 $0 marie-cuda    # Using environment variable"
+    echo "  $0 --version 5.0.1 marie-cuda        # Build CUDA image with version 5.0.1"
+    echo "  $0 -v 5.0.1 all                      # Build all images with version 5.0.1"
+    echo "  MARIE_VERSION=5.0.1 $0 marie-cuda    # Using environment variable"
 }
 
 # Select build profile

@@ -27,11 +27,11 @@ def test_cli_startup_displays_build_identity(tmp_path, monkeypatch, capsys) -> N
     path = tmp_path / "build-info.json"
     write_build_info(
         path,
-        version="5.0.0",
+        version="5.0.1",
         git_commit="4b7f26d3d2927c7d4e61e147e9652fdb636f90ae",
         build_time="2026-07-26T16:42:18Z",
         build_number="1842",
-        image="marieai/marie-gateway:5.0.0-cpu",
+        image="marieai/marie-gateway:5.0.1-cpu",
     )
     monkeypatch.setenv("MARIE_BUILD_INFO_PATH", str(path))
     monkeypatch.setattr(sys, "argv", ["marie", "gateway"])
@@ -40,5 +40,5 @@ def test_cli_startup_displays_build_identity(tmp_path, monkeypatch, capsys) -> N
 
     assert args.cli == "gateway"
     assert (
-        "Marie-AI build service=gateway version=5.0.0 commit=4b7f26d3d292 build=1842"
+        "Marie-AI build service=gateway version=5.0.1 commit=4b7f26d3d292 build=1842"
     ) in capsys.readouterr().out

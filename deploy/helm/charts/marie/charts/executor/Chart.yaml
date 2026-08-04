@@ -3,4 +3,4 @@ name: executor
 description: Marie-AI Executor - Document processing workers with CPU and GPU support
 type: application
 version: 0.1.0
-appVersion: "5.0.0"
+appVersion: "5.0.1"

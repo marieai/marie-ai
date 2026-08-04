@@ -3,16 +3,23 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
-if [[ -x .venv/bin/python ]]; then
-  MARIE_STRESS_PYTHON=.venv/bin/python
-else
-  MARIE_STRESS_PYTHON=python3
+if [[ -z "${MARIE_STRESS_PYTHON:-}" ]]; then
+  if [[ -x .venv/bin/python ]]; then
+    MARIE_STRESS_PYTHON=.venv/bin/python
+  else
+    MARIE_STRESS_PYTHON=python3
+  fi
 fi
 
 case "${1:-}" in
   reproduce-dispatch-race)
     exec "${MARIE_STRESS_PYTHON}" -m pytest -vv \
       tests/unit/scheduler/test_dispatch_confirmation_race.py::test_late_confirmation_reproduces_false_dispatch_cleanup_race
+    ;;
+  llm-aimock-e2e)
+    : "${OPENAI_API_KEY:?Set OPENAI_API_KEY to the AIMock test key}"
+    export PYTHONPATH="${PWD}/packages/marie-engine/src:${PWD}${PYTHONPATH:+:${PYTHONPATH}}"
+    exec "${MARIE_STRESS_PYTHON}" tools/stress/llm_aimock_e2e.py
     ;;
   gateway-e2e)
     : "${GATEWAY_API_KEY:?Set GATEWAY_API_KEY before running the live stress test}"
@@ -34,7 +41,7 @@ case "${1:-}" in
       --report "${MARIE_STRESS_FINAL_REPORT:-${HOME}/tmp/gateway-e2e-final.html}"
     ;;
   *)
-    printf 'Usage: %s {reproduce-dispatch-race|gateway-e2e}\n' "$0" >&2
+    printf 'Usage: %s {reproduce-dispatch-race|llm-aimock-e2e|gateway-e2e}\n' "$0" >&2
     exit 2
     ;;
 esac

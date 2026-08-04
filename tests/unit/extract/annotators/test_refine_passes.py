@@ -584,11 +584,35 @@ class TestHasCompletedResults:
             f.write("run_id: abc\n")
         assert ann._has_completed_results(ann.output_dir) is True
 
-    def test_legacy_mode_any_content_is_complete(self, tmp_path):
+    def test_legacy_mode_partial_content_is_not_complete(self, tmp_path):
         ann = _make_annotator(tmp_path, refine_passes=0)
         with open(os.path.join(ann.output_dir, "frame_0001.json"), "w") as f:
             f.write("{}")
+        assert ann._has_completed_results(ann.output_dir) is False
+
+    def test_legacy_mode_writes_and_validates_success_marker(self, tmp_path):
+        ann = _make_annotator(tmp_path, refine_passes=0)
+        with open(os.path.join(ann.output_dir, "frame_0001.json"), "w") as f:
+            f.write("{}")
+
+        ann._write_success_marker(ann.output_dir)
+
         assert ann._has_completed_results(ann.output_dir) is True
+
+    def test_false_when_marked_result_is_missing(self, tmp_path):
+        ann = _make_annotator(tmp_path, refine_passes=0)
+        with open(os.path.join(ann.output_dir, "_SUCCESS.yaml"), "w") as f:
+            yaml.safe_dump({"files": ["frame_0001.json"]}, f)
+
+        assert ann._has_completed_results(ann.output_dir) is False
+
+    def test_false_when_marked_json_is_invalid(self, tmp_path):
+        ann = _make_annotator(tmp_path, refine_passes=0)
+        with open(os.path.join(ann.output_dir, "frame_0001.json"), "w") as f:
+            f.write("{invalid")
+        ann._write_success_marker(ann.output_dir)
+
+        assert ann._has_completed_results(ann.output_dir) is False
 
     def test_false_for_nonexistent_dir(self, tmp_path):
         ann = _make_annotator(tmp_path, refine_passes=1)

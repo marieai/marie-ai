@@ -4,7 +4,6 @@ import logging
 import os
 import os.path
 import threading
-import time
 from dataclasses import dataclass
 from threading import Lock
 from typing import (
@@ -19,9 +18,6 @@ from typing import (
     Tuple,
 )
 
-from numpy import ndarray
-from PIL import Image
-
 from marie.engine import EngineLM
 from marie.engine.completion_contract import RequestContext
 from marie.engine.engine_utils import smart_resize
@@ -30,11 +26,14 @@ from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
 from marie.engine.multimodal_ops import MultimodalLLMCall
 from marie.engine.openai_engine import OpenAIEngine
 from marie.engine.output_parser import (
+    JSONOutputParserError,
     check_content_type,
     parse_json_markdown,
     parse_markdown_markdown,
 )
-from marie.excepts import BatchExecutionError
+from numpy import ndarray
+from PIL import Image
+
 from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
@@ -48,8 +47,6 @@ if TYPE_CHECKING:
         ContextProviderManager,
         ProcessingUnit,
     )
-
-SYSTEM_PROMPT = ""  # Placeholder for the system prompt
 
 
 def _extract_page_number_from_filename(filename: str) -> Optional[int]:
@@ -339,40 +336,56 @@ def _write_single_result(
     if expect_output == "json":
         try:
             json_dict = parse_json_markdown(response)
-            with open(
-                os.path.join(output_path, f"{output_filename_base}.json"), "w"
-            ) as f:
+        except JSONOutputParserError as e:
+            logger.error(
+                f"Task {task_id} - Failed to parse JSON response for "
+                f"{output_filename_base}; JSON result was not written: {e}"
+            )
+            raise
+
+        result_path = os.path.join(output_path, f"{output_filename_base}.json")
+        temp_path = f"{result_path}.{task_id}.tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(json_dict, f, indent=4)
+            os.replace(temp_path, result_path)
             logger.info(
                 f"Task {task_id} - Wrote JSON result to {output_filename_base}.json"
             )
             return json_dict
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
             logger.error(
-                f"Failed to write response to file {output_filename_base}.json: {e}"
+                f"Failed to write parsed JSON to file {output_filename_base}.json: {e}"
             )
-            raise e
+            raise
     elif expect_output in ("markdown", "none"):
+        result_path = os.path.join(output_path, f"{output_filename_base}.md")
+        temp_path = f"{result_path}.{task_id}.tmp"
         try:
             if expect_output == "markdown":
                 output_text = parse_markdown_markdown(response)
             else:
                 output_text = response
-            with open(
-                os.path.join(output_path, f"{output_filename_base}.md"),
-                "w",
-                encoding="utf-8",
-            ) as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 f.write(output_text)
+            os.replace(temp_path, result_path)
             logger.info(
                 f"Task {task_id} - Wrote markdown result to {output_filename_base}.md"
             )
             return response
-        except Exception as e:
+        except (OSError, TypeError) as e:
+            try:
+                os.remove(temp_path)
+            except FileNotFoundError:
+                pass
             logger.error(
                 f"Failed to write response to file {output_filename_base}.md: {e}"
             )
-            raise e
+            raise
     else:
         raise ValueError(f"Unknown expect_output type: {expect_output}")
 
@@ -386,6 +399,7 @@ async def process_batch(
     completion_params: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
     request_context: Optional[RequestContext] = None,
+    system_prompt: Optional[str] = None,
 ) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
@@ -403,6 +417,7 @@ async def process_batch(
         metadata: Optional batch/span/queue metadata, such as job and pool identifiers.
         request_context: Optional source provenance applied to each request. The
             per-item page number is derived from each image filename when possible.
+        system_prompt: Optional system instruction for every request in the batch.
 
     Returns:
         List of converted results in original order
@@ -413,7 +428,6 @@ async def process_batch(
     if expect_output is None:
         raise ValueError("expect_output must be specified.")
 
-    system_prompt = SYSTEM_PROMPT
     if is_multimodal:
         llm_call = MultimodalLLMCall(engine, system_prompt=system_prompt)
     else:
@@ -473,87 +487,34 @@ async def process_batch(
             with write_lock:
                 write_errors.append(e)
 
-    max_retries = 3
-    retries = 0
+    call_kwargs = {"max_tokens": 4096 * 4, "on_result": on_result}
+    if completion_params:
+        call_kwargs["completion_params"] = completion_params
+    if metadata:
+        call_kwargs["metadata"] = metadata
+    request_contexts = _build_request_contexts(
+        batch_mapping,
+        request_context,
+    )
+    if request_contexts:
+        call_kwargs["request_contexts"] = request_contexts
 
-    while retries < max_retries:
-        try:
-            # Prepare batch for LLM call
-            call_kwargs = {"max_tokens": 4096 * 4, "on_result": on_result}
-            if completion_params:
-                call_kwargs["completion_params"] = completion_params
-            if metadata:
-                call_kwargs["metadata"] = metadata
-            request_contexts = _build_request_contexts(
-                batch_mapping,
-                request_context,
-            )
-            if request_contexts:
-                call_kwargs["request_contexts"] = request_contexts
+    if is_multimodal:
+        batch_t = [[b[0], b[1]] for b in batch]
+        responses = await llm_call.acall(batch_t, **call_kwargs)
+    else:
+        batch_t = [b[1] for b in batch]
+        responses = await llm_call.acall(batch_t, **call_kwargs)
 
-            if is_multimodal:
-                batch_t = [[b[0], b[1]] for b in batch]
-                responses = await llm_call.acall(batch_t, **call_kwargs)
-            else:
-                batch_t = [b[1] for b in batch]
-                responses = await llm_call.acall(batch_t, **call_kwargs)
+    if write_errors:
+        raise write_errors[0]
 
-            # Check for any errors that occurred during incremental writes.
-            # Write/parse errors (disk I/O, JSON formatting) are not
-            # transient LLM failures — replaying the batch would re-invoke
-            # the LLM and may duplicate side effects without fixing the root
-            # cause, so propagate immediately.
-            if write_errors:
-                raise write_errors[0]
-
-            # Verify responses
-            assert isinstance(responses, list), "Expected a list of responses."
-            assert len(responses) == len(batch), (
-                f"Response count does not match the batch size. "
-                f"Expected {len(batch)}, got {len(responses)}"
-            )
-
-            # Results should already be written by the callback
-            # Return the converted list (populated by on_result callback)
-            return converted
-
-        except BatchExecutionError:
-            # Individual tasks already exhausted tenacity retries or were
-            # intentionally rejected by the circuit breaker.  Replaying the
-            # entire batch would only amplify load.
-            raise
-
-        except asyncio.TimeoutError:
-            # Batch-level timeout is transient — eligible for retry.
-            retries += 1
-            logger.warning(f"Batch timeout (attempt {retries}/{max_retries})")
-            if retries >= max_retries:
-                logger.error("Max retries reached after batch timeout. Failing.")
-                raise
-            logger.warning("Retrying in 2 seconds...")
-            converted = [None] * len(batch)
-            write_errors.clear()
-            await asyncio.sleep(2)
-
-        except (AssertionError, ValueError, TypeError, KeyError, OSError):
-            # Non-transient errors: write/parse failures, assertion
-            # mismatches, etc.  Do not retry.
-            raise
-
-        except Exception as e:
-            retries += 1
-            logger.warning(
-                f"Error processing batch (attempt {retries}/{max_retries}): {e}"
-            )
-            if retries >= max_retries:
-                logger.error("Max retries reached. Failing the batch.")
-                raise e
-            else:
-                logger.warning("Retrying in 2 seconds...")
-                # Reset state for retry
-                converted = [None] * len(batch)
-                write_errors.clear()
-                await asyncio.sleep(2)
+    assert isinstance(responses, list), "Expected a list of responses."
+    assert len(responses) == len(batch), (
+        f"Response count does not match the batch size. "
+        f"Expected {len(batch)}, got {len(responses)}"
+    )
+    return converted
 
 
 def _prompt_lines_by_page(
@@ -851,6 +812,7 @@ def scan_and_process_images(
     mini_batch_size: int = 16,
     metadata: Optional[Dict[str, Any]] = None,
     request_context: Optional[RequestContext] = None,
+    system_prompt: Optional[str] = None,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -876,6 +838,7 @@ def scan_and_process_images(
         metadata: Optional batch/span/queue metadata, such as job and pool identifiers.
         request_context: Optional source provenance applied to each request. The
                         per-item page number is derived from each image filename when possible.
+        system_prompt: Optional system instruction for model requests.
     Returns:
         None
     """
@@ -893,6 +856,7 @@ def scan_and_process_images(
         mini_batch_size=mini_batch_size,
         metadata=metadata,
         request_context=request_context,
+        system_prompt=system_prompt,
     )
 
     return run_async(coroutine)
@@ -916,6 +880,41 @@ class ProcessingItem:
         return self.unit.output_suffix if self.unit else ""
 
 
+def _result_path_for_item(
+    item: ProcessingItem,
+    output_dir: str,
+    expect_output: Optional[str],
+) -> Optional[str]:
+    if expect_output == "json":
+        extension = ".json"
+    elif expect_output in ("markdown", "none"):
+        extension = ".md"
+    else:
+        return None
+
+    stem = os.path.splitext(os.path.basename(item.file_name))[0]
+    return os.path.join(output_dir, f"{stem}{item.output_suffix}{extension}")
+
+
+def _has_completed_item(
+    item: ProcessingItem,
+    output_dir: str,
+    expect_output: Optional[str],
+) -> bool:
+    result_path = _result_path_for_item(item, output_dir, expect_output)
+    if result_path is None or not os.path.isfile(result_path):
+        return False
+    if expect_output != "json":
+        return True
+
+    try:
+        with open(result_path, "r", encoding="utf-8") as f:
+            value = json.load(f)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return isinstance(value, (dict, list))
+
+
 async def ascan_and_process_images(
     source_dir: str,
     output_dir: str,
@@ -930,6 +929,7 @@ async def ascan_and_process_images(
     mini_batch_size: int = 16,
     metadata: Optional[Dict[str, Any]] = None,
     request_context: Optional[RequestContext] = None,
+    system_prompt: Optional[str] = None,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
@@ -957,6 +957,7 @@ async def ascan_and_process_images(
         metadata: Optional batch/span/queue metadata, such as job and pool identifiers.
         request_context: Optional source provenance applied to each request. The
                         per-item page number is derived from each image filename when possible.
+        system_prompt: Optional system instruction for model requests.
     """
     if not os.path.exists(source_dir):
         raise FileNotFoundError(f"Source directory {source_dir} does not exist.")
@@ -1042,6 +1043,22 @@ async def ascan_and_process_images(
             logging.info("No processing items to process; nothing to do.")
             return
 
+    pending_items = [
+        item
+        for item in processing_items
+        if not _has_completed_item(item, output_dir, expect_output)
+    ]
+    completed_count = len(processing_items) - len(pending_items)
+    if completed_count:
+        logging.info(
+            "Skipping %d completed processing items; %d remain.",
+            completed_count,
+            len(pending_items),
+        )
+    if not pending_items:
+        return
+    processing_items = pending_items
+
     # Load frames for unique files
     unique_files = list(dict.fromkeys(item.file_name for item in processing_items))
     file_to_frame = {
@@ -1056,7 +1073,7 @@ async def ascan_and_process_images(
         len(batched_items),
     )
 
-    async def _worker(batch: List[ProcessingItem]):
+    async def _process_mini_batch(batch: List[ProcessingItem]) -> None:
         # Extract file names and units for this batch
         file_batch = [item.file_name for item in batch]
         units_by_index = {i: item.unit for i, item in enumerate(batch)}
@@ -1086,35 +1103,37 @@ async def ascan_and_process_images(
                 completion_params=completion_params,
                 metadata=metadata,
                 request_context=request_context,
+                system_prompt=system_prompt,
             )
 
-    tasks = [asyncio.create_task(_worker(batch)) for batch in batched_items]
-    error_file_path = "/tmp/marie/llm-engine/error.log"
-    if not os.path.exists(os.path.dirname(error_file_path)):
-        os.makedirs(os.path.dirname(error_file_path), exist_ok=True)
+    batch_processor = getattr(engine, "batch_processor", None)
+    request_limit = getattr(batch_processor, "max_concurrency", mini_batch_size)
+    if not isinstance(request_limit, int) or request_limit < 1:
+        request_limit = mini_batch_size
+    worker_count = min(
+        len(batched_items),
+        max(1, (request_limit + mini_batch_size - 1) // mini_batch_size),
+    )
 
-    try:
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        errors = []
-        for r in results:
-            if isinstance(r, asyncio.CancelledError):
-                logger.warning(f"One of the tasks was cancelled : {r}")
-            elif isinstance(r, Exception):
-                logger.error("Task failed:", exc_info=r)
-                errors.append(r)
-            else:
-                logger.info(f"Task completed successfully with result: {r}")
+    batches = iter(batched_items)
+    stop = asyncio.Event()
+    errors: List[Exception] = []
 
-        if errors:
-            raise RuntimeError(
-                f"Batch processing failed: {len(errors)}/{len(results)} batches failed"
-            ) from errors[0]
+    async def _batch_worker() -> None:
+        while not stop.is_set():
+            try:
+                batch = next(batches)
+            except StopIteration:
+                return
 
-    except asyncio.CancelledError as cancel_error:
-        logger.warning("One or more tasks were cancelled.")
-        with open(error_file_path, "a", encoding="utf-8") as error_file:
-            error_message = f"Task(s) cancelled due to: {repr(cancel_error)}\n"
-            error_file.write(error_message)
-        return  # Exit early in case of cancellation
+            try:
+                await _process_mini_batch(batch)
+            except Exception as exc:
+                errors.append(exc)
+                stop.set()
+
+    await asyncio.gather(*(_batch_worker() for _ in range(worker_count)))
+    if errors:
+        raise errors[0]
 
     logging.info("All image batches have been processed.")

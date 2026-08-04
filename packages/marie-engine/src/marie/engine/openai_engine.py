@@ -324,9 +324,6 @@ class OpenAIEngine(EngineLM):
         **kwargs,
     ) -> List[CompletionCallParams]:
         effective_system_prompt = system_prompt or self.system_prompt
-        effective_system_prompt = (
-            "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
-        )
 
         if self.is_multimodal:
             default_options = {

@@ -19,9 +19,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 const PORT = parseInt(process.env.AIMOCK_PORT || "4010", 10);
 const ADMIN_PORT = parseInt(process.env.AIMOCK_ADMIN_PORT || "4011", 10);
 const HOST = process.env.AIMOCK_HOST || "127.0.0.1";
-const VALID_FAULT_PROFILES = new Set(["normal", "timeout", "error", "chaos"]);
+const VALID_FAULT_PROFILES = new Set(["normal", "timeout", "error", "invalid_json", "chaos"]);
 
-type FaultProfile = "normal" | "timeout" | "error" | "chaos";
+type FaultProfile = "normal" | "timeout" | "error" | "invalid_json" | "chaos";
 type MessageHandler = (request: ChatCompletionRequest) => FixtureResponse | Promise<FixtureResponse>;
 
 // Document processing state for stateful mocks
@@ -42,6 +42,14 @@ const faultState: {
   chaosSlowRate: parseFloat(process.env.AIMOCK_CHAOS_SLOW_RATE || "0.2"),
   chaosSlowMs: parseInt(process.env.AIMOCK_CHAOS_SLOW_MS || "5000", 10),
 };
+let requestCount = 0;
+const requestsByProfile: Record<FaultProfile, number> = {
+  normal: 0,
+  timeout: 0,
+  error: 0,
+  invalid_json: 0,
+  chaos: 0,
+};
 
 if (!VALID_FAULT_PROFILES.has(faultState.profile)) {
   faultState.profile = "normal";
@@ -52,12 +60,19 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function applyFaultProfile(): Promise<FixtureResponse | null> {
+  requestCount += 1;
+  requestsByProfile[faultState.profile] += 1;
+
   if (faultState.profile === "normal") {
     return null;
   }
 
   if (faultState.profile === "error") {
     throw new Error("Simulated AIMock error profile");
+  }
+
+  if (faultState.profile === "invalid_json") {
+    return { content: "This response intentionally contains no JSON." };
   }
 
   if (faultState.profile === "timeout") {
@@ -138,6 +153,8 @@ function snapshotFaultState(): Record<string, unknown> {
     chaosTimeoutRate: faultState.chaosTimeoutRate,
     chaosSlowRate: faultState.chaosSlowRate,
     chaosSlowMs: faultState.chaosSlowMs,
+    requestCount,
+    requestsByProfile: { ...requestsByProfile },
   };
 }
 
@@ -194,6 +211,12 @@ function startAdminServer(): Server {
       }
       if (typeof body.chaosSlowMs === "number") {
         faultState.chaosSlowMs = Math.max(1, Math.trunc(body.chaosSlowMs));
+      }
+      if (body.resetCounters === true) {
+        requestCount = 0;
+        for (const profile of VALID_FAULT_PROFILES) {
+          requestsByProfile[profile as FaultProfile] = 0;
+        }
       }
 
       sendJson(res, 200, snapshotFaultState());

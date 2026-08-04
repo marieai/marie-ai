@@ -1,79 +1,186 @@
 #!/usr/bin/env bash
 
-# Requirements
-# brew install hub
-# npm install -g git-release-notes
+set -euo pipefail
 
-set -ex
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
 
-INIT_FILE='marie/__init__.py'
-VER_TAG='__version__ = '
+python3 - "${REPO_ROOT}" "$@" <<'PY'
+from __future__ import annotations
 
-function escape_slashes {
-    sed 's/\//\\\//g'
-}
-
-function update_ver_line {
-    local OLD_LINE_PATTERN=$1
-    local NEW_LINE=$2
-    local FILE=$3
-
-    local NEW=$(echo "${NEW_LINE}" | escape_slashes)
-    if [ "$(uname)" == "Darwin" ]; then
-      sed -i '' '/'"${OLD_LINE_PATTERN}"'/s/.*/'"${NEW}"'/' "${FILE}";
-    else
-      sed -i '/'"${OLD_LINE_PATTERN}"'/s/.*/'"${NEW}"'/' "${FILE}";
-    fi
-    head -n10 ${FILE}
-}
+import re
+import subprocess
+import sys
+from pathlib import Path
 
 
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
+VERSION_FILE = Path("marie/_version.py")
+RELEASE_FILES = (
+    VERSION_FILE,
+    Path("Dockerfiles/docker-compose.allinone.yml"),
+    Path("Dockerfiles/docker-compose.extract.yml"),
+    Path("Dockerfiles/docker-compose.g5-annotators.yml"),
+    Path("Dockerfiles/docker-compose.gateway.yml"),
+    Path("bootstrap-marie.sh"),
+    Path("bootstrap.md"),
+    Path("build.sh"),
+    Path("deploy/README.md"),
+    Path("deploy/helm/charts/marie/Chart.yaml"),
+    Path("deploy/helm/charts/marie/charts/executor/Chart.yaml"),
+    Path("deploy/helm/charts/marie/charts/executor/values.yaml"),
+    Path("deploy/helm/charts/marie/charts/server/Chart.yaml"),
+    Path("deploy/helm/charts/marie/charts/server/values.yaml"),
+    Path("deploy/helm/charts/marie/values-appimage-amd64.yaml"),
+    Path("deploy/helm/charts/marie/values-appimage.yaml"),
+    Path("deploy/helm/charts/marie/values-local.yaml"),
+    Path("deploy/helm/charts/marie/values-production.yaml"),
+    Path("deploy/helm/charts/marie/values.yaml"),
+    Path("deploy/operator/README.md"),
+    Path("deploy/operator/config/samples/marie_v1alpha1_mariecluster.yaml"),
+    Path("deploy/operator/deploy/crds/mariecluster-crd.yaml"),
+    Path("deploy/smoke-marie-helm.sh"),
+    Path("docker-scripts/id"),
+    Path("docker-scripts/id.gateway"),
+    Path("docker-scripts/run-gateway.sh"),
+    Path("docs/deployment/all-in-one.md"),
+    Path("docs/docs/getting-started/contributing/build-guide.md"),
+    Path("docs/docs/getting-started/deployment/docker.md"),
+    Path("packages/marie-cli/tests/test_cli_entrypoint.py"),
+    Path("tests/unit/test_build_info.py"),
+    Path("vagrant/envs/test-default.env"),
+    Path("vagrant/envs/test-full.env"),
+)
+VERSION_PATTERN = re.compile(
+    r"^\d+\.\d+\.\d+(?:(?:a|b|rc)\d+|\.dev\d+)?$"
+)
+SOURCE_PATTERN = re.compile(
+    r'^__version__\s*=\s*["\'](?P<version>[^"\']+)["\']\s*$', re.MULTILINE
+)
 
-#if [[ "$BRANCH" != "main" ]]; then
-#  printf "You are not at main branch, exit\n";
-#  exit 1;
-#fi
 
-LAST_UPDATE=`git show --no-notes --format=format:"%H" $BRANCH | head -n 1`
-LAST_COMMIT=`git show --no-notes --format=format:"%H" origin/$BRANCH | head -n 1`
+def usage() -> None:
+    print(
+        "Usage: scripts/update-version.sh "
+        "<VERSION|major|minor|patch|final|rc|dev|--check>",
+        file=sys.stderr,
+    )
 
-#if [ $LAST_COMMIT != $LAST_UPDATE ]; then
-#    printf "Your local $BRANCH is behind the remote master, exit\n"
-#    exit 1;
-#fi
 
-# update the current version
-export RELEASE_VER=$(sed -n '/^__version__/p' $INIT_FILE | cut -d \' -f2)
-LAST_VER=$(git tag -l | sort -V | tail -n1)
-printf "last version: \e[1;32m$LAST_VER\e[0m\n"
+def current_version(root: Path) -> str:
+    version_source = (root / VERSION_FILE).read_text(encoding="utf-8")
+    match = SOURCE_PATTERN.search(version_source)
+    if match is None:
+        raise RuntimeError(f"Could not read __version__ from {VERSION_FILE}")
+    return match.group("version")
 
-if [[ $1 == "final" ]]; then
-  printf "this will be a final release: \e[1;33m$RELEASE_VER\e[0m\n"
 
-  NEXT_VER=$(echo $RELEASE_VER | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d", length($NF), ($NF+1)); print}')
-  printf "bump master version to: \e[1;32m$NEXT_VER\e[0m\n"
+def commit_count_since_last_tag(root: Path) -> int:
+    last_tag = subprocess.run(
+        ["git", "tag", "--sort=-version:refname"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    revision_range = f"{last_tag[0]}..HEAD" if last_tag else "HEAD"
+    result = subprocess.run(
+        ["git", "rev-list", revision_range, "--count"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return int(result.stdout.strip())
 
-  VER_TAG_NEXT=$VER_TAG\'${NEXT_VER}\'
-  update_ver_line "$VER_TAG" "$VER_TAG_NEXT" "$INIT_FILE"
 
-elif [[ $1 == 'rc' ]]; then
-  printf "this will be a release candidate: \e[1;33m$RELEASE_VER\e[0m\n"
-  DOT_RELEASE_VER=$(echo $RELEASE_VER | sed "s/rc/\./")
-  NEXT_VER=$(echo $DOT_RELEASE_VER | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d", length($NF), ($NF+1)); print}')
-  NEXT_VER=$(echo $NEXT_VER | sed "s/\.\([^.]*\)$/rc\1/")
-  printf "bump master version to: \e[1;32m$NEXT_VER\e[0m, this will be the next version\n"
+def resolve_version(root: Path, current: str, argument: str) -> str:
+    if VERSION_PATTERN.fullmatch(argument):
+        return argument
 
-  VER_TAG_NEXT=$VER_TAG\'${NEXT_VER}\'
-  update_ver_line "$VER_TAG" "$VER_TAG_NEXT" "$INIT_FILE"
+    match = re.fullmatch(
+        r"(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
+        r"(?P<suffix>(?:(?:a|b|rc)\d+|\.dev\d+)?)",
+        current,
+    )
+    if match is None:
+        raise RuntimeError(f"Unsupported current version: {current}")
 
-else
-  # as a prerelease, pypi update only, no back commit etc.
-  COMMITS_SINCE_LAST_VER=$(git rev-list $LAST_VER..HEAD --count)
-  NEXT_VER=$RELEASE_VER".dev"$COMMITS_SINCE_LAST_VER
-  printf "this will be a developmental release: \e[1;33m$NEXT_VER\e[0m\n"
+    major = int(match.group("major"))
+    minor = int(match.group("minor"))
+    patch = int(match.group("patch"))
+    suffix = match.group("suffix")
 
-  VER_TAG_NEXT=$VER_TAG\'${NEXT_VER}\'
-  update_ver_line "$VER_TAG" "$VER_TAG_NEXT" "$INIT_FILE"
+    if argument == "major":
+        return f"{major + 1}.0.0"
+    if argument == "minor":
+        return f"{major}.{minor + 1}.0"
+    if argument == "patch":
+        return f"{major}.{minor}.{patch + 1}"
+    if argument == "final":
+        if suffix:
+            return f"{major}.{minor}.{patch}"
+        return f"{major}.{minor}.{patch + 1}"
+    if argument == "rc":
+        rc_match = re.fullmatch(r"rc(?P<number>\d+)", suffix)
+        if rc_match:
+            return f"{major}.{minor}.{patch}rc{int(rc_match.group('number')) + 1}"
+        return f"{major}.{minor}.{patch + 1}rc1"
+    if argument == "dev":
+        count = commit_count_since_last_tag(root)
+        return f"{major}.{minor}.{patch}.dev{count}"
 
-fi
+    usage()
+    raise SystemExit(2)
+
+
+def verify_release_files(root: Path, version: str) -> None:
+    errors: list[str] = []
+    for relative_path in RELEASE_FILES:
+        path = root / relative_path
+        if not path.is_file():
+            errors.append(f"missing file: {relative_path}")
+            continue
+        if version not in path.read_text(encoding="utf-8"):
+            errors.append(f"missing version {version}: {relative_path}")
+
+    if errors:
+        raise RuntimeError("Release version is inconsistent:\n  " + "\n  ".join(errors))
+
+
+def update_release_files(root: Path, current: str, target: str) -> None:
+    verify_release_files(root, current)
+    if current == target:
+        print(f"Marie release files already use {target}")
+        return
+
+    for relative_path in RELEASE_FILES:
+        path = root / relative_path
+        content = path.read_text(encoding="utf-8")
+        path.write_text(content.replace(current, target), encoding="utf-8")
+
+    verify_release_files(root, target)
+    print(f"Updated {len(RELEASE_FILES)} release files: {current} -> {target}")
+
+
+def main() -> None:
+    root = Path(sys.argv[1]).resolve()
+    arguments = sys.argv[2:]
+    current = current_version(root)
+
+    if arguments == ["--check"]:
+        verify_release_files(root, current)
+        print(f"Marie release files consistently use {current}")
+        return
+
+    if len(arguments) > 1:
+        usage()
+        raise SystemExit(2)
+
+    mode = arguments[0] if arguments else "dev"
+    target = resolve_version(root, current, mode)
+    update_release_files(root, current, target)
+
+
+if __name__ == "__main__":
+    main()
+PY

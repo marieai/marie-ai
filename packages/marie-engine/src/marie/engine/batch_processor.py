@@ -96,13 +96,12 @@ def _resolve_effective_queue_pool_id(
 def _should_retry(exc: BaseException) -> bool:
     """Return True if the exception is retryable.
 
-    Excludes httpx.PoolTimeout (wrapped as APITimeoutError) because retrying
-    when the connection pool is exhausted only makes things worse.
+    Timed-out inference may still be running behind an OpenAI-compatible proxy.
+    Retrying it can duplicate expensive work and exceed the batch deadline.
     """
-    if isinstance(exc, APITimeoutError) and _is_pool_timeout(exc):
-        logger.warning(
-            "httpx.PoolTimeout detected — skipping retry to avoid pool exhaustion cascade"
-        )
+    if isinstance(exc, APITimeoutError):
+        timeout_source = "connection pool" if _is_pool_timeout(exc) else "request"
+        logger.warning("%s timeout detected; skipping retry", timeout_source)
         return False
     return True
 
@@ -440,16 +439,49 @@ class BatchProcessor:
         metadata: Optional[Dict[str, Any]] = None,
     ):
         try:
-            """Use tenacity to retry the completion call."""
             retry_decorator = _create_retry_decorator(max_retries=max_retries)
-            completion_with_retry = retry_decorator(self.completion_non_streaming_call)
 
-            return await completion_with_retry(
-                call=call,
-                task_id=task_id,
-                request_id=request_id,
-                metadata=metadata,
-            )
+            async def completion_attempt() -> Any:
+                reserved_half_open = False
+                async with self._get_gate_lock():
+                    if not self._circuit_breaker.is_available(self.backend_address):
+                        raise CircuitOpenError(self.backend_address)
+                    if (
+                        self._circuit_breaker.get_state(self.backend_address)
+                        == CircuitState.HALF_OPEN
+                    ):
+                        self._circuit_breaker.increment_half_open_calls(
+                            self.backend_address
+                        )
+                        reserved_half_open = True
+
+                try:
+                    return await self.completion_non_streaming_call(
+                        call=call,
+                        task_id=task_id,
+                        request_id=request_id,
+                        metadata=metadata,
+                    )
+                except (
+                    APIError,
+                    APIConnectionError,
+                    APITimeoutError,
+                    RateLimitError,
+                ) as exc:
+                    if not self._circuit_breaker.is_available(self.backend_address):
+                        raise CircuitOpenError(self.backend_address) from exc
+                    raise
+                finally:
+                    if reserved_half_open:
+                        self._circuit_breaker.decrement_half_open_calls(
+                            self.backend_address
+                        )
+
+            completion_with_retry = retry_decorator(completion_attempt)
+
+            return await completion_with_retry()
+        except CircuitOpenError:
+            raise
         except Exception as e:
             self.logger.error(
                 f"Request {request_id} – Task {task_id} failed after retries: {e!r}"
@@ -469,37 +501,20 @@ class BatchProcessor:
         # engine/client instance. Per-call semaphores are not enough because
         # concurrent mini-batches can otherwise multiply in-flight requests.
         semaphore = self._get_request_semaphore()
-        gate_lock = self._get_gate_lock()
         address = self.backend_address
-        cb = self._circuit_breaker
 
         async def safe_call(i, call):
             tid = f"{request_id}_task_{i}"
-            reserved_half_open = False
             try:
-                # Check circuit breaker before acquiring semaphore
-                async with gate_lock:
-                    if not cb.is_available(address):
-                        raise CircuitOpenError(address)
-                    # Reserve HALF_OPEN probe slot if applicable
-                    if cb.get_state(address) == CircuitState.HALF_OPEN:
-                        cb.increment_half_open_calls(address)
-                        reserved_half_open = True
-
                 async with semaphore:
-                    try:
-                        resp = await self.acompletion_call_with_retry(
-                            max_retries=3,
-                            call=call,
-                            task_id=tid,
-                            request_id=request_id,
-                            metadata=metadata,
-                        )
-                        return BatchResult(tid, resp, None)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        return BatchResult(tid, None, e)
+                    resp = await self.acompletion_call_with_retry(
+                        max_retries=3,
+                        call=call,
+                        task_id=tid,
+                        request_id=request_id,
+                        metadata=metadata,
+                    )
+                return BatchResult(tid, resp, None)
             except CircuitOpenError as e:
                 # Intentional load shedding — do not count as backend failure
                 self.logger.warning(
@@ -508,9 +523,8 @@ class BatchProcessor:
                 return BatchResult(tid, None, e)
             except asyncio.CancelledError:
                 raise
-            finally:
-                if reserved_half_open:
-                    cb.decrement_half_open_calls(address)
+            except Exception as e:
+                return BatchResult(tid, None, e)
 
         # Create tasks so we can use as_completed for incremental processing
         tasks = [
@@ -537,15 +551,16 @@ class BatchProcessor:
                             on_result(batch_result.task_id, response_text)
                     except asyncio.CancelledError:
                         raise
-        except (asyncio.CancelledError, TimeoutError):
-            # Cancel remaining tasks and drain them
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+        except TimeoutError as exc:
             raise asyncio.TimeoutError(
                 f"Batch {request_id} timed out after {self.batch_timeout}s"
-            )
+            ) from exc
+        finally:
+            pending = [task for task in tasks if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
         return results
 
