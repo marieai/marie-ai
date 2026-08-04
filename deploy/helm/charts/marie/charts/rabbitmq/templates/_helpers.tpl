@@ -36,7 +36,11 @@ RabbitMQ image
 */}}
 {{- define "rabbitmq.image" -}}
 {{- $registry := .Values.image.registry | default "docker.io" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s/%s@%s" $registry .Values.image.repository .Values.image.digest -}}
+{{- else -}}
 {{- printf "%s/%s:%s" $registry .Values.image.repository .Values.image.tag -}}
+{{- end -}}
 {{- end }}
 
 {{/*

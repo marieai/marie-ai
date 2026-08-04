@@ -7,7 +7,7 @@ metadata:
     {{- include "rabbitmq.labels" . | nindent 4 }}
 spec:
   serviceName: {{ include "rabbitmq.fullname" . }}
-  replicas: 1
+  replicas: {{ include "marie.infrastructureReplicas" (dict "root" . "replicas" 1) }}
   selector:
     matchLabels:
       {{- include "rabbitmq.selectorLabels" . | nindent 6 }}
@@ -19,6 +19,24 @@ spec:
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.persistence.enabled }}
+      initContainers:
+        - name: fix-erlang-cookie-permissions
+          image: {{ include "rabbitmq.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -ec
+          args:
+            - if [ -f /var/lib/rabbitmq/.erlang.cookie ]; then chmod 0600 /var/lib/rabbitmq/.erlang.cookie; fi
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
       {{- end }}
       containers:
         - name: rabbitmq

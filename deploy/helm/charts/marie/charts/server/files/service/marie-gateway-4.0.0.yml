@@ -219,7 +219,7 @@ with:
   #        MARIE_OTEL_CONSOLE_EXPORT=true
   #
   llm_tracking:
-    enabled: true
+    enabled: __LLM_TRACKING_ENABLED__
     exporter: console
     project_id: marie-ai
     worker:

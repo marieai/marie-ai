@@ -21,7 +21,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{- define "postgresql.image" -}}
 {{- $registry := .Values.image.registry | default "ghcr.io" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s/%s@%s" $registry .Values.image.repository .Values.image.digest -}}
+{{- else -}}
 {{- printf "%s/%s:%s" $registry .Values.image.repository .Values.image.tag -}}
+{{- end -}}
 {{- end }}
 
 {{- define "postgresql.secretName" -}}

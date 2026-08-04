@@ -23,6 +23,14 @@ app.kubernetes.io/name: {{ include "valkey.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
+{{- define "valkey.image" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "valkey.secretName" -}}
 {{- if .Values.auth.existingSecret -}}
 {{- .Values.auth.existingSecret -}}

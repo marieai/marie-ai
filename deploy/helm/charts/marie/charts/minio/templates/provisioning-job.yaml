@@ -1,4 +1,4 @@
-{{- if and .Values.enabled .Values.provisioning.enabled }}
+{{- if and .Values.enabled .Values.provisioning.enabled (eq (include "marie.lifecycleSuspended" .) "false") }}
 {{- $users := .Values.provisioning.users | default list }}
 {{- $user := dict }}
 {{- if gt (len $users) 0 }}

@@ -32,7 +32,7 @@ metadata:
     {{- include "executor.poolLabels" (list $pool $) | nindent 4 }}
 spec:
   serviceName: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}-headless
-  replicas: {{ $pool.replicas }}
+  replicas: {{ include "marie.workloadReplicas" (dict "root" $ "replicas" $pool.replicas) }}
   podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
@@ -97,6 +97,8 @@ spec:
                   fieldPath: metadata.name
             - name: MARIE_COMPONENT
               value: executor
+            - name: MARIE_PORT
+              value: {{ $port | quote }}
             - name: EXECUTOR_POOL
               value: {{ $pool.name | quote }}
             - name: PYTHONUNBUFFERED
@@ -348,24 +350,21 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
           startupProbe:
-            httpGet:
-              path: /healthz
-              port: grpc
+            grpc:
+              port: {{ $port }}
             initialDelaySeconds: {{ $startupProbe.initialDelaySeconds | default 5 }}
             periodSeconds: {{ $startupProbe.periodSeconds | default 10 }}
             failureThreshold: {{ $startupProbe.failureThreshold | default 30 }}
             timeoutSeconds: {{ $startupProbe.timeoutSeconds | default 10 }}
           livenessProbe:
-            httpGet:
-              path: /healthz
-              port: grpc
+            grpc:
+              port: {{ $port }}
             initialDelaySeconds: {{ $livenessProbe.initialDelaySeconds | default 30 }}
             periodSeconds: {{ $livenessProbe.periodSeconds | default 5 }}
             timeoutSeconds: {{ $livenessProbe.timeoutSeconds | default 10 }}
           readinessProbe:
-            httpGet:
-              path: /ready
-              port: grpc
+            grpc:
+              port: {{ $port }}
             initialDelaySeconds: {{ $readinessProbe.initialDelaySeconds | default 5 }}
             periodSeconds: {{ $readinessProbe.periodSeconds | default 5 }}
             timeoutSeconds: {{ $readinessProbe.timeoutSeconds | default 5 }}

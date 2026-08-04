@@ -21,6 +21,26 @@ Create a default fully qualified app name.
 {{- end }}
 {{- end }}
 
+{{- define "marie.lifecycleActive" -}}
+{{- $global := .Values.global | default dict -}}
+{{- $lifecycle := $global.lifecycle | default dict -}}
+{{- if or (not ($lifecycle.managed | default false)) (eq ($lifecycle.phase | default "active") "active") -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
+{{- define "marie.lifecycleSuspended" -}}
+{{- $global := .Values.global | default dict -}}
+{{- $lifecycle := $global.lifecycle | default dict -}}
+{{- if and ($lifecycle.managed | default false) (eq ($lifecycle.phase | default "active") "suspended") -}}true{{- else -}}false{{- end -}}
+{{- end -}}
+
+{{- define "marie.workloadReplicas" -}}
+{{- if eq (include "marie.lifecycleActive" .root) "true" -}}{{ .replicas }}{{- else -}}0{{- end -}}
+{{- end -}}
+
+{{- define "marie.infrastructureReplicas" -}}
+{{- if eq (include "marie.lifecycleSuspended" .root) "true" -}}0{{- else -}}{{ .replicas }}{{- end -}}
+{{- end -}}
+
 {{/*
 Create chart name and version as used by the chart label.
 */}}

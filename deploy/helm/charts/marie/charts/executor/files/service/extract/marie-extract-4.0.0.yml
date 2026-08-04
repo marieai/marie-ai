@@ -95,7 +95,7 @@ scheduler:
 
 # LLM Tracking configuration
 llm_tracking:
-  enabled: true
+  enabled: __LLM_TRACKING_ENABLED__
   exporter: rabbitmq
   project_id: marie-extract
   worker:
@@ -117,6 +117,7 @@ with:
   protocol:
     - grpc
 #    - http
+  port: ${{ ENV.MARIE_PORT }}
 
   discovery: true
   discovery_host: __ETCD_HOST__ # SINGLE HOST OR A LIST OF HOSTS
@@ -218,7 +219,7 @@ executors:
          - CUDARuntimeTerminated
        with:
          health:
-           gpu_monitor_enabled: true
+           gpu_monitor_enabled: __GPU_MONITOR_ENABLED__
            interval_s: 30
            consecutive_failures: 3
            fail_fast_on_error: true

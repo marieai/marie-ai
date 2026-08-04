@@ -16,6 +16,8 @@ data:
   {{- $extractConfig = replace "__POSTGRES_PASSWORD__" $postgresPassword $extractConfig }}
   {{- $extractConfig = replace "__CLICKHOUSE_HOST__" (printf "%s-clickhouse" .Release.Name) $extractConfig }}
   {{- $extractConfig = replace "__OTEL_HOST__" "localhost" $extractConfig }}
+  {{- $extractConfig = replace "__LLM_TRACKING_ENABLED__" (ternary "true" "false" .Values.llmTracking.enabled) $extractConfig }}
+  {{- $extractConfig = replace "__GPU_MONITOR_ENABLED__" (ternary "true" "false" .Values.gpuMonitor.enabled) $extractConfig }}
   marie-extract-4.0.0.yml: |
 {{ $extractConfig | indent 4 }}
   # Executor pools configuration

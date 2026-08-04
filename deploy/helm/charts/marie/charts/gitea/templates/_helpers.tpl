@@ -39,10 +39,15 @@ Gitea image
 {{- $registry := .Values.global.imageRegistry | default "" -}}
 {{- $repository := .Values.image.repository | default "gitea/gitea" -}}
 {{- $tag := .Values.image.tag | default "latest" -}}
+{{- $digest := .Values.image.digest | default "" -}}
+{{- $image := $repository -}}
 {{- if $registry }}
-{{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- $image = printf "%s/%s" $registry $repository -}}
+{{- end }}
+{{- if $digest }}
+{{- printf "%s@%s" $image $digest -}}
 {{- else }}
-{{- printf "%s:%s" $repository $tag -}}
+{{- printf "%s:%s" $image $tag -}}
 {{- end }}
 {{- end }}
 

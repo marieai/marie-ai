@@ -37,6 +37,7 @@ data:
   {{- $gatewayConfig = replace "__CLICKHOUSE_HOST__" (printf "%s-clickhouse" .Release.Name) $gatewayConfig }}
   {{- $gatewayConfig = replace "__OTEL_HOST__" "localhost" $gatewayConfig }}
   {{- $gatewayConfig = replace "__OTEL_ENDPOINT__" "http://localhost:4317" $gatewayConfig }}
+  {{- $gatewayConfig = replace "__LLM_TRACKING_ENABLED__" (ternary "true" "false" .Values.llmTracking.enabled) $gatewayConfig }}
   marie-gateway-4.0.0.yml: |
 {{ $gatewayConfig | indent 4 }}
   marie.yml: |
@@ -124,4 +125,17 @@ data:
       rabbitmq:
         enabled: true
       {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "server.fullname" . }}-scheduler-sql
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "server.labels" . | nindent 4 }}
+data:
+  {{- range $path, $_ := .Files.Glob "files/psql/**" }}
+  {{ $path | replace "/" "__" }}: |-
+{{ $.Files.Get $path | indent 4 }}
+  {{- end }}
 {{- end }}

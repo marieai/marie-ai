@@ -1,9 +1,11 @@
 enabled: true
+progressDeadlineSeconds: 600
 
 image:
   registry: docker.io
   repository: minio/minio
   tag: latest
+  digest: ""
   pullPolicy: IfNotPresent
 
 auth:
@@ -27,6 +29,7 @@ provisioning:
     registry: docker.io
     repository: minio/mc
     tag: latest
+    digest: ""
     pullPolicy: IfNotPresent
   users:
     - username: marie-access-key

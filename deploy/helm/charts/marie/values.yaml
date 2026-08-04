@@ -3,6 +3,9 @@
 
 # Global settings applied to all subcharts
 global:
+  lifecycle:
+    managed: false
+    phase: active
   # Container image registry
   imageRegistry: ""
   # Image pull secrets for private registries
@@ -21,6 +24,7 @@ global:
     image:
       repository: marieai/marie
       tag: "5.0.0-cuda"
+      digest: ""
     logging:
       level: INFO
     debugQueryPlanner: "FALSE"
@@ -151,6 +155,7 @@ server:
   image:
     repository: marieai/marie-gateway
     tag: "5.0.0-cpu"
+    digest: ""
 
   config:
     configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
@@ -237,6 +242,7 @@ executor:
       image:
         repository: ""
         tag: ""
+        digest: ""
 
       resources:
         requests:
@@ -262,6 +268,7 @@ executor:
       image:
         repository: ""
         tag: ""
+        digest: ""
 
       resources:
         requests:
@@ -315,6 +322,7 @@ postgresql:
     registry: ghcr.io
     repository: ferretdb/postgres-documentdb
     tag: "17-0.103.0"
+    digest: ""
 
   auth:
     postgresPassword: ""
@@ -346,6 +354,7 @@ rabbitmq:
     registry: docker.io
     repository: rabbitmq
     tag: "3-management-alpine"
+    digest: ""
 
   auth:
     username: marie
@@ -375,6 +384,7 @@ etcd:
     registry: quay.io
     repository: coreos/etcd
     tag: "v3.7.0"
+    digest: ""
 
   autoCompaction:
     mode: periodic
@@ -407,6 +417,7 @@ valkey:
   image:
     repository: valkey/valkey
     tag: "9-alpine"
+    digest: ""
     pullPolicy: IfNotPresent
 
   auth:
@@ -454,6 +465,7 @@ minio:
     registry: docker.io
     repository: minio/minio
     tag: latest
+    digest: ""
 
   mode: standalone
 
@@ -476,6 +488,12 @@ minio:
   # Service account credentials for Marie
   provisioning:
     enabled: true
+    image:
+      registry: docker.io
+      repository: minio/mc
+      tag: latest
+      digest: ""
+      pullPolicy: IfNotPresent
     users:
       - username: marie-access-key
         password: marie-secret-key
@@ -499,6 +517,7 @@ clickhouse:
   image:
     repository: clickhouse/clickhouse-server
     tag: "latest"
+    digest: ""
 
   service:
     type: ClusterIP

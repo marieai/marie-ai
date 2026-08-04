@@ -1,4 +1,4 @@
-{{- if and .Values.enabled .Values.autoscaling.enabled }}
+{{- if and .Values.enabled .Values.autoscaling.enabled (eq (include "marie.lifecycleActive" .) "true") }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

@@ -3,6 +3,7 @@ enabled: true
 image:
   repository: valkey/valkey
   tag: "9-alpine"
+  digest: ""
   pullPolicy: IfNotPresent
 
 auth:

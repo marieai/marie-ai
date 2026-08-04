@@ -25,10 +25,16 @@ Rendered only when sandbox.enabled=true.
 
 {{- $fullname := include "marie.fullname" . }}
 {{- $pgHost   := printf "%s-postgresql" .Release.Name }}
-{{- $pgImage  := printf "%s/%s:%s"
+{{- $pgImage := printf "%s/%s:%s"
       (.Values.postgresql.image.registry | default "ghcr.io")
       .Values.postgresql.image.repository
       .Values.postgresql.image.tag }}
+{{- if .Values.postgresql.image.digest }}
+{{- $pgImage = printf "%s/%s@%s"
+      (.Values.postgresql.image.registry | default "ghcr.io")
+      .Values.postgresql.image.repository
+      .Values.postgresql.image.digest }}
+{{- end }}
 
 apiVersion: batch/v1
 kind: Job

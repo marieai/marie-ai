@@ -25,5 +25,9 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 
 {{- define "etcd.image" -}}
 {{- $registry := .Values.image.registry | default "quay.io" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s/%s@%s" $registry .Values.image.repository .Values.image.digest -}}
+{{- else -}}
 {{- printf "%s/%s:%s" $registry .Values.image.repository .Values.image.tag -}}
+{{- end -}}
 {{- end }}

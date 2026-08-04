@@ -11,6 +11,7 @@ global:
     image:
       repository: marieai/marie
       tag: "5.0.0-cuda"
+      digest: ""
     logging:
       level: INFO
     debugQueryPlanner: "FALSE"
@@ -53,10 +54,15 @@ global:
 
 enabled: true
 replicas: 1
+progressDeadlineSeconds: 600
+
+llmTracking:
+  enabled: true
 
 image:
   repository: marieai/marie-gateway
   tag: "5.0.0-cpu"
+  digest: ""
   pullPolicy: IfNotPresent
 
 # Service configuration
@@ -76,7 +82,8 @@ config:
   # Path to bootstrap gateway config file (mounted via ConfigMap)
   configFile: /etc/marie/config/service/marie-gateway-4.0.0.yml
   extraSearchPaths: /etc/marie/config/extra_py_modules
-  # SQL schema files are packaged with the Marie image, not copied into Helm.
+  # SQL schema files are packaged by this chart for gateway images that do not
+  # include the scheduler fixtures.
   psqlDir: /marie/config/psql
   schemaDir: /marie/config/psql/schema
   metrics:

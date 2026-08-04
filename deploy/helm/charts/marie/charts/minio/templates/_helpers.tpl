@@ -36,12 +36,20 @@ MinIO image
 */}}
 {{- define "minio.image" -}}
 {{- $registry := .Values.image.registry | default "docker.io" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s/%s@%s" $registry .Values.image.repository .Values.image.digest -}}
+{{- else -}}
 {{- printf "%s/%s:%s" $registry .Values.image.repository .Values.image.tag -}}
+{{- end -}}
 {{- end }}
 
 {{- define "minio.mcImage" -}}
 {{- $registry := .Values.provisioning.image.registry | default "docker.io" -}}
+{{- if .Values.provisioning.image.digest -}}
+{{- printf "%s/%s@%s" $registry .Values.provisioning.image.repository .Values.provisioning.image.digest -}}
+{{- else -}}
 {{- printf "%s/%s:%s" $registry .Values.provisioning.image.repository .Values.provisioning.image.tag -}}
+{{- end -}}
 {{- end }}
 
 {{/*

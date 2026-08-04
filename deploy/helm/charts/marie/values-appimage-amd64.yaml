@@ -1,0 +1,64 @@
+# Linux AMD64 platform manifest digests packaged in the AppImage image bundle.
+
+global:
+  marie:
+    image:
+      digest: sha256:26342bd0c1db5e94f1da8d611aee3a7f3bc13aceb41dfd616e7962f1dab915a0
+
+server:
+  image:
+    digest: sha256:e7d59c0591ed6a6ed3ddf4233dafca6ca740fc1565cdf6c80b916a734b68cf72
+
+executor:
+  pools:
+    - name: cpu-local
+      enabled: true
+      replicas: 1
+      progressDeadlineSeconds: 1800
+      gpu: false
+      stateful: false
+      strategy:
+        type: Recreate
+      image:
+        repository: docker.io/marieai/marie
+        tag: "5.0.0-cuda"
+        digest: sha256:26342bd0c1db5e94f1da8d611aee3a7f3bc13aceb41dfd616e7962f1dab915a0
+        pullPolicy: IfNotPresent
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "2Gi"
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+
+gitea:
+  image:
+    digest: sha256:fd917399b5bbde18348d52eda18b3690d75ae1c108630c6dc3a2bf10a3e0c353
+
+postgresql:
+  image:
+    digest: sha256:c2bd151a4ba2227d2f2a4c50406a104def04aef8780495505e6e1fcf6b8b2d8e
+
+rabbitmq:
+  image:
+    digest: sha256:3c498e636fd64462480c5f9ff842eb224ab84160a8ada1ded5375e9569e9230c
+
+valkey:
+  image:
+    digest: sha256:3fe38a705227d29534a199e876b38d5474dec4d3baca980ac6894df539416562
+
+etcd:
+  image:
+    digest: sha256:893a99e64e181fede58348cc824cdfae956ea8b64e0e008f7105e950d9cb3f33
+
+minio:
+  image:
+    digest: sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+  provisioning:
+    image:
+      digest: sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
+
+clickhouse:
+  image:
+    digest: sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8

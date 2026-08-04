@@ -10,6 +10,7 @@ global:
     image:
       repository: marieai/marie
       tag: "5.0.0-cuda"
+      digest: ""
     debugQueryPlanner: "FALSE"
   grpc:
     trace: ""
@@ -47,12 +48,19 @@ global:
 
 enabled: true
 
+llmTracking:
+  enabled: true
+
+gpuMonitor:
+  enabled: true
+
 # Define executor pools (can have multiple CPU and GPU pools)
 pools:
   # CPU executor pool for general workloads
   - name: cpu-general
     enabled: true
     replicas: 2
+    progressDeadlineSeconds: 600
     gpu: false
     stateful: false
     strategy:
@@ -63,6 +71,7 @@ pools:
     image:
       repository: marieai/marie
       tag: ""
+      digest: ""
       pullPolicy: IfNotPresent
 
     service:
@@ -109,6 +118,7 @@ pools:
     image:
       repository: marieai/marie
       tag: ""
+      digest: ""
       pullPolicy: IfNotPresent
 
     service:

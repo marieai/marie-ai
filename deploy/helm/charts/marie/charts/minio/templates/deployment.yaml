@@ -6,7 +6,8 @@ metadata:
   labels:
     {{- include "minio.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  progressDeadlineSeconds: {{ .Values.progressDeadlineSeconds }}
+  replicas: {{ include "marie.infrastructureReplicas" (dict "root" . "replicas" 1) }}
   selector:
     matchLabels:
       {{- include "minio.selectorLabels" . | nindent 6 }}

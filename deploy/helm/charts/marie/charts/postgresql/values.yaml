@@ -4,6 +4,7 @@ image:
   registry: ghcr.io
   repository: ferretdb/postgres-documentdb
   tag: "17-0.103.0"
+  digest: ""
   pullPolicy: IfNotPresent
 
 auth:
@@ -69,6 +70,16 @@ initdb:
 
       SELECT 'CREATE DATABASE mem0'
       WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mem0')\gexec
+
+databaseInit:
+  enabled: false
+  databases: []
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  hook:
+    weight: "-20"
+    deletePolicy: before-hook-creation,hook-succeeded
+  resources: {}
 
 nodeSelector: {}
 tolerations: []

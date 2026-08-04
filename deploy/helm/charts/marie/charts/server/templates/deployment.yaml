@@ -24,8 +24,11 @@ metadata:
   labels:
     {{- include "server.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicas }}
+  progressDeadlineSeconds: {{ .Values.progressDeadlineSeconds }}
+  {{- if eq (include "marie.lifecycleActive" .) "false" }}
+  replicas: 0
+  {{- else if not .Values.autoscaling.enabled }}
+  replicas: {{ include "marie.workloadReplicas" (dict "root" . "replicas" .Values.replicas) }}
   {{- end }}
   strategy:
     type: RollingUpdate
@@ -404,6 +407,9 @@ spec:
             - name: config
               mountPath: /etc/marie/config/service
               readOnly: true
+            - name: scheduler-sql
+              mountPath: {{ .Values.config.psqlDir | default "/marie/config/psql" }}
+              readOnly: true
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /data
@@ -416,6 +422,14 @@ spec:
         - name: config
           configMap:
             name: {{ include "server.fullname" . }}-config
+        - name: scheduler-sql
+          configMap:
+            name: {{ include "server.fullname" . }}-scheduler-sql
+            items:
+              {{- range $path, $_ := .Files.Glob "files/psql/**" }}
+              - key: {{ $path | replace "/" "__" }}
+                path: {{ trimPrefix "files/psql/" $path }}
+              {{- end }}
         {{- if .Values.persistence.enabled }}
         - name: data
           persistentVolumeClaim:

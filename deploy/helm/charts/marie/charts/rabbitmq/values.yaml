@@ -4,6 +4,7 @@ image:
   registry: docker.io
   repository: rabbitmq
   tag: "3-management-alpine"
+  digest: ""
   pullPolicy: IfNotPresent
 
 auth:
@@ -32,6 +33,7 @@ affinity: {}
 
 podSecurityContext:
   fsGroup: 999
+  fsGroupChangePolicy: OnRootMismatch
 
 securityContext:
   allowPrivilegeEscalation: false

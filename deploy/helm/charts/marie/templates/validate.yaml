@@ -1,0 +1,5 @@
+{{- $lifecycle := .Values.global.lifecycle | default dict }}
+{{- $phase := $lifecycle.phase | default "active" }}
+{{- if not (has $phase (list "infrastructure" "migrating" "active" "suspended")) }}
+{{- fail "global.lifecycle.phase must be one of: infrastructure, migrating, active, suspended" }}
+{{- end }}

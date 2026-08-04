@@ -62,10 +62,15 @@ Executor image for a pool
 {{- $registry := $global.imageRegistry | default "" -}}
 {{- $repository := $image.repository | default $global.marie.image.repository | default "marieai/marie" -}}
 {{- $tag := $image.tag | default $global.marie.image.tag | default $appVersion -}}
+{{- $digest := $image.digest | default $global.marie.image.digest | default "" -}}
+{{- $reference := $repository -}}
 {{- if $registry }}
-{{- printf "%s/%s:%s" $registry $repository $tag -}}
+{{- $reference = printf "%s/%s" $registry $repository -}}
+{{- end }}
+{{- if $digest }}
+{{- printf "%s@%s" $reference $digest -}}
 {{- else }}
-{{- printf "%s:%s" $repository $tag -}}
+{{- printf "%s:%s" $reference $tag -}}
 {{- end }}
 {{- end }}
 
