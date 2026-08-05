@@ -82,6 +82,16 @@ def get_frames_from_docs(
 
     doc: AssetKeyDoc = docs[0]
     logger.debug(f"Document asset key: {doc.asset_key}")
+    if pages is not None:
+        if doc.pages:
+            pages = sorted(set(doc.pages).intersection(set(pages)))
+            if not pages:
+                raise ValueError(
+                    "Specified pages NOT found in document. "
+                    f"Document pages: {doc.pages}, requested pages: {pages}"
+                )
+        else:
+            logger.warning(f"Document has no pages attribute. unable to verify requested pages {pages}")
     pages = doc.pages if pages is None else pages
     docs = docs_from_asset(doc.asset_key, pages)
     return _frames_from_parsed_docs(docs)

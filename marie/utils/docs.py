@@ -356,6 +356,7 @@ def _load_pdf_frames(
         images = convert_from_path(str(path), dpi=dpi)
     else:
         images = []
+        invalid_pages = []
         for page in selected:
             rendered = convert_from_path(
                 str(path),
@@ -364,8 +365,12 @@ def _load_pdf_frames(
                 last_page=page + 1,
             )
             if not rendered:
-                raise IndexError(f'PDF page index out of range: {page}')
+                invalid_pages.append(page)
+                continue
+                # raise IndexError(f'PDF page index out of range: {page}')
             images.append(rendered[0])
+        if invalid_pages:
+            logger.warning(f'PDF page indices out of range: {invalid_pages}')
     return [_rgb_array(image) for image in images]
 
 
@@ -380,6 +385,13 @@ def _load_raster_image_frames(
         except AttributeError:
             frame_count = 1
         selected = _normalize_pages(pages)
+        if selected is not None and any(page >= frame_count for page in selected):
+            logger.warning(
+                f'Raster page indices out of range: {selected}, '
+                f'image has {frame_count} frames'
+            )
+            selected = [page for page in selected if page < frame_count]
+
         indices: Sequence[int] = range(frame_count) if selected is None else selected
 
         for page in indices:
@@ -455,10 +467,15 @@ def _select_frames(
     if selected is None:
         return frames
     result = []
+    invalid_pages = []
     for page in selected:
         if page >= len(frames):
-            raise IndexError(f'Page index out of range: {page}')
+            invalid_pages.append(page)
+            continue
+            # raise IndexError(f'Page index out of range: {page}')
         result.append(frames[page])
+    if invalid_pages:
+        logger.warning(f'Page indices out of range: {invalid_pages}')
     return result
 
 
