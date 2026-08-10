@@ -37,7 +37,7 @@ executor:
   gpuMonitor:
     enabled: false
   pools:
-    - name: cpu-local
+    - name: default-local
       enabled: true
       replicas: 1
       progressDeadlineSeconds: 1800

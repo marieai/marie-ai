@@ -22,6 +22,7 @@
 {{- $storageS3 := $storage.s3 | default dict }}
 {{- $grpc := $.Values.global.grpc | default dict }}
 {{- $openai := $.Values.global.openai | default dict }}
+{{- $runtimeClassName := default $.Values.runtimeClassName $pool.runtimeClassName }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -53,6 +54,9 @@ spec:
         {{- toYaml $pool.scaleToZero.annotations | nindent 8 }}
         {{- end }}
     spec:
+      {{- with $runtimeClassName }}
+      runtimeClassName: {{ . | quote }}
+      {{- end }}
       {{- with $.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

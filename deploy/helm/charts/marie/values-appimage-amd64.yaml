@@ -3,15 +3,15 @@
 global:
   marie:
     image:
-      digest: sha256:26342bd0c1db5e94f1da8d611aee3a7f3bc13aceb41dfd616e7962f1dab915a0
+      digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
 
 server:
   image:
-    digest: sha256:e7d59c0591ed6a6ed3ddf4233dafca6ca740fc1565cdf6c80b916a734b68cf72
+    digest: sha256:e65a1a3b2b7f3e2999229f2b1c898d0b83fa2a1f61d19af642daf4c9d21fa997
 
 executor:
   pools:
-    - name: cpu-local
+    - name: default-local
       enabled: true
       replicas: 1
       progressDeadlineSeconds: 1800
@@ -22,7 +22,7 @@ executor:
       image:
         repository: docker.io/marieai/marie
         tag: "5.0.1-cuda"
-        digest: sha256:26342bd0c1db5e94f1da8d611aee3a7f3bc13aceb41dfd616e7962f1dab915a0
+        digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
         pullPolicy: IfNotPresent
       resources:
         requests:

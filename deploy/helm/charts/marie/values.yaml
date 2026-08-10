@@ -264,6 +264,7 @@ executor:
       enabled: true
       replicas: 1
       gpu: true
+      runtimeClassName: ""
 
       image:
         repository: ""

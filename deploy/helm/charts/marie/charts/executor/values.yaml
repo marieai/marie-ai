@@ -48,6 +48,9 @@ global:
 
 enabled: true
 
+# Optional default runtime class. A pool-level value takes precedence.
+runtimeClassName: ""
+
 llmTracking:
   enabled: true
 
@@ -113,6 +116,7 @@ pools:
     enabled: true
     replicas: 1
     gpu: true
+    runtimeClassName: ""
     stateful: false
 
     image:

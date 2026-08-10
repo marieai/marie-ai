@@ -1,0 +1,30 @@
+global:
+  lifecycle:
+    phase: active
+
+executor:
+  pools:
+    - name: gpu-local
+      enabled: true
+      replicas: 1
+      gpu: true
+      runtimeClassName: nvidia
+      stateful: false
+      image:
+        repository: docker.io/marieai/marie
+        tag: "5.0.1-cuda"
+        digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
+        pullPolicy: IfNotPresent
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "2Gi"
+          nvidia.com/gpu: 1
+        limits:
+          cpu: "4"
+          memory: "8Gi"
+          nvidia.com/gpu: 1
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule

@@ -18,7 +18,7 @@ replicas_for() {
   ' "${manifest}"
 }
 
-workloads=(lifecycle-proof-server lifecycle-proof-executor-cpu-local)
+workloads=(lifecycle-proof-server lifecycle-proof-executor-default-local)
 infrastructure=(
   lifecycle-proof-gitea
   lifecycle-proof-postgresql

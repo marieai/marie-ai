@@ -48,8 +48,8 @@ verify_platform() {
 docker.io/clickhouse/clickhouse-server@sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8
 docker.io/gitea/gitea@sha256:fd917399b5bbde18348d52eda18b3690d75ae1c108630c6dc3a2bf10a3e0c353
 docker.io/library/rabbitmq@sha256:3c498e636fd64462480c5f9ff842eb224ab84160a8ada1ded5375e9569e9230c
-docker.io/marieai/marie-gateway@sha256:e7d59c0591ed6a6ed3ddf4233dafca6ca740fc1565cdf6c80b916a734b68cf72
-docker.io/marieai/marie@sha256:26342bd0c1db5e94f1da8d611aee3a7f3bc13aceb41dfd616e7962f1dab915a0
+docker.io/marieai/marie-gateway@sha256:e65a1a3b2b7f3e2999229f2b1c898d0b83fa2a1f61d19af642daf4c9d21fa997
+docker.io/marieai/marie@sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
 docker.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
 docker.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
 docker.io/valkey/valkey@sha256:3fe38a705227d29534a199e876b38d5474dec4d3baca980ac6894df539416562
@@ -78,7 +78,11 @@ EOF
     $1 == "gpu_monitor_enabled:" && $2 == "false" { found = 1; exit }
     END { exit !found }
   ' "$rendered"; then
-    echo "AppImage CPU executor must disable GPU health monitoring" >&2
+    echo "AppImage default executor must disable GPU health monitoring" >&2
+    exit 1
+  fi
+  if grep -q 'runtimeClassName:' "$rendered" || grep -q 'nvidia.com/gpu:' "$rendered"; then
+    echo "AppImage default executor must remain CPU-scheduled" >&2
     exit 1
   fi
   if ! grep -q '^            - name: MARIE_PORT$' "$rendered" \

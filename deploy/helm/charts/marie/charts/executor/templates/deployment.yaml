@@ -24,6 +24,7 @@
 {{- $openai := $.Values.global.openai | default dict }}
 {{- $strategy := default dict $pool.strategy }}
 {{- $strategyType := $strategy.type | default "RollingUpdate" }}
+{{- $runtimeClassName := default $.Values.runtimeClassName $pool.runtimeClassName }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -63,6 +64,9 @@ spec:
         {{- toYaml $pool.scaleToZero.annotations | nindent 8 }}
         {{- end }}
     spec:
+      {{- with $runtimeClassName }}
+      runtimeClassName: {{ . | quote }}
+      {{- end }}
       {{- with $.Values.global.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
