@@ -52,6 +52,7 @@ Monitor and troubleshoot your deployment:
 | Guide | Description |
 |-------|-------------|
 | [Observability](./observability.md) | Prometheus, Grafana, Loki, and Jaeger setup |
+| [m3top Operational Terminal](./m3top.md) | Live gateway, executor, scheduler, job, DAG, and dependency analysis |
 | [Troubleshooting](./troubleshooting.md) | Common issues and solutions |
 
 ### Scaling

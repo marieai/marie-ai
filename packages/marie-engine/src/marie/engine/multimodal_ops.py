@@ -4,12 +4,11 @@ import functools
 import logging
 from typing import Callable, Dict, List, Optional, Union
 
-from PIL import Image
-from pydantic import BaseModel
-
 from marie.engine import EngineLM
 from marie.engine.config import validate_engine_or_get_default
 from marie.engine.function import Function, FunctionReturnType
+from PIL import Image
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +59,7 @@ class MultimodalLLMCall(Function):
         :return: response sampled from the LLM
 
         :example:
-        >>> engine = get_engine("qwen_vl_3b")
+        >>> engine = get_engine("qwen_vl")
         >>> target_image = "A byte representation of the image"
         >>> prompt = "What is the capital of France?"
         >>> response = MultimodalLLMCall(engine)([target_image, prompt])
@@ -94,7 +93,7 @@ class MultimodalLLMCall(Function):
             **kwargs,
         )
 
-        logger.info(
+        logger.debug(
             "MultimodalLLMCall function forward",
             extra={
                 "text": f"System:{system_prompt_value}\nQuery: {inputs}\nResponse: {response_text}"
@@ -186,7 +185,7 @@ class MultimodalLLMCall(Function):
             )
             response_text = await loop.run_in_executor(None, ctx.run, fn)
 
-        logger.info(
+        logger.debug(
             "MultimodalLLMCall function aforward",
             extra={
                 "text": f"System:{system_prompt_value}\nQuery: {inputs}\nResponse: {response_text}"

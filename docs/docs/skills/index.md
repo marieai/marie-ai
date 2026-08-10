@@ -13,7 +13,7 @@ Skills are multi-step capabilities stored as Markdown files with YAML frontmatte
 | Tier | Content | Token Cost | When Loaded |
 |------|---------|------------|-------------|
 | **L1 Metadata** | Name, description, tags | ~100 tokens/skill | Always available |
-| **L2 Instructions** | Full instructions, examples | <5,000 tokens | On demand via `load_skill` |
+| **L2 Instructions** | Full instructions, examples | Fewer than 5,000 tokens | On demand via `load_skill` |
 | **L3 Resources** | Reference docs, scripts, templates | Varies | On demand via `load_skill_resource` |
 
 ## Skill Sources

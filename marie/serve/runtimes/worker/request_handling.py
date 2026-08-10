@@ -1798,7 +1798,6 @@ class WorkerRequestHandler:
                 )
             except Exception as e:
                 self.logger.error(f"Error recording job status RUNNING {job_id} : {e}")
-                print(e)
 
     async def _record_successful_job(
         self,
@@ -2397,7 +2396,7 @@ class WorkerRequestHandler:
                     "owner": owner,
                     "run_attempt_id": run_attempt_id,
                 }
-                self.logger.info(
+                self.logger.debug(
                     f"[sem] adopted ticket {job_id} for slot '{slot_type}' (ttl={ttl}, owner={owner})"
                 )
                 return True
@@ -2461,7 +2460,7 @@ class WorkerRequestHandler:
                 owner=owner,
                 run_attempt_id=run_attempt_id,
             )
-            self.logger.info(
+            self.logger.debug(
                 f"[sem] release ticket {job_id}@{slot} -> "
                 f"{result.success} ({result.reason}, attempts={result.attempts})"
             )

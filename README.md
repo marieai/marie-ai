@@ -41,6 +41,7 @@ Marie-AI leverages an agentic design to deliver:
 - **End-to-End Automation:** From ingestion to extraction and delivery, with minimal human intervention.
 - **Job Scheduling & SLAs:** Advanced job orchestration with support for **soft and hard Service Level Agreements**.
 - **DAG-Driven Execution:** Workflows and jobs are managed as Directed Acyclic Graphs (DAGs) for dependency-aware, parallel, and fault-tolerant execution.
+- **Runtime Fabric Operations:** Analyze gateways, executors, scheduler pressure, jobs, DAGs, throughput, and dependency health with the read-only `m3top` terminal.
 - **Flexible Deployment:** Use as a Python package, Docker container, or standalone service.
 - **CLI Utility:** `marie` command-line tool for streamlined local or remote processing.
 - **Production Hardened:** Robust release/versioning, CI/CD, observability, and telemetry.
@@ -89,6 +90,27 @@ Marie-AI includes a production-grade job scheduling subsystem for managing and o
 
 ---
 
+## 🖥️ Runtime Fabric Operations with m3top
+
+`m3top` is Marie-AI's standalone operational terminal for Runtime Fabric. It connects directly to a Marie gateway and presents live executor capacity, scheduler state, job and DAG lifecycles, worker execution history, completion throughput, and dependency health without requiring M3 Forge or a browser.
+
+![Animated m3top walkthrough showing executor fleet capacity, executor detail, DAG attention, and worker execution history](docs/static/img/m3top/m3top-demo.gif)
+
+The walkthrough cycles through four live operational views: executor fleet capacity, selected executor detail, DAGs requiring attention, and retained worker execution history.
+
+Use it to distinguish capacity saturation from missing executors, investigate stalled or failed work, inspect retained execution attempts, and verify whether scheduler activity is producing durable completions. Missing measurements remain `N/A`; `m3top` does not turn unavailable telemetry into synthetic zeroes.
+
+Static Linux binaries are published for x86-64 and ARM64 with SHA-256 checksums. From a Marie-AI checkout, install the latest `m3top-v*` release with:
+
+```bash
+./scripts/install-m3top.sh
+m3top --version
+```
+
+See the [m3top Operational Terminal guide](./docs/docs/getting-started/deployment/m3top.md) for direct release installation, gateway configuration, keyboard controls, metric semantics, security boundaries, and troubleshooting.
+
+---
+
 ## 🛠️ Skills
 
 Marie-AI includes a skill system for packaging domain expertise as reusable, discoverable capabilities. Skills follow the [ADK specification](https://agentskills.io) and use progressive disclosure to minimize token usage.
@@ -118,6 +140,8 @@ Skills are stored in `.marie/skills/` (workspace) or `config/skills/` (built-in)
 ## 📚 Documentation
 
 See [**docs.marieai.co**](https://docs.marieai.co) for full guides and advanced usage.
+
+- [m3top Operational Terminal](./docs/docs/getting-started/deployment/m3top.md)
 
 ---
 
