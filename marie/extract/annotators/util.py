@@ -1136,4 +1136,4 @@ async def ascan_and_process_images(
     if errors:
         raise errors[0]
 
-    logging.info("All image batches have been processed.")
+    logging.debug("All image batches have been processed.")

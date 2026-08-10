@@ -184,9 +184,26 @@ def _adapt_tables_to_table_extraction_result(
         return ""
 
     extractions = data.get('extractions', [])
+    if isinstance(extractions, dict):
+        extractions = [extractions]
+    elif not isinstance(extractions, list):
+        logging.warning(
+            "Skipping table extractions with unexpected type: %s",
+            type(extractions).__name__,
+        )
+        extractions = []
+
     adapted_extractions = []
 
-    for table in extractions:
+    for index, table in enumerate(extractions):
+        if not isinstance(table, dict):
+            logging.warning(
+                "Skipping table extraction %d with unexpected type: %s",
+                index,
+                type(table).__name__,
+            )
+            continue
+
         adapted_header_rows = []
         for row in table.get('header_rows', []):
             line_number = row.get('line_number', 0)
