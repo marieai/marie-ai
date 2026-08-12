@@ -103,3 +103,47 @@ def test_monitoring_queries_expose_dag_submission_projection() -> None:
         assert f"d.{field}" in failure_sql
         assert f"d.{field}" in outstanding_sql
         assert field in query_guide
+
+
+def test_submission_lifecycle_query_uses_indexable_scope_arrays() -> None:
+    project_root = Path(__file__).parents[3]
+    lifecycle_sql = (
+        project_root
+        / "config/psql/schema/monitoring/submission_lifecycle_analysis.sql"
+    ).read_text()
+    normalized = " ".join(lifecycle_sql.lower().split())
+
+    for predicate in (
+        "ja.job_id = any(s.job_ids)",
+        "ja.dag_id = any(s.dag_ids)",
+        "kv.key = any(s.worker_keys)",
+        "kh.key = any(s.worker_keys)",
+    ):
+        assert predicate in normalized
+
+    assert "ja.job_id in (select job_id from task_ids)" not in normalized
+    assert "ja.dag_id in (select dag_id from resolved_dags)" not in normalized
+
+
+def test_submission_lifecycle_lookup_indexes_are_managed() -> None:
+    project_root = Path(__file__).parents[3]
+    index_sql = (
+        project_root
+        / "config/psql/schema/083_submission_lifecycle_lookup_indexes.sql"
+    ).read_text()
+    normalized = " ".join(index_sql.lower().split())
+
+    for statement in (
+        "create index if not exists dag_history_lifecycle_id_idx "
+        "on {schema}.dag_history (id)",
+        "create index if not exists job_history_lifecycle_id_idx "
+        "on {schema}.job_history (id)",
+        "create index if not exists job_history_lifecycle_dag_id_idx "
+        "on {schema}.job_history (dag_id)",
+    ):
+        assert statement in normalized
+
+    repository_source = (
+        project_root / "marie/scheduler/repository/async_job_repository.py"
+    ).read_text()
+    assert "SCHEDULER_SCHEMA_VERSION = 85" in repository_source

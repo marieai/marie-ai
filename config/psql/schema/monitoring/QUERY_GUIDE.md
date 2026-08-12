@@ -108,6 +108,31 @@ client. It does not use `psql` variables or metacommands. The result combines:
 - durable activation, terminal, and recovery attempts; and
 - current and historical worker status for every generated task ID.
 
+Legacy partitioned scheduler schemas can substantially overestimate the number
+of matching task rows. This can push the report above PostgreSQL's JIT threshold
+even though its indexed execution is small. Run incident lookups in a read-only
+transaction with JIT disabled:
+
+```sql
+BEGIN TRANSACTION READ ONLY;
+SET LOCAL jit = off;
+-- Run submission_lifecycle_analysis.sql here.
+ROLLBACK;
+```
+
+The managed schema installs the required lifecycle lookup indexes. Before
+upgrading a large existing database, create them concurrently outside a
+transaction so gateway startup is not responsible for building them:
+
+```sql
+CREATE INDEX CONCURRENTLY IF NOT EXISTS dag_history_lifecycle_id_idx
+    ON marie_scheduler.dag_history (id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS job_history_lifecycle_id_idx
+    ON marie_scheduler.job_history (id);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS job_history_lifecycle_dag_id_idx
+    ON marie_scheduler.job_history (dag_id);
+```
+
 The UUID returned by the gateway is the submission/DAG ID. A query planner may
 also reuse it for one task, but worker KV keys are created from task job IDs,
 not from the DAG ID in general. An empty worker-history query therefore does
@@ -142,10 +167,8 @@ Also inspect `/api/debug` under `result.queue_status` for submission-worker
 count, active workers, queue size, and pending requests. A restart after queue
 acceptance but before persistence can discard an unprocessed request.
 
-Use this report for incident lookup, not as an unbounded dashboard query. The
-history portions can scan `job_history` and `kv_store_worker_history` on
-installations that do not have lookup indexes for their ID and key columns.
-Keep the read-only transaction timeout in place and review `EXPLAIN` before
+Use this report for incident lookup, not as an unbounded dashboard query. Keep
+the read-only transaction timeout in place and review `EXPLAIN` before
 automating it.
 
 ## Throughput

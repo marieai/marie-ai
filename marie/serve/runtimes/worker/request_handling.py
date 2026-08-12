@@ -886,7 +886,11 @@ class WorkerRequestHandler:
                         )
 
                     await self._record_failed_job(
-                        job_id, requests, raised_exception, additional_metadata
+                        job_id,
+                        requests,
+                        raised_exception,
+                        additional_metadata,
+                        return_data=return_data,
                     )
                 else:
                     await self._record_successful_job(
@@ -1605,9 +1609,10 @@ class WorkerRequestHandler:
         self,
         job_id: str,
         requests: List["DataRequest"],
-        e: Exception,
+        e: Optional[Exception],
         metadata_attributes: Optional[Dict],
-    ):
+        return_data: Any = None,
+    ) -> None:
         self.logger.info(f"[lifecycle] Recording job failure for {job_id} - {e}")
         if self.is_dry_run(requests):
             self.logger.debug(
@@ -1665,15 +1670,40 @@ class WorkerRequestHandler:
                     traceback.clear_frames(tb)
 
                 detail = "Internal Server Error - request handler failed"
+                returned_type = None
+                returned_message = None
+                returned_error = (
+                    return_data.get("error_details")
+                    if isinstance(return_data, dict)
+                    else None
+                )
+                if isinstance(returned_error, dict):
+                    if isinstance(returned_error.get("type"), str):
+                        returned_type = returned_error["type"]
+                    if isinstance(returned_error.get("message"), str):
+                        returned_message = returned_error["message"]
+                if returned_message is None and isinstance(return_data, dict):
+                    raw_error = return_data.get("error")
+                    if isinstance(raw_error, (list, tuple)):
+                        returned_message = "; ".join(str(item) for item in raw_error)
+                    elif raw_error is not None:
+                        returned_message = str(raw_error)
                 silence_exceptions = strtobool(
                     os.environ.get("MARIE_SILENCE_EXCEPTIONS", "false")
                 )
 
                 if not silence_exceptions:
-                    detail = str(e) if e is not None else detail
+                    if e is not None:
+                        detail = str(e)
+                    elif returned_message:
+                        detail = returned_message
 
                 exc = {
-                    "type": type(e).__name__ if e is not None else "RuntimeError",
+                    "type": (
+                        type(e).__name__
+                        if e is not None
+                        else returned_type or "RuntimeError"
+                    ),
                     "message": detail,
                     "filename": filename.split("/")[-1],
                     "name": name,

@@ -1,6 +1,7 @@
 -- Locate a gateway submission across scheduler and worker persistence layers.
--- Replace the UUID in target. This is one read-only statement and works in
--- ordinary SQL clients; it does not require psql variables or metacommands.
+-- Replace the UUID in target.
+-- On legacy partitioned schemas, run with SET LOCAL jit = off; see QUERY_GUIDE.md.
+-- EXPLAIN (ANALYZE, BUFFERS, SETTINGS)
 
 WITH target(input_id) AS (
     VALUES ('00000000-0000-0000-0000-000000000000'::uuid)
@@ -56,6 +57,33 @@ task_ids(job_id) AS (
         FROM marie_scheduler.job j
         WHERE j.id = t.input_id
     )
+),
+-- Keep downstream lookups indexable when legacy job partitions inflate the
+-- estimated cardinality of task_ids.
+task_keys(job_id, worker_key) AS (
+    SELECT
+        ti.job_id,
+        ('marie_internal/job_info_' || ti.job_id::text)::varchar(1024)
+    FROM task_ids ti
+),
+scope_ids(dag_ids, job_ids, worker_keys) AS (
+    SELECT
+        ARRAY(SELECT rd.dag_id FROM resolved_dags rd),
+        ARRAY(SELECT ti.job_id FROM task_ids ti),
+        ARRAY(SELECT tk.worker_key FROM task_keys tk)
+),
+matched_attempt_ids(run_attempt_id) AS (
+    SELECT ja.run_attempt_id
+    FROM scope_ids s
+    JOIN marie_scheduler.job_attempt ja
+      ON ja.job_id = ANY(s.job_ids)
+
+    UNION
+
+    SELECT ja.run_attempt_id
+    FROM scope_ids s
+    JOIN marie_scheduler.job_attempt ja
+      ON ja.dag_id = ANY(s.dag_ids)
 ),
 records AS (
     SELECT
@@ -183,9 +211,9 @@ records AS (
             'recovery_state', ja.recovery_state,
             'recovery_reason', ja.recovery_reason
         ))
-    FROM marie_scheduler.job_attempt ja
-    WHERE ja.job_id IN (SELECT job_id FROM task_ids)
-       OR ja.dag_id IN (SELECT dag_id FROM resolved_dags)
+    FROM matched_attempt_ids mai
+    JOIN marie_scheduler.job_attempt ja
+      ON ja.run_attempt_id = mai.run_attempt_id
 
     UNION ALL
 
@@ -196,7 +224,7 @@ records AS (
             j.dag_id,
             (SELECT dag_id FROM resolved_dags LIMIT 1)
         ),
-        ti.job_id,
+        tk.job_id,
         NULL::uuid,
         kv.value->>'status',
         jsonb_strip_nulls(jsonb_build_object(
@@ -210,12 +238,13 @@ records AS (
             'error_type', env.runtime_env #>> '{error,type}',
             'error_message', env.runtime_env #>> '{error,message}'
         ))
-    FROM task_ids ti
+    FROM scope_ids s
     JOIN marie_scheduler.kv_store_worker kv
       ON kv.namespace = 'job'
-     AND kv.key = 'marie_internal/job_info_' || ti.job_id::text
+     AND kv.key = ANY(s.worker_keys)
      AND kv.is_deleted = false
-    LEFT JOIN marie_scheduler.job j ON j.id = ti.job_id
+    JOIN task_keys tk ON tk.worker_key = kv.key
+    LEFT JOIN marie_scheduler.job j ON j.id = tk.job_id
     LEFT JOIN LATERAL (
         SELECT COALESCE(
             NULLIF(kv.value->>'runtime_env_json', '')::jsonb,
@@ -232,7 +261,7 @@ records AS (
             j.dag_id,
             (SELECT dag_id FROM resolved_dags LIMIT 1)
         ),
-        ti.job_id,
+        tk.job_id,
         NULL::uuid,
         kh.value->>'status',
         jsonb_strip_nulls(jsonb_build_object(
@@ -250,11 +279,12 @@ records AS (
             'error_function', env.runtime_env #>> '{error,name}',
             'error_line', env.runtime_env #>> '{error,line_no}'
         ))
-    FROM task_ids ti
+    FROM scope_ids s
     JOIN marie_scheduler.kv_store_worker_history kh
       ON kh.namespace = 'job'
-     AND kh.key = 'marie_internal/job_info_' || ti.job_id::text
-    LEFT JOIN marie_scheduler.job j ON j.id = ti.job_id
+     AND kh.key = ANY(s.worker_keys)
+    JOIN task_keys tk ON tk.worker_key = kh.key
+    LEFT JOIN marie_scheduler.job j ON j.id = tk.job_id
     LEFT JOIN LATERAL (
         SELECT COALESCE(
             NULLIF(kh.value->>'runtime_env_json', '')::jsonb,
