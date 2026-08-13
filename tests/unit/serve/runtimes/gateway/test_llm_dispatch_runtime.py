@@ -648,6 +648,48 @@ async def test_gateway_background_runtime_start_calls_llm_dispatch_runtime():
 
 
 @pytest.mark.asyncio
+async def test_gateway_run_server_tracks_control_plane_tasks():
+    server_stopped = asyncio.Event()
+
+    class _Server:
+        async def run_server(self) -> None:
+            await server_stopped.wait()
+
+    async def wait_forever(*_args, **_kwargs) -> None:
+        await asyncio.Event().wait()
+
+    gateway = object.__new__(MarieServerGateway)
+    gateway.servers = [_Server()]
+    gateway.grpc_broker = None
+    gateway._background_services_shutdown = False
+    gateway._control_plane_tasks = set()
+    gateway.process_service_events = wait_forever
+    gateway.process_state_events = wait_forever
+    gateway.wait_and_start_scheduler = wait_forever
+    gateway._reconcile_loop = wait_forever
+    gateway._capacity_broadcast_loop = wait_forever
+
+    run_task = asyncio.create_task(gateway.run_server())
+    await asyncio.sleep(0)
+
+    assert {task.get_name() for task in gateway._control_plane_tasks} == {
+        "gateway-service-events",
+        "gateway-state-events",
+        "gateway-scheduler-start",
+        "gateway-reconcile",
+        "gateway-capacity-broadcast",
+    }
+
+    gateway._background_services_shutdown = True
+    gateway._rebuild_task = None
+    await gateway._stop_control_plane_tasks()
+    assert not run_task.done()
+
+    server_stopped.set()
+    await run_task
+
+
+@pytest.mark.asyncio
 async def test_gateway_background_shutdown_is_idempotent():
     class _AsyncStopper:
         def __init__(self, name: str, calls: list[str]) -> None:
@@ -669,6 +711,14 @@ async def test_gateway_background_shutdown_is_idempotent():
         def stop(self) -> None:
             order.append("resolver")
 
+    stop = asyncio.Event()
+
+    async def control_plane_task(name: str) -> None:
+        try:
+            await stop.wait()
+        finally:
+            order.append(name)
+
     gateway = object.__new__(MarieServerGateway)
     gateway.logger = _Logger()
     gateway.resolver = _Resolver()
@@ -680,6 +730,12 @@ async def test_gateway_background_shutdown_is_idempotent():
     gateway.llm_dispatch_runtime = _AsyncStopper("llm", order)
     gateway._background_services_shutdown = False
     gateway._background_services_lock = asyncio.Lock()
+    gateway._control_plane_tasks = {
+        asyncio.create_task(control_plane_task("control-plane"))
+    }
+    gateway._rebuild_task = asyncio.create_task(control_plane_task("rebuild"))
+
+    await asyncio.sleep(0)
 
     await gateway._shutdown_background_services()
     await gateway._shutdown_background_services()
@@ -688,7 +744,11 @@ async def test_gateway_background_shutdown_is_idempotent():
     assert gateway.job_manager.calls == 1
     assert gateway.grpc_broker.calls == 1
     assert gateway.llm_dispatch_runtime.calls == 1
-    assert order == ["resolver", "scheduler", "job-manager", "broker", "llm", "etcd"]
+    assert order[0] == "resolver"
+    assert set(order[1:3]) == {"control-plane", "rebuild"}
+    assert order[3:] == ["scheduler", "job-manager", "broker", "llm", "etcd"]
+    assert not gateway._control_plane_tasks
+    assert gateway._rebuild_task is None
 
 
 @pytest.mark.asyncio
@@ -731,6 +791,8 @@ async def test_gateway_shutdown_drains_pending_job_events_before_unsubscribe():
     gateway.llm_dispatch_runtime = _Stopper()
     gateway._background_services_shutdown = False
     gateway._background_services_lock = asyncio.Lock()
+    gateway._control_plane_tasks = set()
+    gateway._rebuild_task = None
 
     await publisher.publish(JobStatus.SUCCEEDED, {"job_id": "job-1", "sequence": 1})
     await publisher.publish(JobStatus.SUCCEEDED, {"job_id": "job-1", "sequence": 2})

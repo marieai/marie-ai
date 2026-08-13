@@ -521,6 +521,7 @@ class MarieServerGateway(CompositeServer):
         self._last_llm_dispatch_event_monotonic: float = 0.0
         self._background_services_shutdown = False
         self._background_services_lock = asyncio.Lock()
+        self._control_plane_tasks: set[asyncio.Task[Any]] = set()
 
         self.job_manager = JobManager(
             storage=storage,
@@ -2047,6 +2048,19 @@ class MarieServerGateway(CompositeServer):
     async def _start_gateway_background_runtimes(self) -> None:
         await self.llm_dispatch_runtime.start()
 
+    async def _stop_control_plane_tasks(self) -> None:
+        tasks = {task for task in self._control_plane_tasks if not task.done()}
+        if self._rebuild_task is not None and not self._rebuild_task.done():
+            tasks.add(self._rebuild_task)
+
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+        self._control_plane_tasks.clear()
+        self._rebuild_task = None
+
     async def _shutdown_background_services(self) -> None:
         async with self._background_services_lock:
             if self._background_services_shutdown:
@@ -2060,6 +2074,8 @@ class MarieServerGateway(CompositeServer):
                 except Exception as exc:
                     self.logger.error("Failed stopping service resolver: %s", exc)
                 self.resolver = None
+
+            await self._stop_control_plane_tasks()
 
             try:
                 await self.job_scheduler.stop()
@@ -2100,28 +2116,43 @@ class MarieServerGateway(CompositeServer):
         for server in self.servers:
             run_server_tasks.append(asyncio.create_task(server.run_server()))
 
-        # task for processing events and scheduler
-        run_server_tasks.append(
-            asyncio.create_task(self.process_service_events(max_errors=5))
-        )
-        run_server_tasks.append(
-            asyncio.create_task(self.process_state_events(max_errors=10))
-        )
-        run_server_tasks.append(
-            asyncio.create_task(self.wait_and_start_scheduler(timeout=5))
-        )
-        run_server_tasks.append(
-            asyncio.create_task(self._reconcile_loop(interval_s=10))
-        )
-        run_server_tasks.append(
-            asyncio.create_task(self._capacity_broadcast_loop(interval_s=5))
-        )
+        self._control_plane_tasks = {
+            asyncio.create_task(
+                self.process_service_events(max_errors=5),
+                name="gateway-service-events",
+            ),
+            asyncio.create_task(
+                self.process_state_events(max_errors=10),
+                name="gateway-state-events",
+            ),
+            asyncio.create_task(
+                self.wait_and_start_scheduler(timeout=5),
+                name="gateway-scheduler-start",
+            ),
+            asyncio.create_task(
+                self._reconcile_loop(interval_s=10),
+                name="gateway-reconcile",
+            ),
+            asyncio.create_task(
+                self._capacity_broadcast_loop(interval_s=5),
+                name="gateway-capacity-broadcast",
+            ),
+        }
         if self.grpc_broker:
-            run_server_tasks.append(
-                asyncio.create_task(self._llm_dispatch_broadcast_loop(interval_s=1.0))
+            self._control_plane_tasks.add(
+                asyncio.create_task(
+                    self._llm_dispatch_broadcast_loop(interval_s=1.0),
+                    name="gateway-llm-dispatch-broadcast",
+                )
             )
+        run_server_tasks.extend(self._control_plane_tasks)
 
-        await asyncio.gather(*run_server_tasks)
+        try:
+            await asyncio.gather(*run_server_tasks)
+        except asyncio.CancelledError:
+            if not self._background_services_shutdown:
+                raise
+            await asyncio.gather(*run_server_tasks, return_exceptions=True)
 
     def _node_capacity_snapshot(self) -> list[dict[str, Any]]:
         if not getattr(self, "streamer", None):

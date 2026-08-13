@@ -45,11 +45,11 @@ def test_build_info_is_shared_by_startup_and_version_endpoint(
     commit = "4b7f26d3d2927c7d4e61e147e9652fdb636f90ae"
     write_build_info(
         path,
-        version="5.0.1",
+        version="5.0.2",
         git_commit=commit,
         build_time="2026-07-26T16:42:18Z",
         build_number="1842",
-        image="marieai/marie-gateway:5.0.1-cpu",
+        image="marieai/marie-gateway:5.0.2-cpu",
     )
     monkeypatch.setenv("MARIE_BUILD_INFO_PATH", str(path))
     monkeypatch.setenv("MARIE_IMAGE_DIGEST", "sha256:bb2c")
@@ -63,9 +63,9 @@ def test_build_info_is_shared_by_startup_and_version_endpoint(
     assert version_info["git-commit"] == commit
     assert version_info["image-digest"] == "sha256:bb2c"
     assert format_build_identity("gateway") == (
-        "Marie-AI build service=gateway version=5.0.1 "
+        "Marie-AI build service=gateway version=5.0.2 "
         "commit=4b7f26d3d292 build=1842 "
         "built_at=2026-07-26T16:42:18Z "
-        "image=marieai/marie-gateway:5.0.1-cpu "
+        "image=marieai/marie-gateway:5.0.2-cpu "
         "image_digest=sha256:bb2c"
     )

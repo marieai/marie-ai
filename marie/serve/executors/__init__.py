@@ -57,7 +57,15 @@ if TYPE_CHECKING:  # pragma: no cover
 
 __dry_run_endpoint__ = "_jina_dry_run_"
 
-__all__ = ["BaseExecutor", __dry_run_endpoint__]
+__all__ = ["BaseExecutor", "close_executor", __dry_run_endpoint__]
+
+
+async def close_executor(executor: BaseExecutor) -> None:
+    """Close an executor and await asynchronous cleanup when provided."""
+    close = getattr(executor, "aclose", executor.close)
+    result = close()
+    if inspect.isawaitable(result):
+        await result
 
 
 def is_pydantic_model(annotation: Type) -> bool:
@@ -175,12 +183,12 @@ class _FunctionWithSchema(NamedTuple):
     response_schema: Type[DocumentArray] = DocumentArray
 
     def validate(self):
-        assert not (
-            self.is_singleton_doc and self.is_batch_docs
-        ), f"Cannot specify both the `doc` and the `docs` paramater for {self.fn.__name__}"
-        assert not (
-            self.is_generator and self.is_batch_docs
-        ), f"Cannot specify the `docs` parameter if the endpoint {self.fn.__name__} is a generator"
+        assert not (self.is_singleton_doc and self.is_batch_docs), (
+            f"Cannot specify both the `doc` and the `docs` paramater for {self.fn.__name__}"
+        )
+        assert not (self.is_generator and self.is_batch_docs), (
+            f"Cannot specify the `docs` parameter if the endpoint {self.fn.__name__} is a generator"
+        )
         if not self.is_generator:
             if self.is_batch_docs and (
                 not issubclass(self.request_schema, DocList)
@@ -207,9 +215,12 @@ class _FunctionWithSchema(NamedTuple):
                     f"The {faulty_schema} schema for {self.fn.__name__}: {self.request_schema} is not a BaseDoc. Please make sure that your endpoint used BaseDoc for request and response schema"
                 )
         else:
-            if not issubclass(self.request_schema, BaseDoc) or not (
-                issubclass(self.response_schema, BaseDoc)
-                or issubclass(self.response_schema, BaseDoc)
+            if (
+                not issubclass(self.request_schema, BaseDoc)
+                or not (
+                    issubclass(self.response_schema, BaseDoc)
+                    or issubclass(self.response_schema, BaseDoc)
+                )
             ):  # response_schema may be a DocList because by default we use LegacyDocument, and for generators we ignore response
                 faulty_schema = (
                     "request_schema"
@@ -229,12 +240,12 @@ class _FunctionWithSchema(NamedTuple):
         is_batch_docs = (
             not is_singleton_doc
         )  # some tests just use **kwargs and should work as before
-        assert not (
-            is_singleton_doc and is_batch_docs
-        ), f"Cannot specify both the `doc` and the `docs` paramater for {fn.__name__}"
-        assert not (
-            is_generator and is_batch_docs
-        ), f"Cannot specify the `docs` parameter if the endpoint {fn.__name__} is a generator"
+        assert not (is_singleton_doc and is_batch_docs), (
+            f"Cannot specify both the `doc` and the `docs` paramater for {fn.__name__}"
+        )
+        assert not (is_generator and is_batch_docs), (
+            f"Cannot specify the `docs` parameter if the endpoint {fn.__name__} is a generator"
+        )
         docs_annotation = fn.__annotations__.get(
             "docs", fn.__annotations__.get("doc", None)
         )
@@ -408,9 +419,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         self._lock = contextlib.AsyncExitStack()
         try:
             if not getattr(self.runtime_args, "allow_concurrent", False):
-                self._lock = (
-                    asyncio.Lock()
-                )  # Lock to run in Executor non async methods in a way that does not block the event loop to do health checks without the fear of having race conditions or multithreading issues.
+                self._lock = asyncio.Lock()  # Lock to run in Executor non async methods in a way that does not block the event loop to do health checks without the fear of having race conditions or multithreading issues.
         except RuntimeError:
             pass
 

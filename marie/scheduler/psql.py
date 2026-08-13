@@ -3145,7 +3145,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 await self.dag_service.request_admission("deployment_update")
                 await self.notify_event()
             except asyncio.CancelledError:
-                self.logger.warning("Deployment update monitor task cancelled.")
+                self.logger.debug("Deployment update monitor task cancelled.")
                 break
             except Exception as e:
                 self.logger.error(

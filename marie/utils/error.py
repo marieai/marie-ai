@@ -87,6 +87,72 @@ ExceptionInfo: TypeAlias = Union[
 ]
 
 
+def serialize_error(
+    exception: Exception | None,
+    return_data: Any = None,
+    *,
+    default_message: str,
+    silence_exceptions: bool = False,
+) -> dict[str, str | int]:
+    """Build JSON-compatible failure details from an exception or executor response."""
+    filename = "unknown"
+    name = "unknown"
+    line_no = 0
+
+    if exception is not None and exception.__traceback__ is not None:
+        traceback_head = exception.__traceback__
+        traceback_tail = traceback_head
+        while traceback_tail.tb_next:
+            traceback_tail = traceback_tail.tb_next
+        filename = traceback_tail.tb_frame.f_code.co_filename
+        name = traceback_tail.tb_frame.f_code.co_name
+        line_no = traceback_tail.tb_lineno
+        traceback.clear_frames(traceback_head)
+
+    returned_type, returned_message = _returned_error(return_data)
+    message = default_message
+    if not silence_exceptions:
+        if exception is not None:
+            message = str(exception)
+        elif returned_message:
+            message = returned_message
+
+    return {
+        "type": (
+            type(exception).__name__
+            if exception is not None
+            else returned_type or "RuntimeError"
+        ),
+        "message": message,
+        "filename": filename.rsplit("/", 1)[-1],
+        "name": name,
+        "line_no": line_no,
+    }
+
+
+def _returned_error(return_data: Any) -> tuple[str | None, str | None]:
+    if not isinstance(return_data, dict):
+        return None, None
+
+    returned_type = None
+    returned_message = None
+    error_details = return_data.get("error_details")
+    if isinstance(error_details, dict):
+        if isinstance(error_details.get("type"), str):
+            returned_type = error_details["type"]
+        if isinstance(error_details.get("message"), str):
+            returned_message = error_details["message"]
+
+    if returned_message is None:
+        raw_error = return_data.get("error")
+        if isinstance(raw_error, (list, tuple)):
+            returned_message = "; ".join(str(item) for item in raw_error)
+        elif raw_error is not None:
+            returned_message = str(raw_error)
+
+    return returned_type, returned_message
+
+
 def serializable_error_info_from_exc_info(
     exc_info: ExceptionInfo,
     # Whether to forward serialized errors thrown from subprocesses

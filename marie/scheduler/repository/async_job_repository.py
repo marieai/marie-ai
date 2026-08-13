@@ -45,7 +45,7 @@ from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-SCHEDULER_SCHEMA_VERSION = 85
+SCHEDULER_SCHEMA_VERSION = 86
 
 OPERATIONAL_JOB_ATTENTION = {
     "any",
