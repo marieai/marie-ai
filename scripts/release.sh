@@ -296,8 +296,8 @@ check_source_state() {
     local remote_ahead
 
     if [[ "$DRY_RUN" == false ]]; then
-        log "Refreshing ${upstream} and release tags"
-        git fetch --quiet --tags
+        log "Refreshing ${upstream}"
+        git fetch --quiet || die "could not refresh ${upstream}"
     fi
 
     counts=$(git rev-list --left-right --count "HEAD...${upstream}")
