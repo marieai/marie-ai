@@ -923,9 +923,9 @@ vagrant_sync_images() {
             "quay.io/coreos/etcd:v3.7.0"
             "gitea/gitea:latest"
             "clickhouse/clickhouse-server:latest"
-            "marieai/marie-gateway:5.0.3-cpu"
-            "marieai/marie:5.0.3-cuda"
-            "marieai/marie:5.0.3-cpu"
+            "marieai/marie-gateway:5.0.4-cpu"
+            "marieai/marie:5.0.4-cuda"
+            "marieai/marie:5.0.4-cpu"
         )
     fi
 
@@ -1105,8 +1105,8 @@ show_kubernetes_deployment_config() {
     local cluster_name="${CLUSTER_NAME:-marie-helm-smoke}"
     local namespace="${NAMESPACE:-marie}"
     local release="${RELEASE:-marie}"
-    local marie_image="${MARIE_IMAGE:-marieai/marie:5.0.3-cuda}"
-    local gateway_image="${GATEWAY_IMAGE:-marieai/marie-gateway:5.0.3-cpu}"
+    local marie_image="${MARIE_IMAGE:-marieai/marie:5.0.4-cuda}"
+    local gateway_image="${GATEWAY_IMAGE:-marieai/marie-gateway:5.0.4-cpu}"
     local load_local_images="${LOAD_LOCAL_IMAGES:-true}"
     local skip_optional="${SKIP_OPTIONAL:-false}"
     local wait_timeout="${WAIT_TIMEOUT:-20m}"
@@ -1182,7 +1182,7 @@ get_marie_code_version() {
     local version
 
     version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$version_file" 2>/dev/null | head -n 1)
-    echo "${version:-5.0.3}"
+    echo "${version:-5.0.4}"
 }
 
 set_default_runtime_image_tags() {
