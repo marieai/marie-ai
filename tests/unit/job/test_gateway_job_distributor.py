@@ -34,6 +34,30 @@ async def test_build_payload_passes_mock_failure_controls_to_executor_parameters
     assert parameters["randomize_time"] is True
 
 
+async def test_build_payload_preserves_datasource_for_retry() -> None:
+    distributor = GatewayJobDistributor()
+    payload = {
+        "uri": "s3://marie/extract/sample.tif",
+        "ref_id": "sample",
+        "ref_type": "extract",
+    }
+    job_info = JobInfo(
+        status=JobStatus.PENDING,
+        entrypoint="mock_executor:///document/process",
+        metadata={"metadata": payload},
+    )
+
+    first_parameters, first_asset = await distributor._build_payload("job-a", job_info)
+    second_parameters, second_asset = await distributor._build_payload(
+        "job-a", job_info
+    )
+
+    assert payload["uri"] == "s3://marie/extract/sample.tif"
+    assert first_asset.asset_key == second_asset.asset_key == payload["uri"]
+    assert "uri" not in first_parameters["payload"]
+    assert "uri" not in second_parameters["payload"]
+
+
 def test_resolve_endpoint_accepts_mock_annotator_llm_route() -> None:
     distributor = GatewayJobDistributor(
         deployment_nodes={
