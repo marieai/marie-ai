@@ -13,7 +13,7 @@ spec:
       spec:
         containers:
           - name: marie
-            image: marieai/marie-gateway:5.0.3-cpu
+            image: marieai/marie-gateway:5.0.4-cpu
             imagePullPolicy: IfNotPresent
             ports:
               - containerPort: 52000
@@ -53,7 +53,7 @@ spec:
         spec:
           containers:
             - name: marie
-              image: marieai/marie:5.0.3-cuda
+              image: marieai/marie:5.0.4-cuda
               imagePullPolicy: IfNotPresent
               command: ["marie", "executor", "--start"]
               ports:
@@ -84,7 +84,7 @@ spec:
         spec:
           containers:
             - name: marie
-              image: marieai/marie:5.0.3-cuda
+              image: marieai/marie:5.0.4-cuda
               imagePullPolicy: IfNotPresent
               command: ["marie", "executor", "--start", "--type", "classifier"]
               ports:
@@ -107,7 +107,7 @@ spec:
         spec:
           containers:
             - name: marie
-              image: marieai/marie:5.0.3-cuda
+              image: marieai/marie:5.0.4-cuda
               imagePullPolicy: IfNotPresent
               command: ["marie", "executor", "--start", "--type", "ner"]
               ports:
@@ -125,4 +125,4 @@ spec:
   serviceType: ClusterIP
   enableIngress: false
   suspend: false
-  marieVersion: "5.0.3"
+  marieVersion: "5.0.4"

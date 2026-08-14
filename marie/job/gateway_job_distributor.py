@@ -102,10 +102,8 @@ class GatewayJobDistributor(JobDistributor):
         return wrapped
 
     async def _build_payload(self, submission_id: str, job_info: JobInfo):
-        # parse the incoming metadata into parameters + document
-        metadata = job_info.metadata.get("metadata", {})
-        # snapshot identity fields before parse_payload_to_docs mutates metadata
-        # in place (e.g. it pops "uri" when clearing the payload)
+        # The parser removes the datasource key; isolate that from retry metadata.
+        metadata = dict(job_info.metadata.get("metadata", {}))
         identity_values = {
             key: metadata[key] for key in IDENTITY_PARAMETER_KEYS if key in metadata
         }
