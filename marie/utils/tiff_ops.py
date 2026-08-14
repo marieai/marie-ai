@@ -1,4 +1,5 @@
 import glob
+import json
 import multiprocessing as mp
 import os
 import shutil
@@ -247,11 +248,14 @@ def save_frame_as_tiff_g4(frame, output_filename):
                     )[1]
 
             # TODO : Replace this with image magic methods so we can do this  in one step
+            metadata = {"Producer": "MARIE-AI", "generated_name": generated_name}
+            description = json.dumps(metadata)
+
             with TiffWriter(output_path_tmp) as tif_writer:
                 tif_writer.write(
                     frame,
                     photometric=photometric,
-                    description=generated_name,
+                    description=description,
                     metadata=None,
                     resolutionunit="inch",
                 )
