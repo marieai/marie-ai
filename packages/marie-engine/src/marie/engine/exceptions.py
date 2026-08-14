@@ -1,5 +1,7 @@
 """Exceptions raised by reusable Marie engine operations."""
 
+from typing import Any
+
 
 class MaxTokensExceededError(Exception):
     """Raised when an LLM stops because it reached the token limit."""
@@ -29,18 +31,35 @@ class BatchExecutionError(Exception):
     def __init__(
         self,
         request_id: str,
-        failed_results: list,
+        failed_results: list[Any],
         total: int,
         message: str = "",
     ) -> None:
         self.request_id = request_id
         self.failed_results = failed_results
         self.total = total
-        failed_count = len(failed_results)
-        super().__init__(
-            message
-            or (
-                f"Batch inference failed: {failed_count}/{total} tasks failed "
-                f"(request_id={request_id})"
-            )
+        primary_result = next(
+            (
+                result
+                for result in failed_results
+                if getattr(result, "error", None) is not None
+            ),
+            None,
         )
+        self.primary_error: Exception | None = (
+            primary_result.error if primary_result is not None else None
+        )
+        self.primary_task_id: str | None = (
+            primary_result.task_id if primary_result is not None else None
+        )
+        failed_count = len(failed_results)
+        detail = (
+            f"Batch inference failed: {failed_count}/{total} tasks failed "
+            f"(request_id={request_id})"
+        )
+        if self.primary_error is not None:
+            detail += (
+                f"; first failure task_id={self.primary_task_id}: "
+                f"{type(self.primary_error).__name__}: {self.primary_error}"
+            )
+        super().__init__(message or detail)

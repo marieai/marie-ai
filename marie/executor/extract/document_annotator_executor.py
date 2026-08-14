@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 
 from marie.api.docs import AssetKeyDoc
 from marie.constants import __config_dir__
-from marie.excepts import RuntimeTerminated
+from marie.excepts import BatchExecutionError, RuntimeTerminated
 from marie.executor.extract.util import layout_config
 from marie.executor.marie_executor import MarieExecutor
 from marie.executor.mixin import StorageMixin
@@ -337,6 +337,12 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 pass
 
             self.logger.error(f"Extract error : {error}", exc_info=True)
+            reported_error = (
+                error.primary_error
+                if isinstance(error, BatchExecutionError)
+                and error.primary_error is not None
+                else error
+            )
             msg = "inference exception"
             if self.show_error:
                 msg = (str(error),)
@@ -344,6 +350,10 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 "status": "error",
                 "runtime_info": self.runtime_info,
                 "error": msg,
+                "error_details": {
+                    "type": type(reported_error).__name__,
+                    "message": str(error) if self.show_error else msg,
+                },
             }
         finally:
             torch_gc()

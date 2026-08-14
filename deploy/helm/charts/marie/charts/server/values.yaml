@@ -10,7 +10,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "5.0.1-cuda"
+      tag: "5.0.2-cuda"
       digest: ""
     logging:
       level: INFO
@@ -61,7 +61,7 @@ llmTracking:
 
 image:
   repository: marieai/marie-gateway
-  tag: "5.0.1-cpu"
+  tag: "5.0.2-cpu"
   digest: ""
   pullPolicy: IfNotPresent
 

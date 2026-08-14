@@ -20,7 +20,36 @@ class RecordingJobInfoClient:
 
 
 @pytest.mark.asyncio
-async def test_record_failed_job_without_exception_still_publishes_failed_status():
+@pytest.mark.parametrize(
+    ("return_data", "expected_type", "expected_message"),
+    [
+        (
+            None,
+            "RuntimeError",
+            "Internal Server Error - request handler failed",
+        ),
+        (
+            {
+                "status": "error",
+                "error": ("Batch inference failed",),
+                "error_details": {
+                    "type": "ContextWindowExceededError",
+                    "message": "maximum context length is 42768 tokens",
+                },
+            },
+            "ContextWindowExceededError",
+            "maximum context length is 42768 tokens",
+        ),
+        (
+            {"status": "error", "error": ("legacy executor failure",)},
+            "RuntimeError",
+            "legacy executor failure",
+        ),
+    ],
+)
+async def test_record_failed_job_without_exception_publishes_error_details(
+    return_data, expected_type, expected_message
+):
     handler = object.__new__(WorkerRequestHandler)
     handler.logger = MarieLogger("test-worker-request-handler-failure-reporting")
     handler._deployment = "worker-1"
@@ -37,6 +66,7 @@ async def test_record_failed_job_without_exception_still_publishes_failed_status
         requests=[],
         e=None,
         metadata_attributes={"client_disconnected": False},
+        return_data=return_data,
     )
 
     assert len(handler._job_info_client.calls) == 1
@@ -46,5 +76,6 @@ async def test_record_failed_job_without_exception_still_publishes_failed_status
     runtime_env = call["kwargs"]["jobinfo_replace_kwargs"]["runtime_env"]
     assert runtime_env["attributes"]["source"] == "test"
     assert runtime_env["attributes"]["client_disconnected"] is False
-    assert runtime_env["error"]["type"] == "RuntimeError"
+    assert runtime_env["error"]["type"] == expected_type
+    assert runtime_env["error"]["message"] == expected_message
     assert runtime_env["error"]["filename"] == "unknown"

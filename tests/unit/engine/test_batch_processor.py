@@ -429,6 +429,9 @@ def test_batch_generate_calls_raises_batch_execution_error_on_failure():
     assert err.request_id  # Should have a request_id
     assert err.total == 2
     assert len(err.failed_results) == 2
+    assert isinstance(err.primary_error, RuntimeError)
+    assert err.primary_task_id is not None
+    assert "Simulated failure" in str(err)
     # Each failed result should have the exception
     for fr in err.failed_results:
         assert fr.error is not None

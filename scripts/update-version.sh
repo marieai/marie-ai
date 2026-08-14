@@ -61,7 +61,9 @@ SOURCE_PATTERN = re.compile(
 def usage() -> None:
     print(
         "Usage: scripts/update-version.sh "
-        "<VERSION|major|minor|patch|final|rc|dev|--check>",
+        "<VERSION|major|minor|patch|final|rc|dev|--check|--current|--files>\n"
+        "       scripts/update-version.sh --resolve "
+        "<VERSION|major|minor|patch|final|rc|dev>",
         file=sys.stderr,
     )
 
@@ -167,9 +169,22 @@ def main() -> None:
     arguments = sys.argv[2:]
     current = current_version(root)
 
+    if arguments == ["--current"]:
+        print(current)
+        return
+
+    if arguments == ["--files"]:
+        for path in RELEASE_FILES:
+            print(path)
+        return
+
     if arguments == ["--check"]:
         verify_release_files(root, current)
         print(f"Marie release files consistently use {current}")
+        return
+
+    if len(arguments) == 2 and arguments[0] == "--resolve":
+        print(resolve_version(root, current, arguments[1]))
         return
 
     if len(arguments) > 1:

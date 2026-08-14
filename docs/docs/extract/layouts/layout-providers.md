@@ -75,6 +75,38 @@ Examples of common layer patterns:
 - Remarks layer: a bounded region based on remark headers/footers.
 - Table layer(s): one or more repeating structures positioned by section anchors.
 
+### Record-Backed Layers
+
+Use a record-backed layer when an upstream annotator or parser emits complete
+logical records and selector-based cutpoints would only reconstruct information
+that is already structured.
+
+```yaml
+layers:
+  layer-main:
+    match_section_source:
+      strategy: record_backed
+      data_source: claim-extract-aggregated
+      envelope_key: claims
+      records_required: false
+```
+
+The engine reads JSON files from
+`agent-output/<data_source>/` and creates one `MatchSection` for each record.
+If `data_source` is omitted, the builder uses the first configured region
+parser's data source. `envelope_key` is optional and selects the list that wraps
+the records.
+
+The data-source directory must exist. Once it exists, zero JSON records is a
+valid result and produces zero match sections; diagnostic artifacts such as
+`trace.md` do not count as records. This is the default behavior. Set
+`records_required: true` only when an empty record set violates the layout
+contract. Missing directories and malformed JSON fail instead of being treated
+as empty output.
+
+Record-backed layers do not fall back to start/stop selectors. Keep selector
+configuration only for layers whose source strategy is `selectors`.
+
 ## Field Mapping
 
 - Non-repeating fields:

@@ -290,7 +290,7 @@ docker run --gpus all --rm -it --name=marieai --network=host \
   -e MARIE_DEFAULT_MOUNT='/etc/marie' \
   -v /mnt/data/marie-ai/config:/etc/marie/config:ro \
   -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw \
-  marieai/marie:5.0.1-cuda server --uses /etc/marie/config/service/marie.yml
+  marieai/marie:5.0.2-cuda server --uses /etc/marie/config/service/marie.yml
 
 ```
 
@@ -301,7 +301,7 @@ docker run --gpus all --name=marieai -d --network=host \
   -e MARIE_DEFAULT_MOUNT='/etc/marie' \
   -v /mnt/data/marie-ai/config:/etc/marie/config:ro \
   -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw \
-  marieai/marie:5.0.1-cuda server --uses /etc/marie/config/service/marie.yml
+  marieai/marie:5.0.2-cuda server --uses /etc/marie/config/service/marie.yml
 ```
 
 ## Docker Compose Deployments

@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import os
 import random
@@ -143,6 +144,27 @@ class MarieExecutor(Executor, StorageMixin):
                 else "pynvml not available"
             )
             self.logger.info(f"GPU monitor not running ({why})")
+
+    def close(self) -> None:
+        """Request cancellation of executor background work."""
+        task = self._gpu_monitor_task
+        if task is not None and not task.done():
+            task.cancel()
+
+    async def aclose(self) -> None:
+        """Close executor resources and await GPU monitor shutdown."""
+        result = self.close()
+        if inspect.isawaitable(result):
+            await result
+
+        task = self._gpu_monitor_task
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            self._gpu_monitor_task = None
+
+        self._nvml_shutdown()
 
     def _setup_llm_tracking(self, llm_tracking_config: dict) -> None:
         """

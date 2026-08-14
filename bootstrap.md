@@ -439,8 +439,8 @@ Services status:
 
 Application Services:
 NAME                 IMAGE                             COMMAND                  SERVICE                  CREATED        STATUS                                     PORTS
-marieai-dev-server   marieai/marie:5.0.1-cuda          "marie server --star…"   marie-extract-executor   1 second ago   Up Less than a second
-marieai-gateway      marieai/marie-gateway:5.0.1-cpu   "marie gateway --use…"   marie-gateway            1 second ago   Up Less than a second (health: starting)
+marieai-dev-server   marieai/marie:5.0.2-cuda          "marie server --star…"   marie-extract-executor   1 second ago   Up Less than a second
+marieai-gateway      marieai/marie-gateway:5.0.2-cpu   "marie gateway --use…"   marie-gateway            1 second ago   Up Less than a second (health: starting)
 
 🔗 Service Endpoints:
 Application Services:
@@ -459,8 +459,8 @@ Bootstrap completed successfully!
 ┌── marie-ai on  develop [@14 !10 +3 ?2 ] ⬢ v16.16.0   v3.12.3(marie-3.12) 34 hours ago    
 └─λ docker ps
 CONTAINER ID   IMAGE                                             COMMAND                  CREATED              STATUS                        PORTS     NAMES
-7c999f7e4b00   marieai/marie:5.0.1-cuda                          "marie server --star…"   About a minute ago   Up About a minute                       marieai-dev-server
-31acc1cc4ec0   marieai/marie-gateway:5.0.1-cpu                   "marie gateway --use…"   About a minute ago   Up About a minute (healthy)             marieai-gateway
+7c999f7e4b00   marieai/marie:5.0.2-cuda                          "marie server --star…"   About a minute ago   Up About a minute                       marieai-dev-server
+31acc1cc4ec0   marieai/marie-gateway:5.0.2-cpu                   "marie gateway --use…"   About a minute ago   Up About a minute (healthy)             marieai-gateway
 60921ce11677   ghcr.io/ferretdb/postgres-documentdb:17-0.103.0   "docker-entrypoint.s…"   20 minutes ago       Up 20 minutes                           marie-psql-server
 afe2b9aad84c   minio/minio:latest                                "/usr/bin/docker-ent…"   20 minutes ago       Up 20 minutes (healthy)                 marie-s3-server
 5a4f81dcf644   rabbitmq:3-management-alpine                      "docker-entrypoint.s…"   20 minutes ago       Up 20 minutes                           marie-rabbitmq

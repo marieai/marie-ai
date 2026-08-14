@@ -34,6 +34,9 @@ def load_extracted_records(
         Flattened list of normalized record dicts across all JSON files.
         Each record is expected to contain at least ``record_uid`` and
         ``source`` keys.
+
+    Raises:
+        FileNotFoundError: If the configured data source directory does not exist.
     """
     # Resolve agent-output directory.  ``output_dir`` may point to a
     # subdirectory (e.g. ``working_dir/parsed-result/``) while
@@ -43,30 +46,25 @@ def load_extracted_records(
     data_source_dir = _resolve_data_source_dir(output_dir_str, data_source)
 
     if data_source_dir is None:
-        logger.warning(
+        raise FileNotFoundError(
             f"Data source directory 'agent-output/{data_source}' not found "
             f"under '{output_dir_str}' or its parent"
         )
-        return []
 
     json_files = sorted(f for f in os.listdir(data_source_dir) if f.endswith(".json"))
     if not json_files:
-        logger.warning(f"No JSON files found in {data_source_dir}")
+        logger.info(f"No JSON files found in {data_source_dir}")
         return []
 
     all_records: List[Dict[str, Any]] = []
 
     for json_file in json_files:
         file_path = os.path.join(data_source_dir, json_file)
-        try:
-            json_data = load_json_file(file_path, safe_parse=True)
-            if not json_data:
-                continue
-            records = extract_records_from_json(json_data, envelope_key)
-            all_records.extend(records)
-        except Exception as e:
-            logger.error(f"Error loading records from {json_file}: {e}")
+        json_data = load_json_file(file_path)
+        if not json_data:
             continue
+        records = extract_records_from_json(json_data, envelope_key)
+        all_records.extend(records)
 
     logger.info(
         f"Loaded {len(all_records)} extracted records from "

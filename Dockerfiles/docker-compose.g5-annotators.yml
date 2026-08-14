@@ -3,7 +3,7 @@
 
 services:
   annotator-g5-llm:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.1-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.2-cuda}
     restart: unless-stopped
     container_name: 'marie-annotator-g5-llm-server'
     init: true
@@ -63,7 +63,7 @@ services:
       - "marie.service=annotator-g5-llm"
 
   annotator-g5-table:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.1-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.2-cuda}
     restart: unless-stopped
     container_name: 'marie-annotator-g5-table-server'
     init: true
@@ -119,7 +119,7 @@ services:
       - "marie.service=annotator-g5-table"
 
   annotator-g5-parser:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.1-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.2-cuda}
     restart: unless-stopped
     container_name: 'marie-annotator-g5-parser-server'
     init: true
@@ -175,7 +175,7 @@ services:
       - "marie.service=annotator-g5-parser"
 
   annotator-g5-embeddings:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.1-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.2-cuda}
     restart: unless-stopped
     container_name: 'marie-annotator-g5-embeddings-server'
     init: true
@@ -231,7 +231,7 @@ services:
       - "marie.service=annotator-g5-embeddings"
 
   annotator-g5-table-parser:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.1-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.2-cuda}
     restart: unless-stopped
     container_name: 'marie-annotator-g5-table-parser-server'
     init: true

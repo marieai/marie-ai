@@ -213,7 +213,11 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             field_def.setdefault("type", "ALPHA")
 
             transformed_value = transform_field_value(field_def, matched_value)
-            faux_line = LineWithMeta(line=matched_value, metadata=LineMetadata(page_id, None, None), annotations=[])
+            faux_line = LineWithMeta(
+                line=matched_value,
+                metadata=LineMetadata(page_id, None, None),
+                annotations=[],
+            )
             created_fields = _create_fields(
                 field_def, matched_value, transformed_value, faux_line
             )
@@ -292,7 +296,11 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 field_def.setdefault("type", "ALPHA")
 
                 transformed_value = transform_field_value(field_def, resolved)
-                faux_line = LineWithMeta(line=resolved, metadata=LineMetadata(page_id, None, None), annotations=[])
+                faux_line = LineWithMeta(
+                    line=resolved,
+                    metadata=LineMetadata(page_id, None, None),
+                    annotations=[],
+                )
                 created = _create_fields(
                     field_def, resolved, transformed_value, faux_line
                 )
@@ -345,7 +353,11 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             field_def.setdefault("type", "MONEY")
 
             transformed_value = transform_field_value(field_def, source_value)
-            faux_line = LineWithMeta(line=source_value, metadata=LineMetadata(page_id, None, None), annotations=[])
+            faux_line = LineWithMeta(
+                line=source_value,
+                metadata=LineMetadata(page_id, None, None),
+                annotations=[],
+            )
             created = _create_fields(
                 field_def, source_value, transformed_value, faux_line
             )
@@ -408,6 +420,14 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
         for field_name, col_cfg in columns_cfg.items():
             selectors = _get_selectors(col_cfg)
             col_index = -1
+            field_def = template_fields_repeating.get(field_name, {}) or {}
+            derived_fields = field_def.get("derived_fields", {})
+            has_required_derived_default = any(
+                isinstance(derived_field, dict)
+                and "default" in derived_field
+                and derived_field.get("required", False)
+                for derived_field in derived_fields.values()
+            )
 
             for sel in selectors:
                 idx = json_col_lower.get(sel.casefold())
@@ -421,12 +441,15 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                     "config": col_cfg,
                 }
             elif isinstance(col_cfg, dict) and (
-                "value_lookup" in col_cfg or field_name in derived_targets
+                "value_lookup" in col_cfg
+                or field_name in derived_targets
+                or has_required_derived_default
             ):
-                # Virtual column — no physical cell, populated by value_lookup
+                # Virtual column — populated by value_lookup or derived defaults.
                 column_map[field_name] = {
                     "col_index": -1,
                     "config": col_cfg,
+                    "derived_defaults": has_required_derived_default,
                 }
 
         if not column_map:
@@ -471,21 +494,33 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             # Detect child row
             is_child_row = False
             if primary_col_index >= 0 and row_types_config:
-                prim_val = str(row_data[primary_col_index]).strip() if primary_col_index < len(row_data) else ""
-                is_child_row = (prim_val == "")
+                prim_val = (
+                    str(row_data[primary_col_index]).strip()
+                    if primary_col_index < len(row_data)
+                    else ""
+                )
+                is_child_row = prim_val == ""
 
             # Resolve type and action
             child_type_value = ""
             child_type_def: Dict[str, Any] = {}
-            active_columns: Optional[set] = None  # None = all columns (default/main row)
+            active_columns: Optional[set] = (
+                None  # None = all columns (default/main row)
+            )
 
             if is_child_row and type_col_index >= 0:
-                child_type_value = str(row_data[type_col_index]).strip().upper() if type_col_index < len(row_data) else ""
+                child_type_value = (
+                    str(row_data[type_col_index]).strip().upper()
+                    if type_col_index < len(row_data)
+                    else ""
+                )
                 child_type_def = type_defs.get(child_type_value, {})
 
                 action = child_type_def.get("action", "merge")
                 if action == "discard":
-                    logger.debug(f"Discarding child row with ROW_TYPE='{child_type_value}'")
+                    logger.debug(
+                        f"Discarding child row with ROW_TYPE='{child_type_value}'"
+                    )
                     continue
 
                 active_columns = type_active_columns.get(child_type_value)
@@ -505,7 +540,9 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
             # Extract columns
             for field_name, col_def in column_map.items():
                 # Skip ROW_TYPE classification column from output
-                if row_types_config and field_name == row_types_config.get("type_column", "ROW_TYPE"):
+                if row_types_config and field_name == row_types_config.get(
+                    "type_column", "ROW_TYPE"
+                ):
                     continue
 
                 # Skip non-active columns for typed child rows
@@ -521,6 +558,14 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                         template_fields_repeating.get(field_name, {}) or {}
                     )
                     field_def["name"] = field_name
+                    if col_def.get("derived_defaults"):
+                        faux_line = LineWithMeta(
+                            line="",
+                            metadata=LineMetadata(page_id, None, None),
+                            annotations=[],
+                        )
+                        row_fields.extend(_create_fields(field_def, "", "", faux_line))
+                        continue
                     stub = Field(
                         field_name=field_name,
                         field_type=field_def.get("type", "MONEY"),
@@ -545,7 +590,11 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 field_def["name"] = field_name
 
                 transformed_value = transform_field_value(field_def, cell_value)
-                faux_line = LineWithMeta(line=cell_value, metadata=LineMetadata(page_id, None, None), annotations=[])
+                faux_line = LineWithMeta(
+                    line=cell_value,
+                    metadata=LineMetadata(page_id, None, None),
+                    annotations=[],
+                )
                 created = _create_fields(
                     field_def, cell_value, transformed_value, faux_line
                 )
@@ -561,19 +610,25 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                 # Child row — action/type already resolved in Step 2 (discard handled via continue above)
                 action = child_type_def.get("action", "merge")
                 if action == "standalone" or current_parent is None:
-                    logger.debug(f"Emitting child row ROW_TYPE='{child_type_value}' as standalone (action=standalone)")
+                    logger.debug(
+                        f"Emitting child row ROW_TYPE='{child_type_value}' as standalone (action=standalone)"
+                    )
                     matched_field_rows.append(MatchFieldRow(fields=row_fields))
-                else: # action == "merge" (default)
+                else:  # action == "merge" (default)
                     merge_strategies = child_type_def.get("merge_strategies", {})
                     column_mapping = child_type_def.get("column_mapping", {})
-                    default_merge = row_types_config.get("default_merge", "append") if row_types_config else "append"
+                    default_merge = (
+                        row_types_config.get("default_merge", "append")
+                        if row_types_config
+                        else "append"
+                    )
 
                     self._merge_child_fields_into_parent(
                         current_parent,
                         row_fields,
                         merge_strategies,
                         column_mapping,
-                        default_merge
+                        default_merge,
                     )
 
         # Apply value_lookup for table columns
@@ -990,10 +1045,16 @@ def _create_fields(
         if not composite_field:
             return
 
-        for derived_key, derived_value_name in derived_fields.items():
+        for derived_key, derived_field in derived_fields.items():
+            derived_config = derived_field if isinstance(derived_field, dict) else {}
+            derived_value_name = derived_config.get("name", derived_field)
             map_value = None
             if isinstance(mapping, dict):
                 map_value = mapping.get(derived_key, None)
+
+            used_default = map_value is None and "default" in derived_config
+            if used_default:
+                map_value = derived_config["default"]
 
             map_values = map_value if isinstance(map_value, list) else [map_value]
 
@@ -1002,10 +1063,10 @@ def _create_fields(
                     continue
                 child_field = Field(
                     field_name=derived_value_name,
-                    field_type=None,
-                    is_required=False,
+                    field_type=derived_config.get("type"),
+                    is_required=bool(derived_config.get("required", False)),
                     value=_stringify(mv),
-                    value_original=None,
+                    value_original=_stringify(mv) if used_default else None,
                     composite_field=False,
                     x=0,
                     y=0,

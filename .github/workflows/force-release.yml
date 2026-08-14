@@ -48,27 +48,64 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.MARIE_DEV_BOT }}
-          fetch-depth: 100  # means max contribute history is limited to 100 lines
-#          submodules: true
+          fetch-depth: 0
+          ref: ${{ github.ref_name }}
       - uses: actions/setup-python@v4
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v6
-        # https://github.com/actions/checkout#fetch-all-tags
       - run: |
-          echo "Checking release token"
-          git fetch --depth=1 origin +refs/tags/*:refs/tags/*
-          npm install git-release-notes
-          ./scripts/release.sh final "${{ github.event.inputs.release_reason }}" "${{github.actor}}"
+          git config user.email "dev-bot@marieai.co"
+          git config user.name "Marie Dev Bot"
+          git checkout -B "${GITHUB_REF_NAME}" "origin/${GITHUB_REF_NAME}"
+          git branch --set-upstream-to="origin/${GITHUB_REF_NAME}" "${GITHUB_REF_NAME}"
+          ./scripts/release.sh final --skip-build --yes --no-publish
+          uv build --sdist
+          uv publish dist/*
+          export RELEASE_VER="$(./scripts/update-version.sh --current)"
+          envsubst < .github/slack-pypi.json | \
+            curl --fail-with-body -X POST -H 'Content-type: application/json' \
+              --data @- "$MARIE_SLACK_WEBHOOK"
         env:
           UV_PUBLISH_USERNAME: ${{ secrets.TWINE_USERNAME }}
           UV_PUBLISH_PASSWORD: ${{ secrets.TWINE_PASSWORD }}
-          MARIE_SLACK_WEBHOOK : ${{ secrets.MARIE_SLACK_WEBHOOK }}
+          MARIE_SLACK_WEBHOOK: ${{ secrets.MARIE_SLACK_WEBHOOK }}
       - if: failure()
         run: echo "nothing to release"
-      - name: bumping master version
+      - name: Push release commit and tag
         uses: ad-m/github-push-action@v0.6.0
         with:
           github_token: ${{ secrets.MARIE_DEV_BOT }}
           tags: true
           branch: ${{ github.ref }}
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.MARIE_DEV_BOT }}
+        run: |
+          command -v gh >/dev/null || {
+            echo "GitHub CLI is required: https://cli.github.com/manual/installation"
+            exit 1
+          }
+          release_version="$(./scripts/update-version.sh --current)"
+          tag="v${release_version}"
+          gh release create "${tag}" \
+            --verify-tag \
+            --title "Marie AI ${release_version}" \
+            --notes-from-tag
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            pr_url="$(gh pr list \
+              --head "${GITHUB_REF_NAME}" \
+              --base main \
+              --state open \
+              --json url \
+              --jq '.[0].url')"
+            if [ -n "${pr_url}" ]; then
+              echo "Release PR: ${pr_url}"
+            else
+              gh pr create \
+                --base main \
+                --head "${GITHUB_REF_NAME}" \
+                --title "Merge ${tag} into main" \
+                --body "Published ${tag} from ${GITHUB_REF_NAME}. Merge with Create a merge commit so the tagged release commit remains in main history; do not squash or rebase."
+            fi
+          fi

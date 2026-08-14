@@ -73,13 +73,18 @@ async def test_close_stops_heartbeat_before_releasing_semaphores() -> None:
     handler._all_batch_queues = MagicMock(return_value=[])
 
     shutdown_order: list[str] = []
+
+    async def close_executor() -> None:
+        shutdown_order.append("executor")
+
     handler.shutdown_heartbeat = lambda: shutdown_order.append("heartbeat")
+    handler._executor.aclose = close_executor
     handler._sem_untrack_all = lambda **_kwargs: shutdown_order.append("semaphores")
     handler._etcd_client.close.side_effect = lambda: shutdown_order.append("etcd")
 
     await handler.close()
 
-    assert shutdown_order == ["heartbeat", "semaphores", "etcd"]
+    assert shutdown_order == ["heartbeat", "executor", "semaphores", "etcd"]
     assert handler._is_closed is True
 
 

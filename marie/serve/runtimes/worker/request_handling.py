@@ -42,7 +42,7 @@ from marie.serve.discovery.etcd_manager import (
     convert_to_etcd_args,
     get_etcd_client,
 )
-from marie.serve.executors import BaseExecutor, __dry_run_endpoint__
+from marie.serve.executors import BaseExecutor, __dry_run_endpoint__, close_executor
 from marie.serve.instrumentation import MetricsTimer
 from marie.serve.networking.utils import host_is_local
 from marie.serve.runtimes.worker.batch_queue import BatchQueue
@@ -50,6 +50,7 @@ from marie.state.semaphore_store import SemaphoreReleaseResult, SemaphoreStore
 from marie.state.state_store import DesiredStore, StatusStore
 from marie.storage.kv.psql import PostgreSQLKV
 from marie.types_core.request.data import DataRequest, SingleDocumentRequest
+from marie.utils.error import serialize_error
 from marie.utils.network import get_ip_address
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.types import strtobool
@@ -886,7 +887,11 @@ class WorkerRequestHandler:
                         )
 
                     await self._record_failed_job(
-                        job_id, requests, raised_exception, additional_metadata
+                        job_id,
+                        requests,
+                        raised_exception,
+                        additional_metadata,
+                        return_data=return_data,
                     )
                 else:
                     await self._record_successful_job(
@@ -998,7 +1003,7 @@ class WorkerRequestHandler:
             self.shutdown_heartbeat()
             self.logger.debug(f"Await closing all the batching queues")
             await asyncio.gather(*[q.close() for q in self._all_batch_queues()])
-            self._executor.close()
+            await close_executor(self._executor)
             if self._job_info_client is not None:
                 await self._job_info_client.close()
             self._is_closed = True
@@ -1605,9 +1610,10 @@ class WorkerRequestHandler:
         self,
         job_id: str,
         requests: List["DataRequest"],
-        e: Exception,
+        e: Optional[Exception],
         metadata_attributes: Optional[Dict],
-    ):
+        return_data: Any = None,
+    ) -> None:
         self.logger.info(f"[lifecycle] Recording job failure for {job_id} - {e}")
         if self.is_dry_run(requests):
             self.logger.debug(
@@ -1646,39 +1652,15 @@ class WorkerRequestHandler:
 
         if job_id is not None and self._job_info_client is not None:
             try:
-                # Extract traceback info when available. The exception can be
-                # None when the executor signals failure via a return-data
-                # status dict rather than raising, so guard both e and
-                # e.__traceback__ before walking the frame chain.
-                filename = "unknown"
-                name = "unknown"
-                line_no = 0
-
-                if e is not None and e.__traceback__ is not None:
-                    tb = e.__traceback__
-                    while tb.tb_next:
-                        tb = tb.tb_next
-                    filename = tb.tb_frame.f_code.co_filename
-                    name = tb.tb_frame.f_code.co_name
-                    line_no = tb.tb_lineno
-                    # Clear the frames after extracting the information to avoid memory leaks
-                    traceback.clear_frames(tb)
-
-                detail = "Internal Server Error - request handler failed"
                 silence_exceptions = strtobool(
                     os.environ.get("MARIE_SILENCE_EXCEPTIONS", "false")
                 )
-
-                if not silence_exceptions:
-                    detail = str(e) if e is not None else detail
-
-                exc = {
-                    "type": type(e).__name__ if e is not None else "RuntimeError",
-                    "message": detail,
-                    "filename": filename.split("/")[-1],
-                    "name": name,
-                    "line_no": line_no,
-                }
+                exc = serialize_error(
+                    e,
+                    return_data,
+                    default_message="Internal Server Error - request handler failed",
+                    silence_exceptions=silence_exceptions,
+                )
 
                 request_attributes = self._request_attributes(requests)
                 if metadata_attributes:
