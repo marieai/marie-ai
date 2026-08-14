@@ -55,10 +55,6 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v6
       - run: |
-          if [ "${GITHUB_REF_NAME}" != "main" ]; then
-            echo "Manual releases must run from main, not ${GITHUB_REF_NAME}"
-            exit 1
-          fi
           git config user.email "dev-bot@marieai.co"
           git config user.name "Marie Dev Bot"
           git checkout -B "${GITHUB_REF_NAME}" "origin/${GITHUB_REF_NAME}"
@@ -96,3 +92,20 @@ jobs:
             --verify-tag \
             --title "Marie AI ${release_version}" \
             --notes-from-tag
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            pr_url="$(gh pr list \
+              --head "${GITHUB_REF_NAME}" \
+              --base main \
+              --state open \
+              --json url \
+              --jq '.[0].url')"
+            if [ -n "${pr_url}" ]; then
+              echo "Release PR: ${pr_url}"
+            else
+              gh pr create \
+                --base main \
+                --head "${GITHUB_REF_NAME}" \
+                --title "Merge ${tag} into main" \
+                --body "Published ${tag} from ${GITHUB_REF_NAME}. Merge with Create a merge commit so the tagged release commit remains in main history; do not squash or rebase."
+            fi
+          fi

@@ -37,7 +37,7 @@ Options:
   -v, --version VERSION    Version or bump type
   -p, --profile PROFILE    all, marie-gateway-cpu, or marie-cuda
       --skip-build         Create the release commit and tag without containers
-      --publish            Push artifacts and create the GitHub Release
+      --publish            Push artifacts, create the GitHub Release and PR
       --no-publish         Keep the commit, images, and tag local
       --stash              Stash tracked and untracked work, then restore it
   -n, --dry-run            Show the release plan without changing anything
@@ -433,6 +433,7 @@ show_plan() {
     local current=$1
     local target=$2
     local tag=$3
+    local branch=$4
 
     printf '\nRelease plan\n'
     printf '  Version:  %s -> %s\n' "$current" "$target"
@@ -457,6 +458,9 @@ show_plan() {
     if [[ "$PUBLISH" == true ]]; then
         printf '  Publish:  commit, images, tag, then GitHub Release\n'
         printf '  GitHub:   Marie AI %s from annotated %s\n' "$target" "$tag"
+        if [[ "$branch" != "main" ]]; then
+            printf '  PR:       %s -> main after publication; merge commit required\n' "$branch"
+        fi
     else
         printf '  Publish:  no; artifacts remain local\n'
     fi
@@ -466,6 +470,34 @@ show_plan() {
         printf -- '- ... %s more commit(s)\n' "$((RELEASE_COMMIT_COUNT - 20))"
     fi
     printf '\n'
+}
+
+ensure_release_pr() {
+    local branch=$1
+    local tag=$2
+    local pr_url
+
+    if [[ "$branch" == "main" ]]; then
+        return
+    fi
+
+    pr_url=$(gh pr list \
+        --head "$branch" \
+        --base main \
+        --state open \
+        --json url \
+        --jq '.[0].url')
+    if [[ -n "$pr_url" ]]; then
+        log "Release PR: ${pr_url}"
+        return
+    fi
+
+    log "Creating pull request from ${branch} to main"
+    gh pr create \
+        --base main \
+        --head "$branch" \
+        --title "Merge ${tag} into main" \
+        --body "Published ${tag} from ${branch}. Merge with Create a merge commit so the tagged release commit remains in main history; do not squash or rebase."
 }
 
 confirm_release() {
@@ -541,6 +573,7 @@ publish_release() {
     fi
     log "Creating GitHub Release for ${tag}"
     gh "${gh_args[@]}"
+    ensure_release_pr "$branch" "$tag"
 }
 
 main() {
@@ -561,9 +594,6 @@ main() {
         die "configure user.name and user.email before releasing"
     branch=$(git branch --show-current)
     [[ -n "$branch" ]] || die "releases cannot be created from detached HEAD"
-    if [[ "$DRY_RUN" == false && "$branch" != "main" ]]; then
-        die "releases must be created from main; merge ${branch} through a pull request first"
-    fi
     if [[ "$PUBLISH" == true ]]; then
         require_github_cli
     fi
@@ -613,7 +643,7 @@ main() {
 
     "$UPDATE_VERSION" --check
     generate_release_notes "$current_version" "$TARGET_VERSION"
-    show_plan "$current_version" "$TARGET_VERSION" "$tag"
+    show_plan "$current_version" "$TARGET_VERSION" "$tag" "$branch"
     if [[ "$DRY_RUN" == true ]]; then
         log "Dry run complete; no files, images, commits, or tags were changed"
         return

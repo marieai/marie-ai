@@ -14,8 +14,8 @@ It checks the worktree and upstream state, updates every managed version
 reference, creates the release commit, builds the selected containers, and
 creates an annotated tag after the build succeeds. The annotated tag contains
 release notes generated from non-merge commit subjects. Publishing the commit,
-images, tag, and GitHub Release is optional. Non-dry-run releases must run from
-`main`; merge development branches through a pull request first.
+images, tag, GitHub Release, and pull-request handoff is optional. Releases may
+run from `develop` or a release development branch.
 
 Use arguments for automation:
 
@@ -36,7 +36,10 @@ stashed during a release.
 
 `--publish` requires `gh` and an authenticated GitHub session. When `gh` is
 missing, the script prints an installation command and the official installation
-guide. Authenticate with `gh auth login --hostname github.com`.
+guide. Authenticate with `gh auth login --hostname github.com`. After publishing
+from a branch other than `main`, the script reuses or creates a pull request to
+`main`. Merge it with a merge commit, not squash or rebase, to preserve the
+tagged commit in `main` history.
 
 See [`../RELEASE.md`](../RELEASE.md) for the complete lifecycle and recovery
 instructions.
