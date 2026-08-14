@@ -235,11 +235,11 @@ The collector must run as root (UID 0) to read Docker container log files from `
 | `RABBIT_MQ_PASSWORD` | *(required)* | RabbitMQ password |
 | `RABBIT_MQ_PORT` | `5672` | RabbitMQ AMQP port |
 | **Gateway** | | |
-| `GATEWAY_IMAGE_TAG` | `5.0.2-cpu` | Gateway Docker image tag |
+| `GATEWAY_IMAGE_TAG` | `5.0.3-cpu` | Gateway Docker image tag |
 | `GATEWAY_CONFIG_TAG` | `marie-gateway-4.0.0.yml` | Gateway config file name |
 | `GATEWAY_LOG_LEVEL` | `DEBUG` | Gateway log verbosity |
 | **Extract Executor** | | |
-| `EXTRACT_IMAGE_TAG` | `5.0.2-cuda` | Extract Docker image tag |
+| `EXTRACT_IMAGE_TAG` | `5.0.3-cuda` | Extract Docker image tag |
 | `EXTRACT_CONFIG_TAG` | `marie-extract-4.0.0.yml` | Extract config file name |
 | `EXTRACT_LOG_LEVEL` | `DEBUG` | Extract log verbosity |
 | `EXTRACT_REPLICAS` | `1` | Number of Extract replicas |

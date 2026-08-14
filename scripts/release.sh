@@ -228,7 +228,9 @@ restore_worktree() {
 prepare_worktree() {
     local status
     local answer
+    local new_stash
     local previous_stash
+    local stash_status
 
     status=$(git status --porcelain=v1 --untracked-files=normal)
     if [[ -z "$status" ]]; then
@@ -263,11 +265,25 @@ prepare_worktree() {
     fi
 
     previous_stash=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
+    set +e
     git stash push --include-untracked -m "marie release ${VERSION_SPEC:-interactive}"
-    STASH_REF='stash@{0}'
-    STASH_OID=$(git rev-parse -q --verify "${STASH_REF}^{commit}" 2>/dev/null || true)
-    [[ -n "$STASH_OID" && "$STASH_OID" != "$previous_stash" ]] || \
-        die "could not identify the worktree stash"
+    stash_status=$?
+    set -e
+
+    new_stash=$(git rev-parse -q --verify 'stash@{0}^{commit}' 2>/dev/null || true)
+    if [[ -n "$new_stash" && "$new_stash" != "$previous_stash" ]]; then
+        STASH_REF='stash@{0}'
+        STASH_OID=$new_stash
+    fi
+
+    if (( stash_status != 0 )); then
+        if [[ -n "$STASH_OID" ]]; then
+            die "Git saved the worktree but could not clean it for release; restoring the saved changes"
+        fi
+        die "Git could not stash and clean the worktree"
+    fi
+
+    [[ -n "$STASH_OID" ]] || die "could not identify the worktree stash"
     require_clean_worktree
     log "Saved worktree changes as ${STASH_REF} (${STASH_OID:0:12})"
 }
@@ -280,8 +296,8 @@ check_source_state() {
     local remote_ahead
 
     if [[ "$DRY_RUN" == false ]]; then
-        log "Refreshing ${upstream} and release tags"
-        git fetch --quiet --tags
+        log "Refreshing ${upstream}"
+        git fetch --quiet || die "could not refresh ${upstream}"
     fi
 
     counts=$(git rev-list --left-right --count "HEAD...${upstream}")

@@ -10,7 +10,7 @@ global:
   marie:
     image:
       repository: docker.io/marieai/marie
-      tag: "5.0.2-cuda"
+      tag: "5.0.3-cuda"
 
 server:
   enabled: true
@@ -18,7 +18,7 @@ server:
   progressDeadlineSeconds: 1800
   image:
     repository: docker.io/marieai/marie-gateway
-    tag: "5.0.2-cpu"
+    tag: "5.0.3-cpu"
     pullPolicy: IfNotPresent
   llmTracking:
     enabled: false
@@ -47,7 +47,7 @@ executor:
         type: Recreate
       image:
         repository: docker.io/marieai/marie
-        tag: "5.0.2-cuda"
+        tag: "5.0.3-cuda"
         pullPolicy: IfNotPresent
       resources:
         requests:

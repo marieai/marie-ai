@@ -5,7 +5,7 @@
 
 services:
   marie-gateway:
-    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-5.0.2-cpu}
+    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-5.0.3-cpu}
     restart: unless-stopped
     container_name: 'marieai-gateway'
     init: true
@@ -79,7 +79,7 @@ services:
 
     labels:
       - "marie.service=gateway"
-      - "marie.version=${GATEWAY_IMAGE_TAG:-5.0.2-cpu}"
+      - "marie.version=${GATEWAY_IMAGE_TAG:-5.0.3-cpu}"
 
 networks:
   marie_default:

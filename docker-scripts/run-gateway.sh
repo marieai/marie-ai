@@ -85,6 +85,6 @@ else
     -p $GRPC_PORT:52000 \
     ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION} \
     gateway --uses /etc/marie/service/marie-gateway-4.0.0.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules --metrics --metrics-exporter-host localhost --metrics-exporter-port 4317 --tracing --traces-exporter-host localhost --traces-exporter-port 4317
-#docker run --rm  -it --entrypoint /bin/bash  marieai/marie-gateway:5.0.2-cpu
+#docker run --rm  -it --entrypoint /bin/bash  marieai/marie-gateway:5.0.3-cpu
 # docker exec -it  marie-gateway  bash
 fi
