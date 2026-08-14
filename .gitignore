@@ -221,3 +221,4 @@ ansible/inventories/hosts.dev.yml
 G5-ERRORS/
 !/.agent-debug/
 /command-output/
+.superpowers/

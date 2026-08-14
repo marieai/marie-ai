@@ -5,6 +5,8 @@ from typing import Any
 
 from marie.engine.completion_contract import CompletionCallParams
 
+DEFAULT_HTTP_READ_TIMEOUT_S = 600.0
+
 
 async def execute_completion_call(
     client: Any,
@@ -24,6 +26,15 @@ def build_async_openai_client(
     import httpx
     from openai import AsyncOpenAI
 
+    read_timeout = float(
+        os.getenv(
+            "LLM_HTTP_READ_TIMEOUT_S",
+            str(DEFAULT_HTTP_READ_TIMEOUT_S),
+        )
+    )
+    if read_timeout <= 0:
+        raise ValueError("LLM_HTTP_READ_TIMEOUT_S must be greater than 0")
+
     http_client = httpx.AsyncClient(
         limits=httpx.Limits(
             max_connections=40,
@@ -31,7 +42,7 @@ def build_async_openai_client(
         ),
         timeout=httpx.Timeout(
             connect=10.0,
-            read=300.0,
+            read=read_timeout,
             write=10.0,
             pool=30.0,
         ),

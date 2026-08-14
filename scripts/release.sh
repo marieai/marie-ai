@@ -1,122 +1,579 @@
 #!/usr/bin/env bash
 
-# Requirements
-# brew install hub
-# npm install -g git-release-notes
+set -euo pipefail
 
-set -ex
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/.." && pwd)
+UPDATE_VERSION="${SCRIPT_DIR}/update-version.sh"
+BUILD_SCRIPT="${REPO_ROOT}/build.sh"
 
-INIT_FILE='marie/__init__.py'
-VER_TAG='__version__ = '
-RELEASENOTE='./node_modules/.bin/git-release-notes'
+VERSION_SPEC=""
+PROFILE=""
+SKIP_BUILD=false
+PUBLISH=false
+PUBLISH_SET=false
+ASSUME_YES=false
+DRY_RUN=false
+TARGET_VERSION=""
+STASH_CHANGES=false
+STASH_OID=""
+STASH_REF=""
+WORKTREE_WAS_DIRTY=false
+NOTES_FILE=""
+RELEASE_BASE=""
+RELEASE_BASE_LABEL=""
+RELEASE_COMMIT_COUNT=0
 
-function escape_slashes {
-    sed 's/\//\\\//g'
+usage() {
+    cat <<'EOF'
+Usage: scripts/release.sh [OPTIONS] [VERSION]
+
+Create a Marie release commit, build versioned container images, and tag it.
+Run without arguments for the interactive release menu.
+
+VERSION may be an exact version or one of: major, minor, patch, final, rc.
+
+Options:
+  -v, --version VERSION    Version or bump type
+  -p, --profile PROFILE    all, marie-gateway-cpu, or marie-cuda
+      --skip-build         Create the release commit and tag without containers
+      --publish            Push the release commit, images, and tag
+      --no-publish         Keep the commit, images, and tag local
+      --stash              Stash tracked and untracked work, then restore it
+  -n, --dry-run            Show the release plan without changing anything
+  -y, --yes                Skip the final confirmation
+  -h, --help               Show this help
+
+Examples:
+  ./scripts/release.sh
+  ./scripts/release.sh patch --profile all
+  ./scripts/release.sh --version 5.1.0 --profile marie-cuda
+  ./scripts/release.sh rc --profile all --publish
+  ./scripts/release.sh patch --profile all --stash
+EOF
 }
 
-function update_ver_line {
-    local OLD_LINE_PATTERN=$1
-    local NEW_LINE=$2
-    local FILE=$3
-
-    local NEW=$(echo "${NEW_LINE}" | escape_slashes)
-    sed -i '/'"${OLD_LINE_PATTERN}"'/s/.*/'"${NEW}"'/' "${FILE}"
-    head -n10 ${FILE}
+log() {
+    printf '[release] %s\n' "$*"
 }
 
-
-function clean_build {
-    rm -rf dist
-    rm -rf *.egg-info
-    rm -rf build
+die() {
+    printf '[release] ERROR: %s\n' "$*" >&2
+    exit 1
 }
 
-function clean_egg {
-    rm -rf *.egg-info
-    rm -rf build
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -v|--version)
+                [[ -n "${2:-}" ]] || die "$1 requires a value"
+                VERSION_SPEC=$2
+                shift 2
+                ;;
+            --version=*)
+                VERSION_SPEC=${1#*=}
+                shift
+                ;;
+            -p|--profile)
+                [[ -n "${2:-}" ]] || die "$1 requires a value"
+                PROFILE=$2
+                shift 2
+                ;;
+            --profile=*)
+                PROFILE=${1#*=}
+                shift
+                ;;
+            --skip-build)
+                SKIP_BUILD=true
+                shift
+                ;;
+            --publish)
+                PUBLISH=true
+                PUBLISH_SET=true
+                shift
+                ;;
+            --no-publish)
+                PUBLISH=false
+                PUBLISH_SET=true
+                shift
+                ;;
+            --stash)
+                STASH_CHANGES=true
+                shift
+                ;;
+            -n|--dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            -y|--yes)
+                ASSUME_YES=true
+                shift
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            -*)
+                die "unknown option: $1"
+                ;;
+            *)
+                [[ -z "$VERSION_SPEC" ]] || die "only one version may be specified"
+                VERSION_SPEC=$1
+                shift
+                ;;
+        esac
+    done
+
+    [[ $# -eq 0 ]] || die "unexpected argument: $1"
 }
 
-function pub_pypi {
-    # publish to pypi
-    clean_egg
-    uv build --sdist
-    uv publish dist/*
-    clean_build
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "$1 is required"
 }
 
-function git_commit {
-    git config --local user.email "dev-bot@marieai.co"
-    git config --local user.name "Marie Dev Bot"
-    git tag "v$RELEASE_VER" -m "$(cat ./CHANGELOG.tmp)"
-    git add $INIT_FILE ./CHANGELOG.md
-    git commit -m "chore(version): the next version will be $NEXT_VER" -m "build($RELEASE_ACTOR): $RELEASE_REASON"
+require_clean_worktree() {
+    local status
+    status=$(git status --porcelain=v1 --untracked-files=normal)
+    if [[ -n "$status" ]]; then
+        printf '%s\n' "$status" >&2
+        die "commit, stash, or remove worktree changes before releasing"
+    fi
 }
 
-function slack_notif {
-    envsubst < ./.github/slack-pypi.json | curl -X POST -H 'Content-type: application/json' --data "@-" $MARIE_SLACK_WEBHOOK
+restore_worktree() {
+    local exit_status=$1
+    local current_oid
+    local restore_status
+
+    trap - EXIT
+
+    if [[ -n "$NOTES_FILE" ]]; then
+        rm -f -- "$NOTES_FILE"
+    fi
+
+    if [[ -n "$STASH_OID" ]]; then
+        current_oid=$(git rev-parse -q --verify "${STASH_REF}^{commit}" 2>/dev/null || true)
+        if [[ "$current_oid" != "$STASH_OID" ]]; then
+            printf '[release] ERROR: release command ended, but the saved worktree stash moved\n' >&2
+            printf '[release] Saved stash commit: %s\n' "$STASH_OID" >&2
+            printf '[release] Restore it with: git stash apply --index %s\n' "$STASH_OID" >&2
+            exit_status=1
+        else
+            log "Restoring stashed worktree changes"
+            set +e
+            git stash pop --index "$STASH_REF"
+            restore_status=$?
+            set -e
+            if (( restore_status != 0 )); then
+                printf '[release] ERROR: release command ended, but stashed changes could not be restored cleanly\n' >&2
+                printf '[release] The stash was retained as %s (%s)\n' "$STASH_REF" "$STASH_OID" >&2
+                printf '[release] Resolve the conflicts and verify the restored work, then drop it with: git stash drop %s\n' "$STASH_REF" >&2
+                exit_status=1
+            else
+                log "Restored the pre-release worktree and staged state"
+            fi
+        fi
+    fi
+
+    exit "$exit_status"
 }
 
+prepare_worktree() {
+    local status
+    local answer
+    local previous_stash
 
-function make_release_note {
-    ${RELEASENOTE} ${LAST_VER}..HEAD .github/release-template.ejs > ./CHANGELOG.tmp
-    head -n10 ./CHANGELOG.tmp
-    printf '\n%s\n\n%s\n%s\n\n%s\n\n%s\n\n' "$(cat ./CHANGELOG.md)" "<a name="release-note-${RELEASE_VER//\./-}"></a>" "## Release Note (\`${RELEASE_VER}\`)" "> Release time: $(date +'%Y-%m-%d %H:%M:%S')" "$(cat ./CHANGELOG.tmp)" > ./CHANGELOG.md
+    status=$(git status --porcelain=v1 --untracked-files=normal)
+    if [[ -z "$status" ]]; then
+        return
+    fi
+
+    WORKTREE_WAS_DIRTY=true
+    printf '%s\n' "$status" >&2
+
+    if [[ "$STASH_CHANGES" == false ]]; then
+        if [[ "$ASSUME_YES" == false && -t 0 ]]; then
+            read -r -p 'Stash these changes for the release and restore them afterward? [y/N] ' answer
+            if [[ "$answer" == "y" || "$answer" == "Y" ]]; then
+                STASH_CHANGES=true
+            fi
+        fi
+    fi
+
+    if [[ "$STASH_CHANGES" == false ]]; then
+        die "worktree is dirty; commit the changes or rerun with --stash"
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        log "Dry run: worktree changes would be stashed and restored"
+        return
+    fi
+
+    if ! git diff --quiet HEAD -- scripts/release.sh scripts/update-version.sh; then
+        die "commit the release tooling before using --stash; the running script cannot stash its own dependencies"
+    fi
+
+    previous_stash=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
+    git stash push --include-untracked -m "marie release ${VERSION_SPEC:-interactive}"
+    STASH_REF='stash@{0}'
+    STASH_OID=$(git rev-parse -q --verify "${STASH_REF}^{commit}" 2>/dev/null || true)
+    [[ -n "$STASH_OID" && "$STASH_OID" != "$previous_stash" ]] || \
+        die "could not identify the worktree stash"
+    require_clean_worktree
+    log "Saved worktree changes as ${STASH_REF} (${STASH_OID:0:12})"
 }
 
-BRANCH=$(git rev-parse --abbrev-ref HEAD)
+check_source_state() {
+    local branch=$1
+    local upstream=$2
+    local counts
+    local local_ahead
+    local remote_ahead
 
-LAST_UPDATE=`git show --no-notes --format=format:"%H" $BRANCH | head -n 1`
-LAST_COMMIT=`git show --no-notes --format=format:"%H" origin/$BRANCH | head -n 1`
+    if [[ "$DRY_RUN" == false ]]; then
+        log "Refreshing ${upstream} and release tags"
+        git fetch --quiet --tags
+    fi
 
-if [ $LAST_COMMIT != $LAST_UPDATE ]; then
-    printf "Your local $BRANCH is behind the remote master, exit\n"
-    exit 1;
-fi
+    counts=$(git rev-list --left-right --count "HEAD...${upstream}")
+    read -r local_ahead remote_ahead <<< "$counts"
+    if (( remote_ahead > 0 )); then
+        die "${branch} is behind ${upstream} by ${remote_ahead} commit(s)"
+    fi
+    if (( local_ahead > 0 )); then
+        log "Warning: ${branch} is ahead of ${upstream} by ${local_ahead} commit(s)"
+    fi
+}
 
-# release the current version
-export RELEASE_VER=$(sed -n '/^__version__/p' $INIT_FILE | cut -d \' -f2)
-LAST_VER=$(git tag -l | sort -V | tail -n1)
-printf "last version: \e[1;32m$LAST_VER\e[0m\n"
+select_release_base() {
+    local current=$1
+    local target=$2
+    local target_major=${target%%.*}
+    local tag
+    local base_index=0
+    local -a version_commits
 
-# Update new _versions.json if necessary
-# python ./scripts/prepend_version_json.py --version "v$RELEASE_VER"
-# git add ./docs/_versions.json
+    while IFS= read -r tag; do
+        if [[ "$tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)((a|b|rc)[0-9]+)?$ ]] && \
+                [[ "${BASH_REMATCH[1]}" == "$target_major" ]]; then
+            RELEASE_BASE=$tag
+            RELEASE_BASE_LABEL=$tag
+            return
+        fi
+    done < <(git tag --merged HEAD --sort=-version:refname)
 
-if [[ $1 == "final" ]]; then
-  printf "this will be a final release: \e[1;33m$RELEASE_VER\e[0m\n"
+    mapfile -t version_commits < <(git log --format='%H' -- marie/_version.py)
+    if [[ "$target" == "$current" ]]; then
+        base_index=1
+    fi
 
-  NEXT_VER=$(echo $RELEASE_VER | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d", length($NF), ($NF+1)); print}')
-  printf "bump master version to: \e[1;32m$NEXT_VER\e[0m\n"
+    if (( ${#version_commits[@]} > base_index )); then
+        RELEASE_BASE=${version_commits[$base_index]}
+        RELEASE_BASE_LABEL="version anchor $(git rev-parse --short "$RELEASE_BASE")"
+    else
+        RELEASE_BASE=""
+        RELEASE_BASE_LABEL="repository start"
+    fi
+}
 
-  make_release_note
+generate_release_notes() {
+    local current=$1
+    local target=$2
+    local revision=HEAD
+    local -a entries
 
-  pub_pypi
+    select_release_base "$current" "$target"
+    if [[ -n "$RELEASE_BASE" ]]; then
+        revision="${RELEASE_BASE}..HEAD"
+    fi
 
-  VER_TAG_NEXT=$VER_TAG\'${NEXT_VER}\'
-  update_ver_line "$VER_TAG" "$VER_TAG_NEXT" "$INIT_FILE"
-  RELEASE_REASON="$2"
-  RELEASE_ACTOR="$3"
-  git_commit
-  slack_notif
-elif [[ $1 == 'rc' ]]; then
-  printf "this will be a release candidate: \e[1;33m$RELEASE_VER\e[0m\n"
-  DOT_RELEASE_VER=$(echo $RELEASE_VER | sed "s/rc/\./")
-  NEXT_VER=$(echo $DOT_RELEASE_VER | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d", length($NF), ($NF+1)); print}')
-  NEXT_VER=$(echo $NEXT_VER | sed "s/\.\([^.]*\)$/rc\1/")
-  printf "bump master version to: \e[1;32m$NEXT_VER\e[0m, this will be the next version\n"
+    mapfile -t entries < <(
+        git log --no-merges \
+            --invert-grep --grep='^chore(release): release ' \
+            --format='- %h %s (%an)' "$revision"
+    )
+    RELEASE_COMMIT_COUNT=${#entries[@]}
+    NOTES_FILE=$(mktemp "${TMPDIR:-/tmp}/marie-release-notes.XXXXXX")
 
-  make_release_note
+    {
+        printf 'Marie AI %s\n\n' "$target"
+        printf 'Changes since %s:\n' "$RELEASE_BASE_LABEL"
+        if (( RELEASE_COMMIT_COUNT == 0 )); then
+            printf '%s\n' '- No committed changes.'
+        else
+            printf '%s\n' "${entries[@]}"
+        fi
+    } > "$NOTES_FILE"
+}
 
-  pub_pypi
+resolve_version() {
+    "$UPDATE_VERSION" --resolve "$1"
+}
 
-  VER_TAG_NEXT=$VER_TAG\'${NEXT_VER}\'
-  update_ver_line "$VER_TAG" "$VER_TAG_NEXT" "$INIT_FILE"
-  RELEASE_REASON="$2"
-  RELEASE_ACTOR="$3"
-  git_commit
-  slack_notif
-else
-  # as a prerelease, pypi update only, no back commit etc.
-  # previously the INIT_FILE must have been updated
-  pub_pypi
-fi
+choose_version() {
+    local current=$1
+    local choice
+    local exact
+
+    printf '\nMarie release version (current: %s)\n' "$current" >&2
+    printf '1) patch  -> %s\n' "$(resolve_version patch)" >&2
+    printf '2) minor  -> %s\n' "$(resolve_version minor)" >&2
+    printf '3) major  -> %s\n' "$(resolve_version major)" >&2
+    printf '4) rc     -> %s\n' "$(resolve_version rc)" >&2
+    printf '5) exact version\n' >&2
+    printf '6) exit\n' >&2
+    read -r -p 'Select a release version (1-6): ' choice
+
+    case "$choice" in
+        1) printf 'patch\n' ;;
+        2) printf 'minor\n' ;;
+        3) printf 'major\n' ;;
+        4) printf 'rc\n' ;;
+        5)
+            read -r -p 'Version: ' exact
+            printf '%s\n' "$exact"
+            ;;
+        6) exit 0 ;;
+        *) die "invalid version selection: $choice" ;;
+    esac
+}
+
+choose_profile() {
+    local choice
+
+    printf '\nContainer profiles\n' >&2
+    printf '1) all                Gateway CPU and executor CUDA\n' >&2
+    printf '2) marie-gateway-cpu  Gateway CPU only\n' >&2
+    printf '3) marie-cuda         Executor CUDA only\n' >&2
+    read -r -p 'Select a build profile (1-3): ' choice
+
+    case "$choice" in
+        1) printf 'all\n' ;;
+        2) printf 'marie-gateway-cpu\n' ;;
+        3) printf 'marie-cuda\n' ;;
+        *) die "invalid profile selection: $choice" ;;
+    esac
+}
+
+validate_profile() {
+    case "$1" in
+        all|marie-gateway-cpu|marie-cuda) ;;
+        *) die "invalid build profile: $1" ;;
+    esac
+}
+
+image_names() {
+    local version=$1
+    local profile=$2
+
+    case "$profile" in
+        all)
+            printf 'marieai/marie-gateway:%s-cpu\n' "$version"
+            printf 'marieai/marie:%s-cuda\n' "$version"
+            ;;
+        marie-gateway-cpu)
+            printf 'marieai/marie-gateway:%s-cpu\n' "$version"
+            ;;
+        marie-cuda)
+            printf 'marieai/marie:%s-cuda\n' "$version"
+            ;;
+    esac
+}
+
+show_plan() {
+    local current=$1
+    local target=$2
+    local tag=$3
+
+    printf '\nRelease plan\n'
+    printf '  Version:  %s -> %s\n' "$current" "$target"
+    if [[ "$current" == "$target" ]]; then
+        printf '  Commit:   reuse current HEAD\n'
+    else
+        printf '  Commit:   chore(release): release %s\n' "$target"
+    fi
+    printf '  Tag:      %s (after successful build)\n' "$tag"
+    printf '  Notes:    %s commit(s) since %s\n' \
+        "$RELEASE_COMMIT_COUNT" "$RELEASE_BASE_LABEL"
+    if [[ "$WORKTREE_WAS_DIRTY" == true ]]; then
+        printf '  Worktree: stash and restore tracked, staged, and untracked changes\n'
+    fi
+    if [[ "$SKIP_BUILD" == true ]]; then
+        printf '  Images:   skipped\n'
+    else
+        while IFS= read -r image; do
+            printf '  Image:    %s\n' "$image"
+        done < <(image_names "$target" "$PROFILE")
+    fi
+    if [[ "$PUBLISH" == true ]]; then
+        printf '  Publish:  commit, images, then tag\n'
+    else
+        printf '  Publish:  no; artifacts remain local\n'
+    fi
+    printf '\nRelease notes preview\n'
+    head -n 23 "$NOTES_FILE"
+    if (( RELEASE_COMMIT_COUNT > 20 )); then
+        printf -- '- ... %s more commit(s)\n' "$((RELEASE_COMMIT_COUNT - 20))"
+    fi
+    printf '\n'
+}
+
+confirm_release() {
+    local answer
+
+    if [[ "$ASSUME_YES" == true ]]; then
+        return
+    fi
+    read -r -p 'Continue with this release? [y/N] ' answer
+    [[ "$answer" == "y" || "$answer" == "Y" ]] || exit 0
+}
+
+commit_version() {
+    local current=$1
+    local target=$2
+    local -a release_files
+
+    if [[ "$current" == "$target" ]]; then
+        "$UPDATE_VERSION" --check
+        log "Release files already use ${target}; reusing current HEAD"
+        return
+    fi
+
+    "$UPDATE_VERSION" "$target"
+    "$UPDATE_VERSION" --check
+    mapfile -t release_files < <("$UPDATE_VERSION" --files)
+    git add -- "${release_files[@]}"
+
+    git diff --cached --check
+    git diff --cached --quiet && die "version update produced no staged changes"
+    git diff --quiet || die "version update left unexpected unstaged changes"
+    [[ -z "$(git ls-files --others --exclude-standard)" ]] || \
+        die "version update left unexpected untracked files"
+
+    git commit -m "chore(release): release ${target}"
+}
+
+publish_release() {
+    local branch=$1
+    local tag=$2
+    local remote
+    local merge_ref
+    local remote_branch
+
+    remote=$(git config --get "branch.${branch}.remote")
+    merge_ref=$(git config --get "branch.${branch}.merge")
+    [[ -n "$remote" && -n "$merge_ref" ]] || \
+        die "${branch} does not have a configured push target"
+    remote_branch=${merge_ref#refs/heads/}
+
+    log "Pushing release commit to ${remote}/${remote_branch}"
+    git push "$remote" "HEAD:${remote_branch}"
+
+    if [[ "$SKIP_BUILD" == false ]]; then
+        while IFS= read -r image; do
+            log "Pushing ${image}"
+            docker push "$image"
+        done < <(image_names "$TARGET_VERSION" "$PROFILE")
+    fi
+
+    log "Publishing release tag ${tag}"
+    git push "$remote" "refs/tags/${tag}"
+}
+
+main() {
+    local current_version
+    local branch
+    local upstream
+    local tag
+
+    parse_arguments "$@"
+    cd "$REPO_ROOT"
+
+    require_command git
+    require_command python3
+    [[ -x "$UPDATE_VERSION" ]] || die "not executable: $UPDATE_VERSION"
+    [[ -x "$BUILD_SCRIPT" ]] || die "not executable: $BUILD_SCRIPT"
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not in a Git worktree"
+    git var GIT_AUTHOR_IDENT >/dev/null 2>&1 || \
+        die "configure user.name and user.email before releasing"
+    trap 'restore_worktree $?' EXIT
+    prepare_worktree
+
+    current_version=$("$UPDATE_VERSION" --current)
+    if [[ -z "$VERSION_SPEC" ]]; then
+        [[ -t 0 ]] || die "--version is required when input is not interactive"
+        VERSION_SPEC=$(choose_version "$current_version")
+    fi
+    TARGET_VERSION=$(resolve_version "$VERSION_SPEC")
+    readonly TARGET_VERSION
+    [[ "$TARGET_VERSION" != *.dev* ]] || die "development versions are not release tags"
+
+    if [[ "$SKIP_BUILD" == false ]]; then
+        if [[ -z "$PROFILE" ]]; then
+            [[ -t 0 ]] || die "--profile is required when input is not interactive"
+            PROFILE=$(choose_profile)
+        fi
+        validate_profile "$PROFILE"
+        if [[ "$DRY_RUN" == false ]]; then
+            require_command docker
+            if [[ "$PROFILE" == "all" || "$PROFILE" == "marie-cuda" ]]; then
+                require_command uv
+            fi
+        fi
+    fi
+
+    if [[ "$PUBLISH_SET" == false && "$ASSUME_YES" == false && -t 0 ]]; then
+        local publish_answer
+        read -r -p 'Publish the commit, images, and tag after building? [y/N] ' publish_answer
+        if [[ "$publish_answer" == "y" || "$publish_answer" == "Y" ]]; then
+            PUBLISH=true
+        fi
+    fi
+
+    branch=$(git branch --show-current)
+    [[ -n "$branch" ]] || die "releases cannot be created from detached HEAD"
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || \
+        die "${branch} does not have an upstream"
+    check_source_state "$branch" "$upstream"
+
+    tag="v${TARGET_VERSION}"
+    if git show-ref --verify --quiet "refs/tags/${tag}"; then
+        die "tag already exists: ${tag}"
+    fi
+
+    "$UPDATE_VERSION" --check
+    generate_release_notes "$current_version" "$TARGET_VERSION"
+    show_plan "$current_version" "$TARGET_VERSION" "$tag"
+    if [[ "$DRY_RUN" == true ]]; then
+        log "Dry run complete; no files, images, commits, or tags were changed"
+        return
+    fi
+    confirm_release
+
+    commit_version "$current_version" "$TARGET_VERSION"
+
+    if [[ "$SKIP_BUILD" == false ]]; then
+        "$BUILD_SCRIPT" --version "$TARGET_VERSION" "$PROFILE"
+        require_clean_worktree
+        "$UPDATE_VERSION" --check
+    fi
+
+    git tag -a "$tag" -F "$NOTES_FILE"
+    log "Created ${tag} at $(git rev-parse --short HEAD)"
+
+    if [[ "$PUBLISH" == true ]]; then
+        publish_release "$branch" "$tag"
+        log "Published ${tag}"
+    else
+        log "Release is local. Publish when ready with:"
+        log "  git push"
+        if [[ "$SKIP_BUILD" == false ]]; then
+            while IFS= read -r image; do
+                log "  docker push ${image}"
+            done < <(image_names "$TARGET_VERSION" "$PROFILE")
+        fi
+        log "  git push $(git config --get "branch.${branch}.remote") ${tag}"
+    fi
+}
+
+main "$@"

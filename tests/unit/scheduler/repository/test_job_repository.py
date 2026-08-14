@@ -190,7 +190,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('86')" in schema_query
+    assert "VALUES ('87')" in schema_query
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput("
         in schema_query

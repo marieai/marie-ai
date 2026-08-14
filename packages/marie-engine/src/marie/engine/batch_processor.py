@@ -133,7 +133,7 @@ class BatchProcessor:
     # Keeps well under the httpx connection pool limit (40) so that retries
     # and other callers always have headroom.
     DEFAULT_MAX_CONCURRENCY = 20
-    DEFAULT_BATCH_TIMEOUT = 600.0  # seconds
+    DEFAULT_BATCH_TIMEOUT = 900.0  # seconds
 
     def __init__(
         self,
@@ -154,7 +154,13 @@ class BatchProcessor:
         self.model_string = model_string
         self.logger = logger
         self.max_concurrency = max_concurrency or self.DEFAULT_MAX_CONCURRENCY
-        self.batch_timeout = batch_timeout or self.DEFAULT_BATCH_TIMEOUT
+        if batch_timeout is None:
+            batch_timeout = float(
+                os.getenv("LLM_BATCH_TIMEOUT_S", str(self.DEFAULT_BATCH_TIMEOUT))
+            )
+        if batch_timeout <= 0:
+            raise ValueError("batch timeout must be greater than 0")
+        self.batch_timeout = batch_timeout
         self.backend_address = backend_address or "unknown"
         if not isinstance(self.client, AsyncOpenAI):
             raise ValueError(

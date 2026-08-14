@@ -1,71 +1,51 @@
 # Release Scripts
 
-All scripts must be run from the **marie-ai root directory**.
+Run release commands from the `marie-ai` repository root.
 
-## Prerequisites
+## Create a release
 
-```bash
-uv --version
-npm install -g git-release-notes
-```
-
-Environment variables:
-- `MARIE_SLACK_WEBHOOK` — required for Slack notifications on final/rc releases
-
-## `update-version.sh` — bump version locally
-
-Edits `marie/__init__.py` in-place. Does **not** commit, tag, publish, or push.
+Use the interactive entry point:
 
 ```bash
-# Dev pre-release: 4.0.0 -> 4.0.0.dev<N> (N = commits since last tag)
-./scripts/update-version.sh
-
-# Release candidate: 4.0.0rc1 -> 4.0.0rc2
-./scripts/update-version.sh rc
-
-# Final: 4.0.0 -> 4.0.1
-./scripts/update-version.sh final
-```
-
-## `release.sh` — full release pipeline
-
-Reads the current version from `marie/__init__.py`, publishes to PyPI, and (for final/rc) generates a changelog, tags, commits, and sends a Slack notification.
-
-Your local branch **must be in sync** with `origin` — the script will refuse to run otherwise.
-
-```bash
-# Dev pre-release: publish current version to PyPI, nothing else
 ./scripts/release.sh
-
-# Release candidate: publish + changelog + tag + commit + Slack
-./scripts/release.sh rc "<reason>" "<actor>"
-
-# Final release: publish + changelog + tag + commit + Slack
-./scripts/release.sh final "<reason>" "<actor>"
 ```
 
-## Typical Workflows
+It checks the worktree and upstream state, updates every managed version
+reference, creates the release commit, builds the selected containers, and
+creates an annotated tag after the build succeeds. The annotated tag contains
+release notes generated from non-merge commit subjects. Publishing the commit,
+images, and tag is optional.
 
-### Final release
+Use arguments for automation:
 
 ```bash
-git checkout main && git pull
-grep __version__ marie/__init__.py   # verify version, e.g. 4.0.0
-./scripts/release.sh final "v4.0.0 GA release" "greg"
-# Publishes 4.0.0 to PyPI, bumps __init__.py to 4.0.1, tags v4.0.0, commits
+./scripts/release.sh patch --profile all
+./scripts/release.sh --version 5.1.0 --profile marie-cuda
+./scripts/release.sh rc --profile all --publish
+./scripts/release.sh patch --profile all --dry-run
+./scripts/release.sh patch --profile all --stash
 ```
 
-### Dev pre-release
+Use `--stash` to explicitly save tracked, staged, and untracked work before the
+release and restore it afterward. Interactive mode offers the same choice when
+the worktree is dirty; `--yes` does not select it. If restoration conflicts,
+the script retains the stash and reports the recovery steps. Commit the release
+scripts themselves before using this mode.
+
+See [`../RELEASE.md`](../RELEASE.md) for the complete lifecycle and recovery
+instructions.
+
+## Inspect or update versions
+
+`update-version.sh` remains the lower-level version primitive used by the
+release script:
 
 ```bash
-./scripts/update-version.sh          # sets e.g. 4.0.0.dev37
-./scripts/release.sh                 # publishes 4.0.0.dev37 to PyPI
-git checkout -- marie/__init__.py    # revert the dev version bump
+./scripts/update-version.sh --current
+./scripts/update-version.sh --check
+./scripts/update-version.sh --resolve patch
+./scripts/update-version.sh patch
 ```
 
-### Release candidate
-
-```bash
-./scripts/release.sh rc "testing rc1" "greg"
-# Publishes current version to PyPI, bumps to next rc, tags, commits
-```
+Use it directly only when intentionally updating version references without
+creating a release commit, container image, or tag.

@@ -26,6 +26,19 @@ portable contracts rather than the engine importing the server.
 provider-independent `marie-agent` package does not depend on `marie-engine`,
 which keeps the dependency graph acyclic.
 
+## Timeouts
+
+OpenAI-compatible requests wait up to 600 seconds for a response, and a batch
+has a 900-second deadline. Override these defaults when needed:
+
+```bash
+LLM_HTTP_READ_TIMEOUT_S=600
+LLM_BATCH_TIMEOUT_S=900
+```
+
+Keep the batch timeout greater than the HTTP read timeout so queued work has
+time to acquire a request slot and complete.
+
 ## Namespace contract
 
 The wheel contains `marie/engine` and deliberately does not contain

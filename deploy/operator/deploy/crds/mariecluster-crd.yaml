@@ -38,7 +38,7 @@ spec:
                       minimum: 1
                     image:
                       type: string
-                      default: "marieai/marie-gateway:5.0.1-cpu"
+                      default: "marieai/marie-gateway:5.0.2-cpu"
                     resources:
                       type: object
                       properties:

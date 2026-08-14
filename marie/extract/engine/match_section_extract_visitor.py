@@ -21,6 +21,7 @@ from marie.extract.models.span import Span
 from marie.extract.results.span_util import pluck_lines_by_span
 from marie.extract.structures import UnstructuredDocument
 from marie.extract.structures.concrete_annotations import TypedAnnotation
+from marie.extract.structures.line_metadata import LineMetadata
 from marie.extract.structures.line_with_meta import LineWithMeta
 from marie.extract.structures.structured_region import (
     KVList,
@@ -81,9 +82,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         assert context is not None, "Execution context must not be None."
         assert section is not None, "Section must not be None."
         assert parent is not None, "Parent section must not be None."
-        assert (
-            section.owner_layer is not None
-        ), "Section must be associated with a layer."
+        assert section.owner_layer is not None, (
+            "Section must be associated with a layer."
+        )
         assert context.document is not None, "Context must include a document."
 
         # Skip record-backed sections — handled by RecordBackedMatchSectionPopulationVisitor
@@ -160,9 +161,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         assert context is not None, "Execution context must not be None."
         assert section is not None, "Section must not be None."
         assert parent is not None, "Parent section must not be None."
-        assert (
-            section.owner_layer is not None
-        ), "Section must be associated with a layer."
+        assert section.owner_layer is not None, (
+            "Section must be associated with a layer."
+        )
         assert context.document is not None, "Context must include a document."
 
         document = context.document
@@ -1010,7 +1011,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
             page_id = -1
             if header_row and header_row.source_page is not None:
                 page_id = header_row.source_page
-            elif body_rows and  body_rows[0].source_page is not None:
+            elif body_rows and body_rows[0].source_page is not None:
                 page_id = body_rows[0].source_page
 
             self.logger.debug(f"Processing table block for page: {page_id}")
@@ -1087,9 +1088,7 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         f"Selectors tried: {selectors}. Headers: {header_texts}"
                     )
 
-            # Add virtual columns for value_lookup fields that did not match
-            # any header.  These carry no physical cell — they are populated
-            # later by _apply_value_lookup from the source record.
+            # Add virtual columns for value_lookup fields and required derived defaults.
             # Also include columns that are targets of another column's
             # value_lookup.derived_fields (they need a Field stub in each
             # row so the derived-fields distribution can fill them).
@@ -1106,15 +1105,26 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 if field_name in columns_to_process:
                     continue
                 col_cfg = columns_cfg.get(field_name, {})
+                field_def = template_fields_repeating.get(field_name, {}) or {}
+                derived_fields = field_def.get("derived_fields", {})
+                has_required_derived_default = any(
+                    isinstance(derived_field, dict)
+                    and "default" in derived_field
+                    and derived_field.get("required", False)
+                    for derived_field in derived_fields.values()
+                )
                 if isinstance(col_cfg, dict) and (
-                    "value_lookup" in col_cfg or field_name in derived_targets
+                    "value_lookup" in col_cfg
+                    or field_name in derived_targets
+                    or has_required_derived_default
                 ):
                     columns_to_process[field_name] = {
                         "cell_index": -1,  # virtual: no physical cell
                         "header_config": header_cfg,
+                        "derived_defaults": has_required_derived_default,
                     }
                     self.logger.info(
-                        f"Added virtual column for value_lookup field '{field_name}'"
+                        f"Added virtual column for configured field '{field_name}'"
                     )
 
             # columns_to_process now maps field_name -> {cell_index, header_cfg}
@@ -1625,6 +1635,16 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         template_fields_repeating.get(field_name, {}) or {}
                     )
                     field_def["name"] = field_name
+                    if column_def.get("derived_defaults"):
+                        faux_line = LineWithMeta(
+                            line="",
+                            metadata=LineMetadata(page_id, None, None),
+                            annotations=[],
+                        )
+                        extracted_cells.extend(
+                            self.create_fields(field_def, "", "", faux_line)
+                        )
+                        continue
                     stub_field = Field(
                         field_name=field_name,
                         field_type=field_def.get("type", "MONEY"),
@@ -2139,9 +2159,9 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
         assert context is not None, "Execution context must not be None."
         assert section is not None, "Section must not be None."
         assert parent is not None, "Parent section must not be None."
-        assert (
-            section.owner_layer is not None
-        ), "Section must be associated with a layer."
+        assert section.owner_layer is not None, (
+            "Section must be associated with a layer."
+        )
         assert context.document is not None, "Context must include a document."
 
         document = context.document
@@ -2270,10 +2290,18 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                 return
 
             # Create derived child fields linked to the parent
-            for derived_key, derived_value_name in derived_fields.items():
+            for derived_key, derived_field in derived_fields.items():
+                derived_config = (
+                    derived_field if isinstance(derived_field, dict) else {}
+                )
+                derived_value_name = derived_config.get("name", derived_field)
                 map_value = None
                 if isinstance(mapping, dict):
                     map_value = mapping.get(derived_key, None)
+
+                used_default = map_value is None and "default" in derived_config
+                if used_default:
+                    map_value = derived_config["default"]
 
                 map_values = map_value if isinstance(map_value, list) else [map_value]
 
@@ -2286,10 +2314,10 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
 
                     child_field = Field(
                         field_name=derived_value_name,
-                        field_type=None,
-                        is_required=False,
+                        field_type=derived_config.get("type"),
+                        is_required=bool(derived_config.get("required", False)),
                         value=stringify(map_value),
-                        value_original=None,
+                        value_original=stringify(map_value) if used_default else None,
                         composite_field=False,
                         x=0,
                         y=0,

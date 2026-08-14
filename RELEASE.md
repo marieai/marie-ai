@@ -121,22 +121,59 @@ The PyTorch 2.12 release builds the Python 3.12 CPU gateway and CUDA images sele
 
 ## Manual Release Entrypoint
 
-Manual release entrypoint is designed for authorized core developers of Marie.
+Use the release script from a checkout with an upstream branch:
 
-### Trigger weekly release manually
+```bash
+./scripts/release.sh
+```
 
-One can release a hotfix immediately without waiting for the weekly release. Here are the steps:
+The interactive menu selects the version bump, container profile, and whether
+to publish. If the worktree is dirty, it also offers to stash tracked,
+untracked, and staged work for the release and restore it afterward. The
+release stops if the operator declines, the branch is behind its upstream,
+version references are inconsistent, the image build fails, or the release tag
+already exists.
 
-1. [Go to here](https://github.com/marieai/marie-ai/actions?query=workflow%3A%22Manual+Release%22)
-2. Click on "Run Workflow" dropdown button on the right and input the release token and the release reason.
-3. Click on "Run Workflow" green button.
+The successful local sequence is:
 
-### Rebuild all Docker images for certain `git tag` manually
+1. Update every file managed by `scripts/update-version.sh`.
+2. Create `chore(release): release X.Y.Z`.
+3. Build and verify the selected images through `build.sh`.
+4. Generate release notes from non-merge commit subjects since the previous
+   release and store them in the annotated `vX.Y.Z` tag.
 
-1. [Go to here](https://github.com/marieai/marie-ai/actions?query=workflow%3A%22Manual+Docker+Build%22)
-2. Click on "Run Workflow" dropdown button on the right and input the release token and the release reason.
-3. Click on "Run Workflow" green button.
+The tag is created after the image build so a failed build does not mark the
+commit as released. If a build fails after the release commit is created, fix
+the build and rerun with the exact current version.
 
-![Rebuild all Docker images](.github/images/manual-docker-build.png)
+Use non-interactive arguments for repeatable operation:
 
-Note, the manual rebuild on Docker images will *NOT* update `:latest-*` and `:x.y-*` aliases.
+```bash
+./scripts/release.sh patch --profile all
+./scripts/release.sh --version 5.1.0 --profile marie-cuda
+./scripts/release.sh rc --profile all --publish
+./scripts/release.sh patch --profile all --dry-run
+./scripts/release.sh patch --profile all --stash
+```
+
+`--stash` is explicit: `--yes` never enables it. The script records the exact
+stash it creates and restores it with `git stash pop --index` on success,
+failure, or cancellation. A clean restore drops that stash. If the release and
+saved work modify the same lines, Git retains the stash and the script exits
+with conflict-recovery instructions. Commit `scripts/release.sh` and
+`scripts/update-version.sh` before using this mode so the running tool cannot
+stash its own dependencies.
+
+Stashed work is not included in the release notes because it is not committed.
+Review the generated notes in the release plan or inspect a completed tag:
+
+```bash
+git tag -n99 v5.1.0
+```
+
+`--publish` pushes the release commit first, then the versioned container
+images, and finally the Git tag. Without it, all artifacts remain local and
+the script prints the corresponding push commands.
+
+Use `--skip-build` only for package-only automation such as the Manual Release
+GitHub workflow. Normal runtime releases should build both container profiles.

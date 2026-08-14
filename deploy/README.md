@@ -2,8 +2,8 @@
 
 This guide tests the Marie-AI backend and its bootstrap dependencies on a local Kubernetes cluster. It uses the official Marie runtime images:
 
-- Gateway: `marieai/marie-gateway:5.0.1-cpu`
-- Server/executor: `marieai/marie:5.0.1-cuda`
+- Gateway: `marieai/marie-gateway:5.0.2-cpu`
+- Server/executor: `marieai/marie:5.0.2-cuda`
 
 The Marie-AI chart is tested independently from Marie Studio / M3 Forge. For this smoke test, keep `gitea.enabled=false`; Gitea is a Studio dependency, not a Marie-AI backend requirement.
 
@@ -14,9 +14,9 @@ The local test is valid when:
 - PostgreSQL, MinIO, RabbitMQ, Valkey, etcd, and ClickHouse are running.
 - The PostgreSQL migration job applies the scheduler schema and lease functions.
 - `marie_scheduler.hydrate_frontier_dags()` exists in PostgreSQL.
-- The gateway starts from `marieai/marie-gateway:5.0.1-cpu`.
+- The gateway starts from `marieai/marie-gateway:5.0.2-cpu`.
 - The gateway `/status` endpoint returns HTTP 200.
-- The executor starts from `marieai/marie:5.0.1-cuda`.
+- The executor starts from `marieai/marie:5.0.2-cuda`.
 
 ## Quick Start
 
@@ -68,9 +68,9 @@ For local Docker or IDE runs, `/mnt/data/marie-ai/config/.env` can still be usef
 `deploy/bootstrap.sh` checks the executor image when it exists locally. Run this manually only when debugging image startup:
 
 ```bash
-docker image inspect marieai/marie-gateway:5.0.1-cpu
-docker image inspect marieai/marie:5.0.1-cuda
-docker run --rm --entrypoint python marieai/marie:5.0.1-cuda -c "import pkg_resources; print('pkg_resources ok')"
+docker image inspect marieai/marie-gateway:5.0.2-cpu
+docker image inspect marieai/marie:5.0.2-cuda
+docker run --rm --entrypoint python marieai/marie:5.0.2-cuda -c "import pkg_resources; print('pkg_resources ok')"
 ```
 
 If the last command fails with `ModuleNotFoundError: No module named 'pkg_resources'`, the executor image cannot start the current extraction executor. Rebuild/publish the image from the Dockerfile fix that pins `setuptools<81`, then rerun this test with the corrected tag. Do not work around this by installing packages inside running pods.

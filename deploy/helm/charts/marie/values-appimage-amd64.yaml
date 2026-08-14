@@ -21,7 +21,7 @@ executor:
         type: Recreate
       image:
         repository: docker.io/marieai/marie
-        tag: "5.0.1-cuda"
+        tag: "5.0.2-cuda"
         digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
         pullPolicy: IfNotPresent
       resources:

@@ -74,6 +74,54 @@ Use this page as your single-stop overview of how the Extract engine fits togeth
 
 Tip: Favor configuration-first; aim for minimal code branching per layout.
 
+### Derived field defaults
+
+Derived fields accept the existing shorthand mapping or an expanded mapping with
+`name`, `type`, `default`, and `required`. Use the expanded form when a transform
+may not produce a value and the derived output needs a default:
+
+```yaml
+SERVICE_CODE:
+  type: ALPHA_NUMERIC
+  transform: package.transforms.derive_code_types
+  derived_fields:
+    revenue_code: REVENUE_CODE
+    procedure_code:
+      name: PROCEDURE_CODE
+      type: ALPHA_NUMERIC
+      default: "99999"
+      required: true
+```
+
+The default is used only when the transform does not return a value for that
+derived key. A non-empty transformed value is preserved. With `required: true`,
+the engine also creates the derived field when the source column is absent.
+
+### Record-backed layers
+
+Set `match_section_source.strategy` to `record_backed` when an annotator or
+parser has already produced the logical records for a layer. The engine creates
+one `MatchSection` per JSON record instead of locating sections with start and
+stop selectors.
+
+```yaml
+match_section_source:
+  strategy: record_backed
+  data_source: claim-extract-aggregated
+  envelope_key: claims
+  records_required: false
+```
+
+`data_source` identifies a directory under `agent-output/`. `envelope_key` is
+optional; without it, the engine detects common record envelopes. Record-backed
+layers never fall back to selectors.
+
+An existing data-source directory with no JSON records is a valid empty result
+and creates zero match sections. Files such as `trace.md` may still be present
+for diagnostics. Empty output is allowed by default; set `records_required: true`
+when the layer must produce at least one record. A missing data-source directory
+or malformed JSON remains an extraction failure.
+
 ---
 
 ## Core Building Blocks

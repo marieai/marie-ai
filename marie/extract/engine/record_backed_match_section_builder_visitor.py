@@ -66,7 +66,7 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
             )
 
         envelope_key = match_section_source.get("envelope_key")
-        records_required = match_section_source.get("records_required", True)
+        records_required = match_section_source.get("records_required", False)
 
         records = load_extracted_records(
             output_dir=str(context.output_dir),
@@ -117,7 +117,7 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
         section.tags["source_record_json"] = json.dumps(record)
 
         logger.debug(
-            f"Created MatchSection '{section.label}' with " f"{len(spans)} span(s)"
+            f"Created MatchSection '{section.label}' with {len(spans)} span(s)"
         )
         return section
 

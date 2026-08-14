@@ -125,6 +125,7 @@ class Layer(BaseModel):
     #   strategy: "selectors" (default) or "record_backed"
     #   data_source: folder name in agent-output/ (defaults to region_parser.data_source)
     #   envelope_key: JSON key wrapping the records array
+    #   records_required: fail when the data source contains no records (default: false)
     match_section_source: Optional[Dict[str, Any]] = None
 
     _VALID_MATCH_SECTION_STRATEGIES = frozenset({"selectors", "record_backed"})
