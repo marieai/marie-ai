@@ -127,9 +127,10 @@ Use the release script from a checkout with an upstream branch:
 ./scripts/release.sh
 ```
 
-Published releases must run from `main`. Merge development work through a pull
-request first, then update the local `main` branch before running the release.
-Dry runs remain available on development branches for planning.
+Releases may be published from `develop` or a release development branch such
+as `develop-agents`. After publication, the script reuses an open pull request
+to `main` or creates one. Merge that pull request with **Create a merge commit**
+so the tagged release commit remains in `main` history; do not squash or rebase.
 
 The interactive menu selects the version bump, container profile, and whether
 to publish. If the worktree is dirty, it also offers to stash tracked,
@@ -147,6 +148,7 @@ The successful local sequence is:
    release and store them in the annotated `vX.Y.Z` tag.
 5. When publishing, push the commit, images, and tag, then create the GitHub
    Release from the annotated tag notes.
+6. Reuse or create the pull request from the release branch to `main`.
 
 The tag is created after the image build so a failed build does not mark the
 commit as released. If a build fails after the release commit is created, fix
@@ -180,8 +182,9 @@ git tag -n99 v5.1.0
 
 `--publish` pushes the release commit first, then the versioned container
 images and Git tag. It creates the GitHub Release last with the annotated tag
-notes. Without it, all artifacts remain local and the script prints the
-corresponding push commands.
+notes, then reuses or creates a pull request to `main`. It never merges the pull
+request. Without `--publish`, all artifacts remain local and the script prints
+the corresponding push commands.
 
 Publishing requires an authenticated GitHub CLI. The script checks this before
 creating release artifacts and prints a platform-specific installation command
@@ -194,14 +197,18 @@ gh auth login --hostname github.com
 The recommended lifecycle is:
 
 ```bash
-# On the development branch: push and merge a PR into main.
-git switch main
+# On the release development branch.
+git switch develop-agents
 git pull --ff-only
 
-# Preview, then publish from main.
+# Preview, then publish. The PR to main is the final handoff.
 ./scripts/release.sh patch --profile all --dry-run --no-publish --yes
 ./scripts/release.sh patch --profile all --publish
 ```
+
+After publication, review the resulting pull request and merge it with a merge
+commit. Because GitHub also permits squash and rebase for this repository, the
+merge method is an explicit part of the release procedure.
 
 Use `--skip-build` only for package-only automation such as the Manual Release
 GitHub workflow. Normal runtime releases should build both container profiles.
