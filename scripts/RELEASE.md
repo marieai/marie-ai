@@ -14,7 +14,8 @@ It checks the worktree and upstream state, updates every managed version
 reference, creates the release commit, builds the selected containers, and
 creates an annotated tag after the build succeeds. The annotated tag contains
 release notes generated from non-merge commit subjects. Publishing the commit,
-images, and tag is optional.
+images, tag, and GitHub Release is optional. Non-dry-run releases must run from
+`main`; merge development branches through a pull request first.
 
 Use arguments for automation:
 
@@ -30,7 +31,12 @@ Use `--stash` to explicitly save tracked, staged, and untracked work before the
 release and restore it afterward. Interactive mode offers the same choice when
 the worktree is dirty; `--yes` does not select it. If restoration conflicts,
 the script retains the stash and reports the recovery steps. Commit the release
-scripts themselves before using this mode.
+scripts themselves before using this mode. Version-managed files cannot be
+stashed during a release.
+
+`--publish` requires `gh` and an authenticated GitHub session. When `gh` is
+missing, the script prints an installation command and the official installation
+guide. Authenticate with `gh auth login --hostname github.com`.
 
 See [`../RELEASE.md`](../RELEASE.md) for the complete lifecycle and recovery
 instructions.

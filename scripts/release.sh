@@ -37,7 +37,7 @@ Options:
   -v, --version VERSION    Version or bump type
   -p, --profile PROFILE    all, marie-gateway-cpu, or marie-cuda
       --skip-build         Create the release commit and tag without containers
-      --publish            Push the release commit, images, and tag
+      --publish            Push artifacts and create the GitHub Release
       --no-publish         Keep the commit, images, and tag local
       --stash              Stash tracked and untracked work, then restore it
   -n, --dry-run            Show the release plan without changing anything
@@ -131,12 +131,59 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || die "$1 is required"
 }
 
+github_cli_install_hint() {
+    case "$(uname -s)" in
+        Darwin)
+            printf '[release] Install it with: brew install gh\n' >&2
+            ;;
+        Linux)
+            if command -v apt-get >/dev/null 2>&1; then
+                printf '[release] Install it with: sudo apt install gh\n' >&2
+            elif command -v dnf >/dev/null 2>&1; then
+                printf '[release] Install it with: sudo dnf install gh\n' >&2
+            elif command -v pacman >/dev/null 2>&1; then
+                printf '[release] Install it with: sudo pacman -S github-cli\n' >&2
+            fi
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            printf '[release] Install it with: winget install --id GitHub.cli\n' >&2
+            ;;
+    esac
+    printf '[release] Installation guide: https://cli.github.com/manual/installation\n' >&2
+}
+
+require_github_cli() {
+    if ! command -v gh >/dev/null 2>&1; then
+        printf '[release] ERROR: GitHub CLI (gh) is required for --publish\n' >&2
+        github_cli_install_hint
+        exit 1
+    fi
+    if ! gh auth status --hostname github.com >/dev/null 2>&1; then
+        die "GitHub CLI is not authenticated; run: gh auth login --hostname github.com"
+    fi
+    if ! gh repo view --json nameWithOwner >/dev/null 2>&1; then
+        die "GitHub CLI cannot access the repository configured for this checkout"
+    fi
+}
+
 require_clean_worktree() {
     local status
     status=$(git status --porcelain=v1 --untracked-files=normal)
     if [[ -n "$status" ]]; then
         printf '%s\n' "$status" >&2
         die "commit, stash, or remove worktree changes before releasing"
+    fi
+}
+
+require_version_files_clean_for_stash() {
+    local status
+    local -a release_files
+
+    mapfile -t release_files < <("$UPDATE_VERSION" --files)
+    status=$(git status --porcelain=v1 --untracked-files=normal -- "${release_files[@]}")
+    if [[ -n "$status" ]]; then
+        printf '%s\n' "$status" >&2
+        die "version-managed files cannot be stashed during a release; commit or restore them first"
     fi
 }
 
@@ -203,6 +250,8 @@ prepare_worktree() {
     if [[ "$STASH_CHANGES" == false ]]; then
         die "worktree is dirty; commit the changes or rerun with --stash"
     fi
+
+    require_version_files_clean_for_stash
 
     if [[ "$DRY_RUN" == true ]]; then
         log "Dry run: worktree changes would be stashed and restored"
@@ -406,7 +455,8 @@ show_plan() {
         done < <(image_names "$target" "$PROFILE")
     fi
     if [[ "$PUBLISH" == true ]]; then
-        printf '  Publish:  commit, images, then tag\n'
+        printf '  Publish:  commit, images, tag, then GitHub Release\n'
+        printf '  GitHub:   Marie AI %s from annotated %s\n' "$target" "$tag"
     else
         printf '  Publish:  no; artifacts remain local\n'
     fi
@@ -459,6 +509,7 @@ publish_release() {
     local remote
     local merge_ref
     local remote_branch
+    local -a gh_args
 
     remote=$(git config --get "branch.${branch}.remote")
     merge_ref=$(git config --get "branch.${branch}.merge")
@@ -478,6 +529,18 @@ publish_release() {
 
     log "Publishing release tag ${tag}"
     git push "$remote" "refs/tags/${tag}"
+
+    gh_args=(
+        release create "$tag"
+        --verify-tag
+        --title "Marie AI ${TARGET_VERSION}"
+        --notes-from-tag
+    )
+    if [[ "$TARGET_VERSION" =~ (a|b|rc)[0-9]+$ ]]; then
+        gh_args+=(--prerelease)
+    fi
+    log "Creating GitHub Release for ${tag}"
+    gh "${gh_args[@]}"
 }
 
 main() {
@@ -496,6 +559,14 @@ main() {
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "not in a Git worktree"
     git var GIT_AUTHOR_IDENT >/dev/null 2>&1 || \
         die "configure user.name and user.email before releasing"
+    branch=$(git branch --show-current)
+    [[ -n "$branch" ]] || die "releases cannot be created from detached HEAD"
+    if [[ "$DRY_RUN" == false && "$branch" != "main" ]]; then
+        die "releases must be created from main; merge ${branch} through a pull request first"
+    fi
+    if [[ "$PUBLISH" == true ]]; then
+        require_github_cli
+    fi
     trap 'restore_worktree $?' EXIT
     prepare_worktree
 
@@ -524,14 +595,13 @@ main() {
 
     if [[ "$PUBLISH_SET" == false && "$ASSUME_YES" == false && -t 0 ]]; then
         local publish_answer
-        read -r -p 'Publish the commit, images, and tag after building? [y/N] ' publish_answer
+        read -r -p 'Publish the commit, images, tag, and GitHub Release after building? [y/N] ' publish_answer
         if [[ "$publish_answer" == "y" || "$publish_answer" == "Y" ]]; then
             PUBLISH=true
+            require_github_cli
         fi
     fi
 
-    branch=$(git branch --show-current)
-    [[ -n "$branch" ]] || die "releases cannot be created from detached HEAD"
     upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) || \
         die "${branch} does not have an upstream"
     check_source_state "$branch" "$upstream"

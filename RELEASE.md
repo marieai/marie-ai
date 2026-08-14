@@ -127,6 +127,10 @@ Use the release script from a checkout with an upstream branch:
 ./scripts/release.sh
 ```
 
+Published releases must run from `main`. Merge development work through a pull
+request first, then update the local `main` branch before running the release.
+Dry runs remain available on development branches for planning.
+
 The interactive menu selects the version bump, container profile, and whether
 to publish. If the worktree is dirty, it also offers to stash tracked,
 untracked, and staged work for the release and restore it afterward. The
@@ -141,6 +145,8 @@ The successful local sequence is:
 3. Build and verify the selected images through `build.sh`.
 4. Generate release notes from non-merge commit subjects since the previous
    release and store them in the annotated `vX.Y.Z` tag.
+5. When publishing, push the commit, images, and tag, then create the GitHub
+   Release from the annotated tag notes.
 
 The tag is created after the image build so a failed build does not mark the
 commit as released. If a build fails after the release commit is created, fix
@@ -162,7 +168,8 @@ failure, or cancellation. A clean restore drops that stash. If the release and
 saved work modify the same lines, Git retains the stash and the script exits
 with conflict-recovery instructions. Commit `scripts/release.sh` and
 `scripts/update-version.sh` before using this mode so the running tool cannot
-stash its own dependencies.
+stash its own dependencies. Files managed by `scripts/update-version.sh` must
+also be clean because the release commit updates them directly.
 
 Stashed work is not included in the release notes because it is not committed.
 Review the generated notes in the release plan or inspect a completed tag:
@@ -172,8 +179,29 @@ git tag -n99 v5.1.0
 ```
 
 `--publish` pushes the release commit first, then the versioned container
-images, and finally the Git tag. Without it, all artifacts remain local and
-the script prints the corresponding push commands.
+images and Git tag. It creates the GitHub Release last with the annotated tag
+notes. Without it, all artifacts remain local and the script prints the
+corresponding push commands.
+
+Publishing requires an authenticated GitHub CLI. The script checks this before
+creating release artifacts and prints a platform-specific installation command
+when `gh` is missing. Authenticate after installation with:
+
+```bash
+gh auth login --hostname github.com
+```
+
+The recommended lifecycle is:
+
+```bash
+# On the development branch: push and merge a PR into main.
+git switch main
+git pull --ff-only
+
+# Preview, then publish from main.
+./scripts/release.sh patch --profile all --dry-run --no-publish --yes
+./scripts/release.sh patch --profile all --publish
+```
 
 Use `--skip-build` only for package-only automation such as the Manual Release
 GitHub workflow. Normal runtime releases should build both container profiles.

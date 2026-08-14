@@ -55,6 +55,10 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
       - uses: astral-sh/setup-uv@v6
       - run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "Manual releases must run from main, not ${GITHUB_REF_NAME}"
+            exit 1
+          fi
           git config user.email "dev-bot@marieai.co"
           git config user.name "Marie Dev Bot"
           git checkout -B "${GITHUB_REF_NAME}" "origin/${GITHUB_REF_NAME}"
@@ -78,3 +82,17 @@ jobs:
           github_token: ${{ secrets.MARIE_DEV_BOT }}
           tags: true
           branch: ${{ github.ref }}
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.MARIE_DEV_BOT }}
+        run: |
+          command -v gh >/dev/null || {
+            echo "GitHub CLI is required: https://cli.github.com/manual/installation"
+            exit 1
+          }
+          release_version="$(./scripts/update-version.sh --current)"
+          tag="v${release_version}"
+          gh release create "${tag}" \
+            --verify-tag \
+            --title "Marie AI ${release_version}" \
+            --notes-from-tag
