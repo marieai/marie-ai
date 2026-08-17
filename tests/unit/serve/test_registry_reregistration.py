@@ -13,8 +13,8 @@ ADDR = "192.168.1.10:60817"
 @pytest.fixture
 def client(mocker):
     c = mocker.Mock(spec=EtcdClient)
-    c.get.return_value = None                      # register(): key not present
-    c.put.return_value = ("put-key", None)         # register() unpacks 2-tuple
+    c.get.return_value = None  # register(): key not present
+    c.put.return_value = ("put-key", None)  # register() unpacks 2-tuple
     c.get_connection_state.return_value = ConnectionState.CONNECTED
     return c
 
@@ -42,9 +42,7 @@ def test_heartbeat_reregisters_when_lease_not_found(registry, client):
     assert client.put.call_count == 1
 
     # the wipe scenario: lease is gone entirely -> refresh raises
-    lease1.refresh.side_effect = Exception(
-        "etcdserver: requested lease not found"
-    )
+    lease1.refresh.side_effect = Exception("etcdserver: requested lease not found")
     registry.heartbeat()
 
     # re-registered with a FRESH lease
@@ -61,9 +59,7 @@ def test_heartbeat_reregister_preserves_metadata(registry, client):
     registry.register(
         [SVC], ADDR, service_ttl=6, addr_cls=JsonAddress, metadata='{"x": 1}'
     )
-    lease1.refresh.side_effect = Exception(
-        "etcdserver: requested lease not found"
-    )
+    lease1.refresh.side_effect = Exception("etcdserver: requested lease not found")
     registry.heartbeat()
 
     assert client.put.call_count == 2
@@ -109,6 +105,7 @@ def test_heartbeat_key_present_no_reregister(registry, client):
     assert client.put.call_count == 1
     # the key was actually checked
     from marie.serve.discovery.util import form_service_key
+
     client.get.assert_called_with(form_service_key(SVC, ADDR))
 
 
@@ -145,20 +142,67 @@ def test_heartbeat_closed_channel_is_quiet_transient(registry, client, caplog):
 
 
 def test_shutdown_detaches_handlers_without_closing_injected_client(registry, client):
+    lease = _mk_lease(1)
+    client.lease.return_value = lease
+    registry.register([SVC], ADDR, service_ttl=6)
+
     registry.shutdown()
 
     assert client.remove_connection_event_handler.call_count == 4
+    lease.revoke.assert_called_once_with()
     client.close.assert_not_called()
+
+
+def test_shutdown_revokes_each_unique_lease_once(registry, client):
+    lease = _mk_lease(1)
+    registry._leases = {
+        ADDR: lease,
+        '192.168.1.10:60818': lease,
+    }
+    registry._services = {
+        ADDR: {SVC},
+        '192.168.1.10:60818': {SVC},
+    }
+    registry._registration_info = {
+        ADDR: {},
+        '192.168.1.10:60818': {},
+    }
+
+    registry.shutdown()
+    registry.shutdown()
+
+    lease.revoke.assert_called_once_with()
+    assert registry._leases == {}
+    assert registry._services == {}
+    assert registry._registration_info == {}
+    assert client.remove_connection_event_handler.call_count == 4
+
+
+def test_shutdown_continues_after_lease_revoke_failure(registry, client):
+    failed_lease = _mk_lease(1)
+    healthy_lease = _mk_lease(2)
+    failed_lease.revoke.side_effect = ConnectionError('etcd unavailable')
+    registry._leases = {
+        ADDR: failed_lease,
+        '192.168.1.10:60818': healthy_lease,
+    }
+
+    registry.shutdown()
+
+    failed_lease.revoke.assert_called_once_with()
+    healthy_lease.revoke.assert_called_once_with()
 
 
 def test_shutdown_closes_registry_owned_client(mocker):
     client = mocker.Mock(spec=EtcdClient)
-    mocker.patch(
-        "marie.serve.discovery.registry.get_etcd_client", return_value=client
-    )
+    mocker.patch("marie.serve.discovery.registry.get_etcd_client", return_value=client)
     close_client = mocker.patch("marie.serve.discovery.registry.close_etcd_client")
     registry = EtcdServiceRegistry(etcd_host="localhost", etcd_port=2379)
+    lease = _mk_lease(1)
+    lease.revoke.side_effect = ConnectionError('etcd unavailable')
+    registry._leases[ADDR] = lease
 
     registry.shutdown()
 
+    lease.revoke.assert_called_once_with()
     close_client.assert_called_once_with(client)

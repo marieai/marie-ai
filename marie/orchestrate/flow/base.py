@@ -6,6 +6,7 @@ import inspect
 import json
 import multiprocessing
 import os
+import signal
 import sys
 import threading
 import time
@@ -16,6 +17,7 @@ from contextlib import ExitStack
 from typing import (
     TYPE_CHECKING,
     Dict,
+    Iterator,
     List,
     Optional,
     Set,
@@ -55,6 +57,7 @@ from marie.excepts import (
     FlowTopologyError,
     PortAlreadyUsed,
     RuntimeFailToStart,
+    RuntimeRunForeverEarlyError,
 )
 from marie.helper import (
     GATEWAY_NAME,
@@ -92,6 +95,7 @@ EXECUTOR_ARGS_BLACKLIST = [
     'protocol',
     'protocols',
 ]
+_RUNTIME_PROCESS_POLL_INTERVAL = 1.0
 
 
 class FlowType(type(ExitStack), type(JAMLCompatible)):
@@ -2570,24 +2574,82 @@ class Flow(
             to main thread.
         """
 
-        def _reload_flow(changed_file):
+        wait_event = stop_event or threading.Event()
+        supervisor_stop = threading.Event()
+        supervisor_paused = threading.Event()
+        runtime_failures: List[str] = []
+
+        def _reload_flow(changed_file: str) -> None:
             self.logger.info(
                 f'change in Flow YAML {changed_file} observed, reloading Flow'
             )
-            self.__exit__(None, None, None)
-            new_flow = Flow.load_config(changed_file)
-            self.__dict__ = new_flow.__dict__
-            self.__enter__()
+            supervisor_paused.set()
+            try:
+                self.__exit__(None, None, None)
+                new_flow = Flow.load_config(changed_file)
+                self.__dict__ = new_flow.__dict__
+                self.__enter__()
+            finally:
+                supervisor_paused.clear()
 
-        def _reload_deployment(deployment, changed_file):
+        def _reload_deployment(deployment: Deployment, changed_file: str) -> None:
             self.logger.info(
                 f'change in Executor configuration YAML {changed_file} observed, reloading Executor deployment'
             )
-            deployment.__exit__(None, None, None)
-            old_args, old_needs = deployment.args, deployment.needs
-            new_deployment = Deployment(old_args, old_needs, include_gateway=False)
-            deployment.__dict__ = new_deployment.__dict__
-            deployment.__enter__()
+            supervisor_paused.set()
+            try:
+                deployment.__exit__(None, None, None)
+                old_args, old_needs = deployment.args, deployment.needs
+                new_deployment = Deployment(old_args, old_needs, include_gateway=False)
+                deployment.__dict__ = new_deployment.__dict__
+                deployment.__enter__()
+            finally:
+                supervisor_paused.clear()
+
+        def _supervise() -> None:
+            while not supervisor_stop.wait(_RUNTIME_PROCESS_POLL_INTERVAL):
+                if wait_event.is_set():
+                    return
+                if supervisor_paused.is_set():
+                    continue
+
+                for (
+                    deployment_name,
+                    pod_name,
+                    role,
+                    process,
+                ) in self._iter_runtime_processes():
+                    exitcode = process.exitcode
+                    if process.pid is None or exitcode is None:
+                        continue
+                    if wait_event.is_set() or supervisor_paused.is_set():
+                        return
+
+                    process.join(timeout=0)
+                    signal_suffix = ''
+                    if exitcode < 0:
+                        try:
+                            signal_name = signal.Signals(-exitcode).name
+                        except ValueError:
+                            signal_name = str(-exitcode)
+                        signal_suffix = f' signal={signal_name}'
+
+                    failure = (
+                        'Managed runtime process exited unexpectedly: '
+                        f'deployment={deployment_name} pod={pod_name} role={role} '
+                        f'pid={process.pid} exitcode={exitcode}{signal_suffix}'
+                    )
+                    self.logger.error(failure)
+                    runtime_failures.append(failure)
+                    wait_event.set()
+                    return
+
+        supervisor = threading.Thread(
+            target=_supervise,
+            daemon=True,
+            name='flow-runtime-supervisor',
+        )
+        supervisor.start()
 
         try:
             watch_changes = self.args.reload or any(
@@ -2615,9 +2677,8 @@ class Flow(
                 ):
                     from watchfiles import watch
 
-                new_stop_event = stop_event or threading.Event()
                 if len(watch_files_list) > 0:
-                    for changes in watch(*watch_files_list, stop_event=new_stop_event):
+                    for changes in watch(*watch_files_list, stop_event=wait_event):
                         for _, changed_file in changes:
                             if changed_file not in watch_files_from_deployments:
                                 # maybe changed_file is the absolute path of one in watch_files_from_deployments
@@ -2644,10 +2705,8 @@ class Flow(
                                     changed_file,
                                 )
             else:
-                wait_event = stop_event
-                if not wait_event:
-                    self._stop_event = threading.Event()
-                    wait_event = self._stop_event
+                if stop_event is None:
+                    self._stop_event = wait_event
                 if not __windows__:
                     wait_event.wait()
                 else:
@@ -2657,6 +2716,22 @@ class Flow(
                         time.sleep(0.5)
         except KeyboardInterrupt:
             pass
+        finally:
+            supervisor_stop.set()
+            supervisor.join(timeout=_RUNTIME_PROCESS_POLL_INTERVAL + 1)
+
+        if runtime_failures:
+            raise RuntimeRunForeverEarlyError(runtime_failures[0])
+
+    def _iter_runtime_processes(
+        self,
+    ) -> Iterator[tuple[str, str, str, multiprocessing.Process]]:
+        for deployment_name, deployment in self._deployment_nodes.items():
+            if deployment.external:
+                continue
+            for pod in deployment._iter_pods():
+                for role, process in pod._iter_managed_processes():
+                    yield deployment_name, pod.name, role, process
 
     @property
     def protocol(self) -> Union[ProtocolType, List[ProtocolType]]:

@@ -3,7 +3,7 @@ import copy
 import multiprocessing
 import time
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Iterator, Optional
 
 from marie.constants import (
     RAFT_TO_EXECUTOR_PORT,
@@ -74,6 +74,11 @@ class BasePod(ABC):
 
         This method makes sure that the `Process` is properly finished and its resources properly released
         """
+        if any(
+            process.pid is not None and process.exitcode is not None
+            for _, process in self._iter_managed_processes()
+        ):
+            self.is_shutdown.set()
         self.logger.debug("waiting for ready or shutdown signal from runtime")
         if not self.is_shutdown.is_set() and self.is_started.is_set():
             try:
@@ -264,6 +269,11 @@ class BasePod(ABC):
         """
         ...
 
+    def _iter_managed_processes(
+        self,
+    ) -> Iterator[tuple[str, multiprocessing.Process]]:
+        return iter(())
+
 
 class Pod(BasePod):
     """
@@ -336,6 +346,13 @@ class Pod(BasePod):
         if self.raft_worker is not None:
             self.raft_worker.join(*args, **kwargs)
         self.logger.debug(f"successfully joined the process")
+
+    def _iter_managed_processes(
+        self,
+    ) -> Iterator[tuple[str, multiprocessing.Process]]:
+        yield 'worker', self.worker
+        if self.raft_worker is not None:
+            yield 'raft', self.raft_worker
 
     def _terminate(self):
         """Terminate the Pod.
