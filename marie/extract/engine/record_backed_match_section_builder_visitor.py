@@ -133,10 +133,17 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
 
         aggregated = record.get("_aggregated_sources")
         if aggregated and isinstance(aggregated, list):
-            for agg_source in aggregated:
+            for source_index, agg_source in enumerate(aggregated):
                 span = _span_from_source(agg_source)
                 if span:
                     spans.append(span)
+                else:
+                    logger.warning(
+                        "Record '%s' had unusable source metadata in "
+                        "_aggregated_sources[%d]; skipping span",
+                        record.get("claim_uid", "?"),
+                        source_index,
+                    )
         else:
             span = _span_from_source(source)
             if span:
@@ -157,14 +164,17 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
 def _span_from_source(source: Dict[str, Any]) -> Optional[Span]:
     """Convert a source dict with ``page_index`` and ``ocr_line_range``
     into a ``Span``."""
-    if not source:
+    if not isinstance(source, dict) or not source:
         return None
 
     page = source.get("page_index", 0)
     ocr_range = source.get("ocr_line_range")
     if ocr_range and isinstance(ocr_range, (list, tuple)) and len(ocr_range) >= 2:
-        y = int(ocr_range[0])
-        h = max(int(ocr_range[1]) - y, 1)
+        try:
+            y = int(ocr_range[0])
+            h = max(int(ocr_range[1]) - y, 1)
+        except (TypeError, ValueError):
+            return None
         return Span(page=page, y=y, h=h)
 
     return None
