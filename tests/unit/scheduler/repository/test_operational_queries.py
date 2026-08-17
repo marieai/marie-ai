@@ -649,7 +649,7 @@ async def test_operational_database_health_exposes_aggregates_only() -> None:
 
     health = await repository(connection).get_operational_database_health()
 
-    assert health["schema_version"] == 87
+    assert health["schema_version"] == 89
     assert health["pool"] == {
         "minimum": 1,
         "maximum": 20,

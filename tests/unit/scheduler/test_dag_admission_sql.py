@@ -146,4 +146,4 @@ def test_submission_lifecycle_lookup_indexes_are_managed() -> None:
     repository_source = (
         project_root / "marie/scheduler/repository/async_job_repository.py"
     ).read_text()
-    assert "SCHEDULER_SCHEMA_VERSION = 87" in repository_source
+    assert "SCHEDULER_SCHEMA_VERSION = 89" in repository_source
