@@ -166,6 +166,7 @@ executors:
                   type: classification
                   group: split-boundary-group
                   classifications: ["1"]
+                  min_conf: .995
               page_classifier:
                 - model_name_or_path: 'rms/doc-determination-layoutlmv3'
                   name: 'doc_determination_layoutlmv3'
