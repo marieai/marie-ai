@@ -948,6 +948,19 @@ wheels = [
 ]
 
 [[package]]
+name = "cysignals"
+version = "1.12.6"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/5a/d258fd8d6ee1538b8472f39051a87d3d6aa2ab26ffa2da4ac809fb851b88/cysignals-1.12.6.tar.gz", hash = "sha256:3ef3a37bdb244821b85475a08e2762ca1019570b369e321504995fa9a54675ce", size = 79583, upload-time = "2025-10-30T04:28:44.463Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/65/8ada25e5501a3357ec0cddc40e6cca8fbef3c0a38bc62614cd20f4304e79/cysignals-1.12.6-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:3ee654e14c0747d39711d169a664766e0140327a1d3ea1e0fccda1e31ef74e53", size = 220559, upload-time = "2025-10-30T04:28:14.409Z" },
+    { url = "https://files.pythonhosted.org/packages/fc/4c/ef1a4d2a0383a3b258ee2d2c67acc3a31f57ea7ff219354f4d920aecd5c3/cysignals-1.12.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:26a79edceeee7d74609b0cc73b4c3d93301e488dca28b166b3667049a2ee559c", size = 270698, upload-time = "2025-10-30T04:28:16.212Z" },
+    { url = "https://files.pythonhosted.org/packages/11/bc/24b88e729e9051f7c6225891200affc2ea4a431a72e00029de6f6cbaf84f/cysignals-1.12.6-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:cdcf379028c9a4afcc957d046ce492c3418ac931ddf2089d21d34f337b64ecfb", size = 274019, upload-time = "2025-10-30T04:28:17.966Z" },
+    { url = "https://files.pythonhosted.org/packages/88/ed/31137ee4aa5a642560a843c838665986a361761d9b2236bd90bdeb95d365/cysignals-1.12.6-cp312-cp312-win_amd64.whl", hash = "sha256:ae2119e7194f48f31eebdaf238fe09a69ce6c89b73f8733a6a9b7b9386bbf414", size = 53934, upload-time = "2025-10-30T04:28:19.531Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/56/546c9ee45185f4bb0e1ddd6d43ea5b464c2d25f686a775916c733f6e5ef0/cysignals-1.12.6-cp312-cp312-win_arm64.whl", hash = "sha256:3a664ba18028400abf1221c412ca914795c4cfe9564b9bde1e065e1ab472e668", size = 50977, upload-time = "2025-10-30T04:28:20.73Z" },
+]
+
+[[package]]
 name = "cython"
 version = "3.2.8"
 source = { registry = "https://pypi.org/simple" }
@@ -2546,9 +2559,11 @@ dependencies = [
     { name = "sqlalchemy" },
     { name = "tenacity" },
     { name = "tensorboard" },
+    { name = "tesserocr" },
     { name = "textual" },
     { name = "textual-fastdatatable" },
     { name = "textual-textarea" },
+    { name = "tifftools" },
     { name = "typing-extensions" },
     { name = "urllib3" },
     { name = "uuid7" },
@@ -2810,9 +2825,11 @@ requires-dist = [
     { name = "sqlalchemy" },
     { name = "tenacity" },
     { name = "tensorboard", specifier = "<2.20" },
+    { name = "tesserocr" },
     { name = "textual" },
     { name = "textual-fastdatatable" },
     { name = "textual-textarea" },
+    { name = "tifftools" },
     { name = "timm", marker = "extra == 'cu130'", specifier = "==1.0.27" },
     { name = "torch", marker = "extra == 'cu130'", specifier = "==2.12.1", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "marie-ai", extra = "cu130" } },
     { name = "torchvision", marker = "extra == 'cu130'", specifier = "==0.27.1", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "marie-ai", extra = "cu130" } },
@@ -6048,6 +6065,22 @@ wheels = [
 ]
 
 [[package]]
+name = "tesserocr"
+version = "2.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cysignals" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/11/33/0d74c9cfc525779bb761a474cd958bbbda057654fec686c05e7a82b8c51b/tesserocr-2.11.0.tar.gz", hash = "sha256:1c1ae89c589fddf3a25dbcc21031aea18bd82259e42ef491c43a44f2bef811b3", size = 76094, upload-time = "2026-08-04T12:26:09.763Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/02/11474753c38ab2d67d57877925810d5f859fec395a35cb1024942ff5047d/tesserocr-2.11.0-cp312-cp312-macosx_15_0_arm64.whl", hash = "sha256:e35d1bad8e20f2e933548fd4a0e18dad66c47058a10465bb5da059125add5d76", size = 3620278, upload-time = "2026-08-04T12:25:30.411Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/5e/81f88f9e2e74c8e25de08c0ea89fc60aba35b08a0c105c54ab49b414b101/tesserocr-2.11.0-cp312-cp312-macosx_15_0_x86_64.whl", hash = "sha256:59ae6fdc30313755301f024584707188ecfe9819dee755cd003d322167c141e3", size = 4089070, upload-time = "2026-08-04T12:25:32.495Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/8d/35c434c8dedc16c05a2c549178a7eaaca8b938adc032aea5b6a60f27e335/tesserocr-2.11.0-cp312-cp312-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9a32bdb35233c3548a2c44e517a7875e06020e3d8e6ea458749808d268c13628", size = 5202458, upload-time = "2026-08-04T12:25:34.245Z" },
+    { url = "https://files.pythonhosted.org/packages/19/bf/cc207b0d2a0d51e280e0f1beb9cbe420e34ba34621247de7ea8266645b3d/tesserocr-2.11.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:184e682bdf33bc8c22d8e9d787160da5fb773b3020062d74bdd5fb86dc03f7fb", size = 5500975, upload-time = "2026-08-04T12:25:36.357Z" },
+    { url = "https://files.pythonhosted.org/packages/66/ed/dcca1dc4f3cce562f032148de95c838b023b22c2acb391183ed26512ffa0/tesserocr-2.11.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:8e829151f583cdbab312abdd50d75f66bffaee14bb5ca1f3b53f46f807007703", size = 6875281, upload-time = "2026-08-04T12:25:38.559Z" },
+]
+
+[[package]]
 name = "textual"
 version = "8.2.8"
 source = { registry = "https://pypi.org/simple" }
@@ -6130,6 +6163,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b7/38/5e2ecef5af2f4fd4a89bb8d6240de9458bab4d51a4cbd97aeb3a0cd618e2/tifffile-2026.6.1.tar.gz", hash = "sha256:626c892c0e899d959b9438e7c0e1491dc154a7fead1f1f37a991724a50eceba9", size = 429694, upload-time = "2026-05-31T23:57:12.165Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/59/208f71d70ddc6184f79b8c6d87d46eb7d7b12c19186a817dec9c9c3f3693/tifffile-2026.6.1-py3-none-any.whl", hash = "sha256:0d7382d2769b855b81ce358528e2b40c16d48aa39031746efa81215205332a8d", size = 267108, upload-time = "2026-05-31T23:57:10.597Z" },
+]
+
+[[package]]
+name = "tifftools"
+version = "1.7.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/17/c5d5a4120e51fe92489fe20630efd1eb81ebcbab87aa982a7170e34a22d0/tifftools-1.7.0.tar.gz", hash = "sha256:164226faf0c1264c390ccf93c38dbb50f6f5891c428479baf3291b39213563cc", size = 70730, upload-time = "2026-01-14T15:11:00.042Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/fb/42c99998e9fd92266b8d4b17ce6d0e8a609960ad0f6cfde800ab66850413/tifftools-1.7.0-py3-none-any.whl", hash = "sha256:f4caf35ea61efdd9181063abc8e551dbbc32e5a8d793aee482342f6f01666e41", size = 51202, upload-time = "2026-01-14T15:10:59.045Z" },
 ]
 
 [[package]]
