@@ -153,9 +153,12 @@ class BasePipeline(ABC):
         ocr_results: dict,
         pipeline_id: str = "default_pipeline",
         include_ocr_lines: bool = False,
+        metadata=None,
     ) -> dict[str, Any]:
         """Execute processing pipeline"""
 
+        if metadata is None:
+            metadata = {}
         words = []
         boxes = []
         lines = []
@@ -176,7 +179,7 @@ class BasePipeline(ABC):
             assert len(words) == len(lines)
 
         context = PipelineContext(pipeline_id=pipeline_id)
-        context["metadata"] = {}
+        context["metadata"] = metadata
 
         for pipe in processing_pipeline:
             try:
@@ -218,7 +221,7 @@ class BasePipeline(ABC):
     def run_sub_classifier_pipeline(
         self,
         page_classifier_meta,
-        sub_classifiers: dict[str, Any],
+        sub_classifiers: dict[str, any],
         words: List,
         boxes: List,
         documents: DocList,
@@ -318,7 +321,7 @@ class BasePipeline(ABC):
         return results
 
     def group_results_by_page(
-        self, group_key: str, page_meta: List[dict[str, Any]]
+        self, group_key: str, page_meta: List[dict[str, any]]
     ) -> dict:
         """Group the results by page"""
         group_by_page = defaultdict(list)

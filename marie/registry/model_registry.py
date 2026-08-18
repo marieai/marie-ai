@@ -319,7 +319,7 @@ class ModelRegistry:
         version: Optional[str] = None,
         raise_exceptions_for_missing_entries: Optional[bool] = True,
         **kwargs: Any,
-    ) -> Union[str, None]:
+    ) -> Union[dict, str, None]:
         """
         Get a configuration for the model.
 
@@ -348,39 +348,61 @@ class ModelRegistry:
 
     @staticmethod
     def checkpoint(
-        name_or_path: str,
+        name_or_path: str | os.PathLike,
         version: Optional[str] = None,
-        raise_exceptions_for_missing_entries: Optional[bool] = True,
-        checkpoint: str = "pytorch_model.bin",
+        raise_exceptions_for_missing_entries: bool = True,
+        checkpoint: Optional[str] = None,
         **kwargs: Any,
     ) -> Union[str, None]:
         """
-        Load a checkpoint for the model. This is a file that contains the model weights. Defaults to `pytorch_model.bin`.
+        Load a checkpoint for the model. This is a file that contains the model weights.
+        Prioritizes: checkpoint if provided > model.safetensors > pytorch_model.bin
 
         :param name_or_path: URI path to resource
         :param version: Optional version of the resource
         :param raise_exceptions_for_missing_entries: If True, raise an exception if the resource is not found.
-        :param checkpoint: Name of the checkpoint file to load (default: `pytorch_model.bin`)
+        :param checkpoint: Name of the checkpoint file to load
         """
+
         resolved_path = ModelRegistry.get(
             name_or_path, version, raise_exceptions_for_missing_entries, **kwargs
         )
 
-        if resolved_path is not None:
-            if checkpoint is not None:
-                full_filename = checkpoint
-            else:
-                full_filename = "pytorch_model.bin"
+        candidates = list(
+            dict.fromkeys(
+                c for c in [checkpoint, "model.safetensors", "pytorch_model.bin"] if c
+            )
+        )
 
-            if os.path.isdir(resolved_path):
-                checkpoint = os.path.join(resolved_path, full_filename)
-            elif os.path.isfile(resolved_path):
-                checkpoint = resolved_path
-            else:
+        if resolved_path is None:
+            if raise_exceptions_for_missing_entries:
                 raise EnvironmentError(
-                    f"{resolved_path} does not appear to have a file named {full_filename}"
+                    f"No Model Registry path could be resolved for {name_or_path} with version {version}"
                 )
-            return checkpoint
+
+        elif os.path.isdir(resolved_path):
+            for c in candidates:
+                full_filename = os.path.join(resolved_path, c)
+                if os.path.isfile(full_filename):
+                    if checkpoint and c != checkpoint:
+                        logger.warning(
+                            f"Found {c} in {resolved_path} instead of {checkpoint}."
+                        )
+                    return full_filename
+
+            if raise_exceptions_for_missing_entries:
+                raise EnvironmentError(
+                    f"{resolved_path} does not appear to have a file named one of {candidates}"
+                )
+        elif os.path.isfile(resolved_path):
+            return resolved_path
+        else:
+            if raise_exceptions_for_missing_entries:
+                raise EnvironmentError(
+                    f"Model Registry path {resolved_path} for {name_or_path} does not exist"
+                )
+
+        return None
 
     @staticmethod
     def register_handler(handler: ModelRegistryHandler) -> None:

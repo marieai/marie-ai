@@ -117,6 +117,8 @@ dependencies = [
     "textual",
     "textual_textarea",
     "textual_fastdatatable",
+    "tesserocr",
+    "tifftools",
     "typing_extensions>=4.12.2",
     "rtree",
     "scikit-image",

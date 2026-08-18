@@ -1,5 +1,7 @@
 import os
 import traceback
+from collections.abc import Iterable
+from functools import partial
 from typing import Any, Callable, List, Optional, Sequence, Union
 
 import numpy as np
@@ -9,6 +11,7 @@ import torch.nn.functional as F
 from docarray import DocList
 from PIL import Image
 from torch.nn import Module
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import (
     AutoModelForSequenceClassification,
@@ -18,19 +21,144 @@ from transformers import (
     pipeline,
 )
 
+from marie.api.docs import BatchableMarieDoc, MarieDoc
+from marie.components.document_classifier import BaseDocumentClassifier
+from marie.components.util import scale_bounding_box
 from marie.constants import __model_path__
+from marie.helper import batch_iterator
 from marie.logging_core.logger import MarieLogger
-from marie.models.utils import initialize_device_settings
+from marie.logging_core.profile import TimeContext
+from marie.models.boundary_detection.dataset import BoundaryDetectionInferenceDataset
+from marie.models.boundary_detection.lmv3_document_splitter import (
+    LayoutLMv3DocumentSplitter,
+)
+from marie.models.doc_classification.dataset import (
+    DocumentClassificationInferenceDataset,
+)
+from marie.models.doc_classification.lmv3_document_classifier import (
+    LayoutLMv3DocumentClassifier,
+)
+from marie.models.utils import initialize_device_settings, logger
+from marie.registry.model_registry import ModelRegistry
 
-from ...api.docs import BatchableMarieDoc, MarieDoc
-from ...helper import batch_iterator
-from ...logging_core.profile import TimeContext
-from ...registry.model_registry import ModelRegistry
-from ..document_classifier.base import BaseDocumentClassifier
-from ..util import scale_bounding_box
+ARCHITECTURE_REGISTRY = {
+    "LayoutLMv3DocumentClassifier": LayoutLMv3DocumentClassifier,
+    "LayoutLMv3DocumentSplitter": LayoutLMv3DocumentSplitter,
+}
 
 
-class TransformersDocumentClassifier(BaseDocumentClassifier):
+def load_layoutlmv3_processor(
+    model_name_or_path: str | os.PathLike, tokenizer: Any
+) -> LayoutLMv3Processor:
+    """Load a LayoutLMv3 processor while supporting legacy feature-extractor metadata."""
+    preprocessor_config = os.path.join(model_name_or_path, "preprocessor_config.json")
+    if os.path.exists(preprocessor_config):
+        logger.info(
+            "Found preprocessor_config.json, loading processor from %s",
+            model_name_or_path,
+        )
+        image_processor = LayoutLMv3ImageProcessor.from_pretrained(model_name_or_path)
+    else:
+        image_processor = LayoutLMv3ImageProcessor(
+            apply_ocr=False, do_resize=True, resample=Image.BILINEAR
+        )
+    return LayoutLMv3Processor(image_processor, tokenizer=tokenizer)
+
+
+def resolve_architecture(name: str):
+    try:
+        return ARCHITECTURE_REGISTRY[name]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported architecture: {name}")
+
+
+def optimize_model(model: nn.Module, logger) -> Callable | Module:
+    """Optimizes the model for inference. This method is called by the __init__ method."""
+    try:
+        with TimeContext("Compiling model", logger=logger):
+            import torch._dynamo as dynamo
+            import torchvision.models as models
+
+            # ['aot_eager', 'aot_eager_decomp_partition', 'aot_torchxla_trace_once', 'aot_torchxla_trivial', 'aot_ts', 'aot_ts_nvfuser', 'cudagraphs', 'dynamo_accuracy_minifier_backend', 'dynamo_minifier_backend', 'eager', 'inductor', 'ipex', 'nvprims_aten', 'nvprims_nvfuser', 'onnxrt', 'torchxla_trace_once', 'torchxla_trivial', 'ts', 'tvm']
+            torch._dynamo.config.verbose = False
+            torch._dynamo.config.suppress_errors = True
+            # torch.backends.cudnn.benchmark = True
+            # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
+            model = torch.compile(model)
+            return model
+    except Exception as err:
+        logger.warning(f"Model compile not supported: {err}")
+        return model
+
+
+def collate_fn_inference(batch: Any, mode: str, max_pages: int) -> dict:
+    """Adjust the maximum number of pages per-batch (padding to max_pages for batch). Universal collate_fn for both
+    document classification (sample=document) and document splitter in inference mode ([prev2,prev1,curr,next1,next2]).
+    B - number of docs in batch
+    P - number of pages for all docs in batch (padding needed) - P_max in batch
+    S - number of tokens per each page (512)
+    (3, W, H) - image size
+    """
+    if mode not in ("splitter", "classifier"):
+        raise ValueError(f"Unknown mode {mode}")
+
+    def pad(tensor: Any, target_len: Any, dim: Any, pad_value: int = 0) -> Any:
+        pad_size = [0] * (2 * tensor.dim())
+        pad_size[-(2 * dim + 1)] = target_len - tensor.size(dim)
+        return torch.nn.functional.pad(tensor, pad_size, value=pad_value)
+
+    batch_input_ids = []
+    batch_attention_mask = []
+    batch_bbox = []
+    batch_pixel_values = []
+    batch_page_mask = []
+    batch_center_page_idx = []
+    batch_general_page_idx = []
+
+    for sample in batch:
+        pages = sample["pages"]
+        num_pages = len(pages)
+
+        input_ids = torch.stack([p["input_ids"] for p in pages])  # (P, S)
+        attention_mask = torch.stack([p["attention_mask"] for p in pages])
+        bbox = torch.stack([p["bbox"] for p in pages])  # (P, S, 4)
+        pixel_values = torch.stack([p["pixel_values"] for p in pages])  # (P, 3, H, W)
+        page_mask = torch.ones(
+            num_pages, dtype=torch.bool
+        )  # To ignore padding pages for example in LSTM
+
+        # Padding do max_pages
+        input_ids = pad(input_ids, max_pages, 0, 0)
+        attention_mask = pad(attention_mask, max_pages, 0, 0)
+        bbox = pad(bbox, max_pages, 0, 0)
+        pixel_values = pad(pixel_values, max_pages, 0, 0)
+        page_mask = pad(page_mask, max_pages, 0, 0)
+
+        batch_input_ids.append(input_ids)
+        batch_attention_mask.append(attention_mask)
+        batch_bbox.append(bbox)
+        batch_pixel_values.append(pixel_values)
+        batch_page_mask.append(page_mask)
+
+        if mode == "splitter":
+            batch_center_page_idx.append(sample["center_page_idx"])
+            batch_general_page_idx.append(sample["general_page_idx"])
+
+    result = {
+        "input_ids": torch.stack(batch_input_ids),  # (B, P, S)
+        "attention_mask": torch.stack(batch_attention_mask),  # (B, P, S)
+        "bbox": torch.stack(batch_bbox),  # (B, P, S, 4)
+        "pixel_values": torch.stack(batch_pixel_values),  # (B, P, 3, H, W)
+        "page_mask": torch.stack(batch_page_mask),  # (B, P)
+    }
+    if mode == "splitter":
+        result["center_page_idx"] = torch.tensor(batch_center_page_idx)  # (B,)
+        result["general_page_idx"] = torch.tensor(batch_general_page_idx)  # (B,)
+
+    return result
+
+
+class TransformersPageLevelClassifier(BaseDocumentClassifier):
     """
     Transformer based model for document classification using the HuggingFace's transformers framework
     (https://github.com/huggingface/transformers).
@@ -51,6 +179,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         devices: Optional[List[Union[str, "torch.device"]]] = None,
         show_error: Optional[Union[str, bool]] = True,
         id2label: Optional[dict[int, str]] = None,
+        max_pages: Optional[int] = None,
         **kwargs,
     ):
         """
@@ -98,6 +227,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         self.top_k = top_k
         self.progress_bar = False
         self.id2label = id2label
+        self.max_pages = max_pages
         # Keys are always strings in JSON/YAML so convert ids to int here.
         if id2label is not None:
             self.id2label = {int(key): value for key, value in self.id2label.items()}
@@ -143,38 +273,42 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
                 model=model_name_or_path,
                 tokenizer=tokenizer,
                 revision=model_version,
-                token=use_auth_token,
-                device=resolved_devices[0],
+                use_auth_token=use_auth_token,
+                device=self.device,
             )
         elif task == "text-classification":
             self.model = pipeline(
                 task=task,
                 model=model_name_or_path,
                 tokenizer=tokenizer,
-                device=resolved_devices[0],
+                device=self.device,
                 revision=model_version,
                 top_k=top_k,
                 # use_auth_token=use_auth_token,
             )
         elif task == "text-classification-multimodal":
-            # Eventually, will need to use safetensors for security reason.
-            # https://github.com/pytorch/pytorch/security/advisories/GHSA-53q9-r3pm-6pq6
+            self.model_config = ModelRegistry.config(model_name_or_path)
 
-            use_safetensors = any(
-                f.endswith(".safetensors") for f in os.listdir(model_name_or_path)
+            architecture = self.model_config.get("architecture") or (
+                self.model_config.get("architectures")[0]
+                if isinstance(self.model_config.get("architectures"), list)
+                and self.model_config.get("architectures")
+                else None
             )
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                model_name_or_path, use_safetensors=use_safetensors
+
+            model_class = (
+                resolve_architecture(architecture)
+                if architecture
+                else AutoModelForSequenceClassification
             )
-            self.model = self.optimize_model(self.model)
-            self.model = self.model.eval().to(resolved_devices[0])
+
+            self.model = model_class.from_pretrained(model_name_or_path)
+            self.model = optimize_model(self.model, self.logger)
+            self.model = self.model.eval().to(self.device)
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
 
-            feature_extractor = LayoutLMv3ImageProcessor(
-                apply_ocr=False, do_resize=True, resample=Image.BILINEAR
-            )
-            self.processor = LayoutLMv3Processor(
-                feature_extractor, tokenizer=self.tokenizer
+            self.processor = load_layoutlmv3_processor(
+                model_name_or_path, self.tokenizer
             )
 
     def predict(
@@ -187,7 +321,8 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
         if batch_size is None:
             batch_size = self.batch_size
 
-        if len(documents) == 0:
+        page_count = len(documents)
+        if page_count == 0:
             return documents
 
         if self.task == "text-classification-multimodal":
@@ -199,7 +334,6 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             )
 
         # create a named tuple of (document, words, boxes) for each document
-
         batchable_docs = DocList(
             BatchableMarieDoc(
                 tensor=doc.tensor,
@@ -208,6 +342,14 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             )
             for doc, word, box in zip(documents, words, boxes)
         )
+
+        # truncate to max_pages
+        if self.max_pages is not None and page_count > self.max_pages:
+            self.logger.warning(
+                f"The classifier determines the class based on a maximum of {self.max_pages} relevant pages. "
+                f"Pages {self.max_pages + 1} - {page_count} will not be considered."
+            )
+            batchable_docs = batchable_docs[: self.max_pages]
 
         batches = batch_iterator(batchable_docs, batch_size)
         predictions = []
@@ -285,6 +427,7 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
 
             predictions.extend(batch_results)
 
+        # TODO no matter the batch_size we only take the first prediction (first batch)
         for document, prediction in zip(documents, predictions):
             if (
                 self.task == "text-classification-multimodal"
@@ -363,23 +506,472 @@ class TransformersDocumentClassifier(BaseDocumentClassifier):
             }
         ]
 
-    def optimize_model(self, model: nn.Module) -> Callable | Module:
-        """Optimizes the model for inference. This method is called by the __init__ method."""
-        if False:
-            return model
 
-        try:
-            with TimeContext("Compiling model", logger=self.logger):
-                import torch._dynamo as dynamo
-                import torchvision.models as models
+class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
+    """
+    Transformer based model for document classification using the HuggingFace's transformers framework
+    (https://github.com/huggingface/transformers).
+    """
 
-                # ['aot_eager', 'aot_eager_decomp_partition', 'aot_torchxla_trace_once', 'aot_torchxla_trivial', 'aot_ts', 'aot_ts_nvfuser', 'cudagraphs', 'dynamo_accuracy_minifier_backend', 'dynamo_minifier_backend', 'eager', 'inductor', 'ipex', 'nvprims_aten', 'nvprims_nvfuser', 'onnxrt', 'torchxla_trace_once', 'torchxla_trivial', 'ts', 'tvm']
-                torch._dynamo.config.verbose = False
-                torch._dynamo.config.suppress_errors = True
-                # torch.backends.cudnn.benchmark = True
-                # https://dev-discuss.pytorch.org/t/torchinductor-update-4-cpu-backend-started-to-show-promising-performance-boost/874
-                model = torch.compile(model)
-                return model
-        except Exception as err:
-            self.logger.warning(f"Model compile not supported: {err}")
-            return model
+    def __init__(
+        self,
+        model_name_or_path: Union[str, os.PathLike],
+        model_version: Optional[str] = None,
+        tokenizer: Optional[str] = None,
+        use_gpu: bool = True,
+        top_k: Optional[int] = 1,
+        task: str = "default",
+        labels: Optional[List[str]] = None,
+        batch_size: int = 1,
+        classification_field: Optional[str] = None,
+        use_auth_token: Optional[Union[str, bool]] = None,
+        devices: Optional[List[Union[str, "torch.device"]]] = None,
+        show_error: Optional[Union[str, bool]] = True,
+        id2label: Optional[dict[int, str]] = None,
+        max_pages: Optional[int] = None,
+        **kwargs,
+    ):
+        """
+        Load a text classification model from ModelRepository or HuggingFace model hub.
+
+        See https://huggingface.co/models for full list of available models.
+        Filter for text classification models: https://huggingface.co/models?pipeline_tag=text-classification&sort=downloads
+        Filter for zero-shot classification models (NLI): https://huggingface.co/models?pipeline_tag=zero-shot-classification&sort=downloads&search=nli
+
+        :param model_name_or_path: Directory of a saved model or the name of a public model  from the HuggingFace model hub.
+        See https://huggingface.co/models for full list of available models.
+        :param model_version: The version of model to use from the HuggingFace model hub. Can be tag name, branch name, or commit hash.
+        :param tokenizer: Name of the tokenizer (usually the same as model)
+        :param use_gpu: Whether to use GPU (if available).
+        :param top_k: The number of top predictions to return. The default is 1. Enter None to return all the predictions. Only used for task 'text-classification'.
+        :param task: 'text-classification' or 'zero-shot-classification'
+        :param labels: Only used for task 'zero-shot-classification'. List of string defining class labels, e.g.,
+        ["positive", "negative"] otherwise None. Given a LABEL, the sequence fed to the model is "<cls> sequence to
+        classify <sep> This example is LABEL . <sep>" and the model predicts whether that sequence is a contradiction
+        or an entailment.
+        :param batch_size: Number of Documents to be processed at a time.
+        :param classification_field: Name of Document's meta field to be used for classification. If left unset, Document.tensor is used by default.
+        :param use_auth_token: The API token used to download private models from Huggingface.
+                               If this parameter is set to `True`, then the token generated when running
+                               `transformers-cli login` (stored in ~/.huggingface) will be used.
+                               Additional information can be found here
+                               https://huggingface.co/transformers/main_classes/model.html#transformers.PreTrainedModel.from_pretrained
+        :param devices: List of torch devices (e.g. cuda, cpu, mps) to limit inference to specific devices.
+                        A list containing torch device objects and/or strings is supported (For example
+                        [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
+                        parameter is not used and a single cpu device is used for inference.
+        :param show_error: Whether to show errors during inference. If set to False, errors will be logged as debug messages.
+        :param id2label: A dictionary mapping label ids to label names. Only used for task 'text-classification' and 'text-classification-multimodal'.
+        :param kwargs: Additional keyword arguments passed to the model.
+        """
+        super().__init__(**kwargs)
+        self.logger = MarieLogger(self.__class__.__name__).logger
+        self.logger.info(f"Document classification : {model_name_or_path}")
+        self.show_error = show_error  # show prediction errors
+        self.batch_size = batch_size
+        self.task = task
+        self.labels = labels
+        self.top_k = top_k
+        self.progress_bar = False
+        self.id2label = id2label
+        self.max_pages = max_pages
+        # Keys are always strings in JSON/YAML so convert ids to int here.
+        if id2label is not None:
+            self.id2label = {int(key): value for key, value in self.id2label.items()}
+
+        resolved_devices, _ = initialize_device_settings(
+            devices=devices, use_cuda=use_gpu, multi_gpu=False
+        )
+        if len(resolved_devices) > 1:
+            self.logger.warning(
+                "Multiple devices are not supported in %s inference, using the first device %s.",
+                self.__class__.__name__,
+                resolved_devices[0],
+            )
+        self.device = resolved_devices[0]
+
+        registry_kwargs = {
+            "__model_path__": __model_path__,
+            "use_auth_token": use_auth_token,
+        }
+
+        model_name_or_path = ModelRegistry.get(
+            model_name_or_path,
+            version=None,
+            raise_exceptions_for_missing_entries=True,
+            **registry_kwargs,
+        )
+        assert os.path.exists(model_name_or_path)
+        self.logger.info(f"Resolved model : {model_name_or_path}")
+
+        if tokenizer is None:
+            tokenizer = model_name_or_path
+
+        self.model_config = ModelRegistry.config(model_name_or_path)
+
+        architecture = self.model_config.get("architecture") or (
+            self.model_config.get("architectures")[0]
+            if isinstance(self.model_config.get("architectures"), list)
+            and self.model_config.get("architectures")
+            else None
+        )
+
+        model_class = (
+            resolve_architecture(architecture)
+            if architecture
+            else AutoModelForSequenceClassification
+        )
+
+        self.model = model_class.from_pretrained(model_name_or_path)
+        self.model = optimize_model(self.model, self.logger)
+        self.model = self.model.eval().to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
+        self.processor = load_layoutlmv3_processor(model_name_or_path, self.tokenizer)
+
+    def _predict_document_class(self, data_loader: Iterable) -> list:
+        """Predict single multi-pages document class"""
+        results = []
+        with torch.no_grad():
+            for batch in tqdm(
+                data_loader,
+                desc="Running Inference",
+                total=len(data_loader),
+                unit="batch",
+                delay=0.1,
+                disable=not self.progress_bar,
+            ):
+                for k in batch:
+                    batch[k] = batch[k].to(self.device)
+                outputs = self.model(**batch)
+
+                probabilities = F.softmax(outputs, dim=-1).squeeze().tolist()
+                predicted_class = outputs.argmax(dim=-1)
+
+                results.append(
+                    {
+                        "label": self.id2label[predicted_class.item()],
+                        "score": probabilities[predicted_class.item()],
+                    }
+                )
+
+            return results
+
+    def predict(
+        self,
+        documents: DocList[MarieDoc],
+        words: Optional[List[List[str]]] = None,
+        boxes: Optional[List[List[List[int]]]] = None,
+        batch_size: Optional[int] = None,  # batch_size in DOCUMENTS
+    ) -> DocList[MarieDoc]:
+        if batch_size is None:
+            batch_size = self.batch_size
+
+        page_count = len(documents)
+        if page_count == 0:
+            return documents
+
+        assert words is not None and boxes is not None, (
+            "words and boxes must be provided for sequence classification"
+        )
+        assert len(documents) == len(words) == len(boxes), (
+            "documents, words and boxes must have the same length"
+        )
+
+        # create a named tuple of (document, words, boxes) for each page in document
+        batchable_doc_pages = DocList(
+            BatchableMarieDoc(tensor=doc.tensor, words=word, boxes=box)
+            for doc, word, box in zip(documents, words, boxes)
+        )
+
+        # truncate to max_pages
+        if self.max_pages is not None and page_count > self.max_pages:
+            self.logger.warning(
+                f"The classifier determines the class based on a maximum of {self.max_pages} relevant pages. "
+                f"Pages {self.max_pages + 1} - {page_count} will not be considered."
+            )
+            batchable_doc_pages = batchable_doc_pages[: self.max_pages]
+
+        dataset = DocumentClassificationInferenceDataset(
+            batchable_doc_pages, self.processor
+        )
+        data_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            collate_fn=partial(
+                collate_fn_inference, mode="classifier", max_pages=self.max_pages
+            ),
+            shuffle=False,
+            num_workers=0,
+            drop_last=False,
+            pin_memory=True,
+        )
+
+        predictions = self._predict_document_class(data_loader)
+
+        self.logger.info(f"Classification: {predictions[0]}")
+        formatted_prediction = {
+            "label": predictions[0]["label"],
+            "score": predictions[0]["score"],
+        }
+        for page_document in documents:
+            page_document.tags["classification"] = formatted_prediction
+
+        documents.tags.append(
+            {"task": self.task, "classification": formatted_prediction}
+        )
+        return documents
+
+
+class TransformersSplittingClassifier(BaseDocumentClassifier):
+    """
+    Transformer based model for document classification using the HuggingFace's transformers framework
+    (https://github.com/huggingface/transformers).
+    """
+
+    def __init__(
+        self,
+        model_name_or_path: Union[str, os.PathLike],
+        model_version: Optional[str] = None,
+        tokenizer: Optional[str] = None,
+        use_gpu: bool = True,
+        top_k: Optional[int] = 1,
+        task: str = "default",
+        labels: Optional[List[str]] = None,
+        batch_size: int = 1,
+        classification_field: Optional[str] = None,
+        use_auth_token: Optional[Union[str, bool]] = None,
+        devices: Optional[List[Union[str, "torch.device"]]] = None,
+        show_error: Optional[Union[str, bool]] = True,
+        id2label: Optional[dict[int, str]] = None,
+        max_pages: Optional[int] = None,
+        **kwargs,
+    ):
+        """
+        Load a text classification model from ModelRepository or HuggingFace model hub.
+
+        See https://huggingface.co/models for full list of available models.
+        Filter for text classification models: https://huggingface.co/models?pipeline_tag=text-classification&sort=downloads
+        Filter for zero-shot classification models (NLI): https://huggingface.co/models?pipeline_tag=zero-shot-classification&sort=downloads&search=nli
+
+        :param model_name_or_path: Directory of a saved model or the name of a public model  from the HuggingFace model hub.
+        See https://huggingface.co/models for full list of available models.
+        :param model_version: The version of model to use from the HuggingFace model hub. Can be tag name, branch name, or commit hash.
+        :param tokenizer: Name of the tokenizer (usually the same as model)
+        :param use_gpu: Whether to use GPU (if available).
+        :param top_k: The number of top predictions to return. The default is 1. Enter None to return all the predictions. Only used for task 'text-classification'.
+        :param task: 'text-classification' or 'zero-shot-classification'
+        :param labels: Only used for task 'zero-shot-classification'. List of string defining class labels, e.g.,
+        ["positive", "negative"] otherwise None. Given a LABEL, the sequence fed to the model is "<cls> sequence to
+        classify <sep> This example is LABEL . <sep>" and the model predicts whether that sequence is a contradiction
+        or an entailment.
+        :param batch_size: Number of Documents to be processed at a time.
+        :param classification_field: Name of Document's meta field to be used for classification. If left unset, Document.tensor is used by default.
+        :param use_auth_token: The API token used to download private models from Huggingface.
+                               If this parameter is set to `True`, then the token generated when running
+                               `transformers-cli login` (stored in ~/.huggingface) will be used.
+                               Additional information can be found here
+                               https://huggingface.co/transformers/main_classes/model.html#transformers.PreTrainedModel.from_pretrained
+        :param devices: List of torch devices (e.g. cuda, cpu, mps) to limit inference to specific devices.
+                        A list containing torch device objects and/or strings is supported (For example
+                        [torch.device('cuda:0'), "mps", "cuda:1"]). When specifying `use_gpu=False` the devices
+                        parameter is not used and a single cpu device is used for inference.
+        :param show_error: Whether to show errors during inference. If set to False, errors will be logged as debug messages.
+        :param id2label: A dictionary mapping label ids to label names. Only used for task 'text-classification' and 'text-classification-multimodal'.
+        :param kwargs: Additional keyword arguments passed to the model.
+        """
+        super().__init__(**kwargs)
+        self.logger = MarieLogger(self.__class__.__name__).logger
+        self.logger.info(f"Document splitting : {model_name_or_path}")
+        self.show_error = show_error  # show prediction errors
+        self.batch_size = batch_size
+        self.task = task
+        self.labels = labels
+        self.top_k = top_k
+        self.progress_bar = False
+        self.id2label = id2label
+        self.max_pages = max_pages
+        # Keys are always strings in JSON/YAML so convert ids to int here.
+        if id2label is not None:
+            self.id2label = {int(key): value for key, value in self.id2label.items()}
+
+        resolved_devices, _ = initialize_device_settings(
+            devices=devices, use_cuda=use_gpu, multi_gpu=False
+        )
+        if len(resolved_devices) > 1:
+            self.logger.warning(
+                "Multiple devices are not supported in %s inference, using the first device %s.",
+                self.__class__.__name__,
+                resolved_devices[0],
+            )
+        self.device = resolved_devices[0]
+
+        registry_kwargs = {
+            "__model_path__": __model_path__,
+            "use_auth_token": use_auth_token,
+        }
+
+        model_name_or_path = ModelRegistry.get(
+            model_name_or_path,
+            version=None,
+            raise_exceptions_for_missing_entries=True,
+            **registry_kwargs,
+        )
+        assert os.path.exists(model_name_or_path)
+        self.logger.info(f"Resolved model : {model_name_or_path}")
+
+        if tokenizer is None:
+            tokenizer = model_name_or_path
+
+        self.model_config = ModelRegistry.config(model_name_or_path)
+
+        architecture = self.model_config.get("architecture") or (
+            self.model_config.get("architectures")[0]
+            if isinstance(self.model_config.get("architectures"), list)
+            and self.model_config.get("architectures")
+            else None
+        )
+
+        model_class = (
+            resolve_architecture(architecture)
+            if architecture
+            else AutoModelForSequenceClassification
+        )
+
+        self.model = model_class.from_pretrained(model_name_or_path)
+        self.model = optimize_model(self.model, self.logger)
+        self.model = self.model.eval().to(self.device)
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+
+        self.context_pages_num = int(
+            self.model_config.get("custom_model_parameters", {}).get(
+                "context_pages_num", 5
+            )
+        )
+
+        self.processor = load_layoutlmv3_processor(model_name_or_path, self.tokenizer)
+
+    def _predict_document_boundaries(self, data_loader: Iterable) -> list:
+        """Predict boundaries between pages for single LbxID"""
+        results = []
+        with torch.no_grad():
+            for batch in tqdm(
+                data_loader,
+                desc="Running Inference",
+                total=len(data_loader),
+                unit="batch",
+                delay=0.1,
+                disable=not self.progress_bar,
+            ):
+                exclude_keys = {"seq_id", "general_page_idx"}
+                for k in batch:
+                    if k not in exclude_keys:
+                        batch[k] = batch[k].to(self.device)
+                page_idx = batch.pop("general_page_idx", None)
+                outputs = self.model(**batch)
+                probs = F.softmax(outputs, dim=1)
+                predictions = outputs.argmax(dim=1)
+
+                for i in range(len(predictions)):
+                    confidence = probs[i][predictions[i]].item()
+                    curr_page_num = page_idx[i].item()
+                    results.append(
+                        {
+                            "current_page_num": curr_page_num + 1,
+                            "label": predictions[i].item(),
+                            "score": confidence,
+                        }
+                    )
+
+        return results
+
+    def predict(
+        self,
+        documents: DocList[MarieDoc],
+        words: Optional[List[List[str]]] = None,
+        boxes: Optional[List[List[List[int]]]] = None,
+        batch_size: Optional[int] = None,  # batch_size in DOCUMENTS
+    ) -> DocList[MarieDoc]:
+        if batch_size is None:
+            batch_size = self.batch_size
+
+        page_count = len(documents)
+        if page_count == 0:
+            return documents
+
+        assert words is not None and boxes is not None, (
+            "words and boxes must be provided for sequence classification"
+        )
+        assert len(documents) == len(words) == len(boxes), (
+            "documents, words and boxes must have the same length"
+        )
+
+        # create a named tuple of (document, words, boxes) for each page in document
+        batchable_doc_pages = DocList(
+            BatchableMarieDoc(tensor=doc.tensor, words=word, boxes=box)
+            for doc, word, box in zip(documents, words, boxes)
+        )
+
+        # truncate to max_pages
+        if self.max_pages is not None and page_count > self.max_pages:
+            self.logger.warning(
+                f"The classifier determines the class based on a maximum of {self.max_pages} relevant pages. "
+                f"Pages {self.max_pages + 1} - {page_count} will not be considered."
+            )
+            batchable_doc_pages = batchable_doc_pages[: self.max_pages]
+
+        words = []
+        images = []
+        boxes = []
+        for p in batchable_doc_pages:
+            words.append(p.words)
+            images.append(p.tensor)
+            boxes.append(p.boxes)
+
+        dataset = BoundaryDetectionInferenceDataset(
+            {
+                1: {
+                    "words": words,
+                    "images": images,
+                    "boxes": boxes,
+                }
+            },
+            self.processor,
+            context_size=int((self.context_pages_num - 1) / 2),
+        )
+        data_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            collate_fn=partial(
+                collate_fn_inference, mode="splitter", max_pages=self.context_pages_num
+            ),
+            shuffle=False,
+            num_workers=0,
+            drop_last=False,
+            pin_memory=True,
+        )
+
+        predictions = self._predict_document_boundaries(data_loader)
+
+        # We cannot split on the last page
+        predictions.append(
+            {
+                "current_page_num": page_count,
+                "label": 0,
+                "score": 1.0,
+                "reasoning": "last page",
+            }
+        )
+
+        self.logger.info(f"Predictions: {predictions}")
+        for document, prediction in zip(documents, predictions):
+            formatted_prediction = {
+                "label": prediction["label"],
+                "score": prediction["score"],
+                "details": {
+                    k: v for k, v in prediction.items() if k not in {"label", "score"}
+                },
+            }
+            document.tags["classification"] = formatted_prediction
+
+        return documents
