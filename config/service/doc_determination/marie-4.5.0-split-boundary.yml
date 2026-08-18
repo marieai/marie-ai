@@ -158,19 +158,14 @@ executors:
               rotation:
                 enabled: False
               pages:
-#                - method: exclude
-#                  type: classification
-#                  group: medical-page-classifier
-#                  classifications: [ "OTHER", "SUBSTITUTION-DOC", "BLANK", "ENVELOPE-BACK", "CHECK-BACK", "PATPAY-BACK" ]
-                - method: include
+                - method: exclude
                   type: classification
                   group: medical-page-classifier
-                  classifications: [ "ACH-CHECK","CHECK-FRONT","CHECK-FRONT-PERSONAL","CHECK-FRONT-THIRD-PARTY","CORRESPONDENCE","COVERPAGE","ENVELOPE-FRONT","EOB","MONEY-ORDER-BACK","MONEY-ORDER-FRONT","PATPAY-FRONT","SUMMARY" ]
+                  classifications: [ "OTHER", "SUBSTITUTION-DOC", "BLANK", "ENVELOPE-BACK", "CHECK-BACK", "PATPAY-BACK" ]
               page_classifier:
                 - model_name_or_path: 'rms/split-boundary-classification-layoutlmv3'
                   name: 'split-boundary_layoutlmv3'
                   type: 'splitter'
-                  #          task: 'splitter-task'
                   device: 'cuda'
                   enabled: True
                   batch_size: 8 #8 # same as quantup, this one is pages
