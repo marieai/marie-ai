@@ -270,6 +270,7 @@ def filter_pages_by_classifier_results(
 
             group = rule.get("group")
             method = rule.get("method")
+            min_conf = rule.get("min_conf", 0)
 
             if method not in ("include", "exclude", "split"):
                 logger.warning(
@@ -302,30 +303,27 @@ def filter_pages_by_classifier_results(
             for t in target_results:
                 classification_pages |= t.get("classification", {}).get("pages", {})
 
-            matched_pages = []
-            if method == "exclude":
-                matched_pages = [
-                    page_results["best"]["page"]
-                    for page_results in classification_pages.values()
-                    if page_results.get("best", {}).get("classification")
-                    not in filtered_classifications
-                ]
-            elif method in ("include", "split"):
-                matched_pages = [
-                    page_results["best"]["page"]
-                    for page_results in classification_pages.values()
-                    if page_results.get("best", {}).get("classification")
-                    in filtered_classifications
-                ]
+            matched_pages = [
+                page_results["best"]["page"]
+                for page_results in classification_pages.values()
+                if page_results.get("best", {}).get("classification")
+                in filtered_classifications
+                and page_results.get("best", {}).get("score", 0) >= min_conf
+            ]
 
             if not result_pages:
                 # NOTE: Pages which were skipped by the classification we are filtering on will be filtered out in the result pages
                 result_pages = {i: list(int(k) for k in classification_pages.keys())}
 
             if matched_pages:
-                if method in ("include", "exclude"):
+                if method == "include":
                     for k, v in result_pages.items():
                         result_pages[k] = [page for page in v if page in matched_pages]
+                elif method == "exclude":
+                    for k, v in result_pages.items():
+                        result_pages[k] = [
+                            page for page in v if page not in matched_pages
+                        ]
                 elif method == "split":
                     split_after = set(matched_pages)
                     out = {}
