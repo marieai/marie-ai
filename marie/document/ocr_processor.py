@@ -207,8 +207,30 @@ class OcrProcessor(BaseHandler):
                         fill=(0, 0, 255),
                     )
 
-            unique_line_ids = sorted(np.unique(lines))
-            line_results = np.empty(len(unique_line_ids), dtype=object)
+            # Defensive dedup: identical (box, line, text) should only appear once.
+            deduped_words = []
+            seen_words = set()
+            dupe_words = set()
+            for word in words:
+                key = (
+                    tuple(int(v) for v in word['box']),
+                    int(word['line']),
+                    word['text'],
+                )
+                if key in seen_words:
+                    dupe_words.add(key)
+                    continue
+                seen_words.add(key)
+                deduped_words.append(word)
+
+            if len(deduped_words) != len(words):
+                logger.warning(f"Removed duplicate words: {len(words) - len(deduped_words)}")
+                logger.debug(f"Duplicate words: {dupe_words}")
+                del dupe_words
+            words = deduped_words
+
+            unique_line_ids = sorted({word['line'] for word in words})
+            line_results = []
             aligned_words = []
             word_index = 0
 
@@ -238,13 +260,15 @@ class OcrProcessor(BaseHandler):
                 box_picks = np.array(box_picks)
                 bbox = merge_bboxes_as_block(box_picks)
 
-                line_results[i] = {
+                line_results.append(
+                    {
                     "line": i + 1,  # Line index (1.. N), relative to the image
                     "wordids": word_ids,  # Word ID that make this line
                     "text": text,  # Text from merged text line
                     "bbox": bbox,  # Bounding box of the text
                     "confidence": round(np.average(_conf), 4),
-                }
+                    }
+                )
 
             result = {
                 "meta": meta,

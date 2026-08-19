@@ -470,6 +470,8 @@ class BoxProcessorUlimDit(BoxProcessor):
                 return [], [], []
 
             bboxes = _convert_boxes(boxes)
+            classes = classes.numpy() if classes is not None else None
+            scores = scores.numpy() if scores is not None else None
             self.logger.debug(f"Predicted boxes : {len(boxes)}")
             # adjust the boxes to original image size
             if adj_x != 0 or adj_y != 0:
@@ -490,8 +492,14 @@ class BoxProcessorUlimDit(BoxProcessor):
             min_height = 2
             min_width = 2
             # bboxes are in (xmin,ymin,xmax,ymax) format
-            bboxes = [box for box in bboxes if box[2] - box[0] > min_height]
-            bboxes = [box for box in bboxes if box[3] - box[1] > min_width]
+            widths = bboxes[:, 2] - bboxes[:, 0]
+            heights = bboxes[:, 3] - bboxes[:, 1]
+            valid_mask = np.logical_and(widths > min_width, heights > min_height)
+            bboxes = bboxes[valid_mask]
+            if classes is not None and len(classes) == len(valid_mask):
+                classes = classes[valid_mask]
+            if scores is not None and len(scores) == len(valid_mask):
+                scores = scores[valid_mask]
 
             len_b = len(bboxes)
             if len_a != len_b:
@@ -502,8 +510,29 @@ class BoxProcessorUlimDit(BoxProcessor):
                 self.logger.debug(f"No boxes found within requirements")
                 return [], [], []
 
+            source_bboxes = bboxes.copy()
+            source_classes = classes.copy() if classes is not None else None
+            source_scores = scores.copy() if scores is not None else None
+
             bboxes = merge_boxes(bboxes, 0.08)
             bboxes = np.array(bboxes)
+
+            # Keep class/score aligned after merge by selecting the best-overlap source box.
+            if (
+                source_classes is not None
+                and source_scores is not None
+                and len(source_bboxes) == len(source_classes) == len(source_scores)
+            ):
+                merged_classes = []
+                merged_scores = []
+                for merged_box in bboxes:
+                    ious = [compute_iou(merged_box, box) for box in source_bboxes]
+                    pick_idx = int(np.argmax(ious))
+                    merged_classes.append(source_classes[pick_idx])
+                    merged_scores.append(source_scores[pick_idx])
+
+                classes = np.asarray(merged_classes)
+                scores = np.asarray(merged_scores)
             return bboxes, classes, scores
         except Exception as e:
             self.logger.error(f"Error in PSM_SPARSE_STEP : {e}")
@@ -801,18 +830,17 @@ class BoxProcessorUlimDit(BoxProcessor):
             stop_time = time.time()
             eval_time = round((stop_time - start_time) * 1000, 2)
 
-            # sort by x and line y-coordinated
+            # sort by x and line y-coordinated while keeping line ids aligned with fragments
             augmented_bboxes = []
-            for i, box in enumerate(bboxes):
+            for i, box in enumerate(rect_from_poly):
                 line_number = rect_line_numbers[i]
                 augmented_bboxes.append([box[0], box[1], box[2], box[3], line_number])
             augmented_bboxes = np.array(augmented_bboxes)
 
             if len(augmented_bboxes) > 0:
                 ind = np.lexsort((augmented_bboxes[:, 0], augmented_bboxes[:, 4]))
-                bboxes = bboxes[ind]
-                scores = scores[ind]
                 rect_from_poly = np.array(rect_from_poly)[ind]
+                rect_line_numbers = np.array(rect_line_numbers)[ind].tolist()
                 filtered_fragments = []
                 for i in ind:
                     filtered_fragments.append(fragments[i])
