@@ -207,27 +207,6 @@ class OcrProcessor(BaseHandler):
                         fill=(0, 0, 255),
                     )
 
-            # Defensive dedup: identical (box, line, text) should only appear once.
-            deduped_words = []
-            seen_words = set()
-            dupe_words = set()
-            for word in words:
-                key = (
-                    tuple(int(v) for v in word['box']),
-                    int(word['line']),
-                    word['text'],
-                )
-                if key in seen_words:
-                    dupe_words.add(key)
-                    continue
-                seen_words.add(key)
-                deduped_words.append(word)
-
-            if len(deduped_words) != len(words):
-                logger.warning(f"Removed duplicate words: {len(words) - len(deduped_words)}")
-                logger.debug(f"Duplicate words: {dupe_words}")
-                del dupe_words
-            words = deduped_words
 
             unique_line_ids = sorted({word['line'] for word in words})
             line_results = []

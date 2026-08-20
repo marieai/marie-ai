@@ -19,7 +19,7 @@ class _StubOcrProcessor(OcrProcessor):
         return self._outputs
 
 
-def test_recognize_deduplicates_identical_word_payloads() -> None:
+def test_recognize_returns_list_lines_contract() -> None:
     processor = _StubOcrProcessor(
         outputs=[
             {'text': 'ALPHA', 'confidence': 0.9},
@@ -41,9 +41,9 @@ def test_recognize_deduplicates_identical_word_payloads() -> None:
         'qid', 'kid', image, boxes, fragments, lines, return_overlay=False
     )
 
-    assert len(result['words']) == 2
-    assert [word['text'] for word in result['words']] == ['ALPHA', 'BETA']
+    assert len(result['words']) == 3
+    assert [word['text'] for word in result['words']] == ['ALPHA', 'ALPHA', 'BETA']
     assert isinstance(result['lines'], list)
     assert all(isinstance(line, dict) for line in result['lines'])
     assert all(isinstance(line['text'], str) for line in result['lines'])
-    assert result['lines'][0]['text'] == 'ALPHA BETA'
+    assert result['lines'][0]['text'] == 'ALPHA ALPHA BETA'
