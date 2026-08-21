@@ -15,7 +15,7 @@ from torch import Tensor, nn as nn
 from typing import Any, Optional
 import transformers
 
-from boundary_detection.lmv3_document_splitter import AttentionPooling
+from marie.models.boundary_detection.lmv3_document_splitter import AttentionPooling
 
 
 class LayoutLMv3DocumentClassifier(nn.Module):

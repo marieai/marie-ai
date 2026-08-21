@@ -231,6 +231,7 @@ def get_pipeline_pages(
         else:
             ensure_exists("/tmp/marie")
             with tempfile.TemporaryDirectory(dir="/tmp/marie") as temp_asset_dir:
+                existing_meta = None
                 temp_meta_path = download_asset(
                     ref_id,
                     ref_type,

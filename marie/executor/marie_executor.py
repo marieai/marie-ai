@@ -198,7 +198,6 @@ class MarieExecutor(Executor, StorageMixin):
 
         # Setup storage and asset tracking via StorageMixin
         storage_config = config.get("storage", {})
-        print(f"storage_config >>> {storage_config}")
 
         # S3 storage
         setup_storage(storage_config)

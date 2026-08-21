@@ -91,7 +91,7 @@ def optimize_model(model: nn.Module, logger) -> Callable | Module:
         return model
 
 
-def collate_fn_inference(batch: Any, mode: str, max_pages: int) -> dict:
+def collate_fn_inference(batch: Any, mode: str, max_pages: Optional[int]) -> dict:
     """Adjust the maximum number of pages per-batch (padding to max_pages for batch). Universal collate_fn for both
     document classification (sample=document) and document splitter in inference mode ([prev2,prev1,curr,next1,next2]).
     B - number of docs in batch
@@ -101,6 +101,9 @@ def collate_fn_inference(batch: Any, mode: str, max_pages: int) -> dict:
     """
     if mode not in ("splitter", "classifier"):
         raise ValueError(f"Unknown mode {mode}")
+
+    if max_pages is None:
+        max_pages = max((len(sample["pages"]) for sample in batch), default=0)
 
     def pad(tensor: Any, target_len: Any, dim: Any, pad_value: int = 0) -> Any:
         pad_size = [0] * (2 * tensor.dim())

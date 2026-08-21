@@ -1,8 +1,8 @@
 import os
+from collections import defaultdict
 from typing import Any, List, Optional, Union
 
 import numpy as np
-from black.trans import defaultdict
 from PIL import Image
 
 from marie.boxes import PSMode

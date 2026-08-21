@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from marie.executor.pipeline import (
+    doc_determination_pipeline_executor as executor_module,
+)
 from marie.executor.pipeline.doc_determination_pipeline_executor import (
     doc_determination_collation,
     filter_pages_by_classifier_results,
+    get_pipeline_pages,
 )
 
 
@@ -74,6 +78,35 @@ def test_filter_exclude_removes_only_confident_matches() -> None:
     )
 
     assert pages == {0: [1, 2]}
+
+
+def test_get_pipeline_pages_uses_all_pages_when_metadata_is_missing(
+    monkeypatch, tmp_path
+) -> None:
+    missing_meta_path = tmp_path / 'missing.meta.json'
+    monkeypatch.setattr(
+        executor_module,
+        'download_asset',
+        lambda *args, **kwargs: str(missing_meta_path),
+    )
+
+    pages = get_pipeline_pages(
+        'document-id',
+        'document-type',
+        {
+            'pages': [
+                {
+                    'type': 'classification',
+                    'method': 'include',
+                    'group': 'classifier',
+                    'classifications': ['keep'],
+                }
+            ]
+        },
+        {},
+    )
+
+    assert pages == {0: None}
 
 
 def test_collation_preserves_contiguous_page_range_and_metadata() -> None:
