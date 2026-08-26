@@ -409,7 +409,9 @@ class ExtractPipeline(BasePipeline):
             "char_count": sum(
                 len(line["text"])
                 for page in ocr_results
-                for line in (page.get("lines") or [])
+                for line in (
+                    page.get("lines") if page.get("lines") is not None else []
+                )
                 if "text" in line
             ),
             "page_count": len(ocr_results),
