@@ -288,10 +288,12 @@ def merge_tiff_frames_with_splits_ifd(
     for idx in split_indices:
         if not isinstance(idx, int):
             raise TypeError(f"split index must be int, got {type(idx).__name__}")
-        if idx <= 0 or idx >= frame_count:
+        if idx < 0 or idx >= frame_count:
             raise ValueError(f"split index {idx} out of range for {frame_count} frames")
         if idx in normalized_splits:
             raise ValueError(f"duplicate split index: {idx}")
+        if idx == 0:
+            continue
         normalized_splits.add(idx)
 
     ordered_splits = sorted(normalized_splits)
