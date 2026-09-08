@@ -928,6 +928,49 @@ CREATE INDEX IF NOT EXISTS job_attempt_operational_updated_idx
 CREATE INDEX IF NOT EXISTS job_attempt_operational_activated_idx
     ON marie_scheduler.job_attempt (activated_at DESC, run_attempt_id DESC);
 
+CREATE INDEX IF NOT EXISTS job_attempt_operational_terminal_idx
+    ON marie_scheduler.job_attempt (terminal_at DESC, run_attempt_id DESC)
+    WHERE terminal_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS job_attempt_operational_recovery_idx
+    ON marie_scheduler.job_attempt (recovery_at DESC, run_attempt_id DESC)
+    WHERE recovery_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS job_attempt_operational_facets_idx
+    ON marie_scheduler.job_attempt (gateway_instance_id, executor);
+
+-- Time-dependent attention ranks are evaluated at read time within group 3.
+CREATE INDEX IF NOT EXISTS job_attempt_operational_attention_idx
+    ON marie_scheduler.job_attempt (
+        (CASE
+            WHEN terminal_accepted IS FALSE OR (
+                terminal_at IS NOT NULL AND (
+                    terminal_accepted IS FALSE OR (
+                        terminal_status IS NOT NULL
+                        AND terminal_work_state IS NOT NULL
+                        AND LOWER(terminal_status) <> LOWER(terminal_work_state)
+                    )
+                )
+            ) THEN 0
+            WHEN terminal_at IS NOT NULL AND (
+                (
+                    terminal_gateway_instance_id IS NOT NULL
+                    AND gateway_instance_id IS NOT NULL
+                    AND terminal_gateway_instance_id <> gateway_instance_id
+                )
+                OR (
+                    terminal_scheduler_lease_owner IS NOT NULL
+                    AND terminal_scheduler_lease_owner <> scheduler_lease_owner
+                )
+            ) THEN 1
+            WHEN recovery_at IS NOT NULL THEN 2
+            WHEN terminal_at IS NULL AND recovery_at IS NULL THEN 3
+            ELSE 4
+        END),
+        updated_on DESC,
+        run_attempt_id DESC
+    );
+
 CREATE INDEX IF NOT EXISTS job_u_operational_created_idx
     ON marie_scheduler.job (created_on DESC);
 
@@ -1122,6 +1165,10 @@ BEGIN
         'job_u_expired_acquisition_lease_idx',
         'job_u_expired_run_lease_idx',
         'job_attempt_terminal_lookup_idx',
+        'job_attempt_operational_terminal_idx',
+        'job_attempt_operational_facets_idx',
+        'job_attempt_operational_attention_idx',
+        'job_attempt_operational_recovery_idx',
         'job_u_operational_created_idx',
         'job_u_operational_started_idx',
         'job_u_operational_completed_idx',

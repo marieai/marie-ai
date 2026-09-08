@@ -190,11 +190,16 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('89')" in schema_query
+    assert "VALUES ('95')" in schema_query
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput("
         in schema_query
     )
+    system_throughput = schema_query.split(
+        "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput(", 1
+    )[1].split("$function$;", 1)[0]
+    assert "), bounds AS NOT MATERIALIZED (" in system_throughput
+    assert "j.state::text" not in system_throughput
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_planner_throughput("
         in schema_query
@@ -244,6 +249,163 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
     assert "'refresh_job_durations'" in schema_query
     assert "'refresh_dag_durations'" in schema_query
     assert "cron.schedule(" not in schema_query
+
+
+@pytest.mark.asyncio
+async def test_create_tables_bounds_each_operational_event_source() -> None:
+    connection = FakeConnection(fetchval=[True, True])
+    repository = build_repository(connection)
+
+    await repository.create_tables()
+
+    event_sql = next(
+        query
+        for method, query, _args in connection.calls
+        if method == "execute"
+        and "CREATE OR REPLACE FUNCTION marie_scheduler.list_operational_events("
+        in query
+    )
+    normalized = " ".join(event_sql.split())
+    filters = []
+    for source in ("job", "dag", "activated", "terminal", "recovery"):
+        page_query = normalized.split(f"SELECT * FROM {source}_events ", 1)[1]
+        page_filter, page_order = page_query.split(
+            "ORDER BY occurred_at DESC, event_id DESC ", 1
+        )
+        filters.append(page_filter)
+        assert page_order.startswith("LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1")
+    assert len(set(filters)) == 1
+    assert "(p_severity IS NULL OR severity = p_severity)" in filters[0]
+    assert "(p_component IS NULL OR component = p_component)" in filters[0]
+    assert "p_search IS NULL OR event_id ILIKE '%' || p_search || '%'" in filters[0]
+    assert (
+        "p_before_at IS NULL OR (occurred_at, event_id) < "
+        "( p_before_at, COALESCE(p_before_id, repeat('~', 128)) )"
+    ) in filters[0]
+    assert normalized.count("AS NOT MATERIALIZED (") == 5
+    assert normalized.count("LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1") == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schema", ["marie_scheduler", "scheduler_test"])
+async def test_create_tables_installs_single_pass_task_throughput(schema: str) -> None:
+    connection = FakeConnection(fetchval=[True, True])
+    repository = build_repository(connection)
+
+    await repository.create_tables(schema)
+
+    schema_query = "\n".join(
+        query for method, query, _args in connection.calls if method == "execute"
+    )
+    task_throughput = schema_query.split(
+        f"CREATE OR REPLACE FUNCTION {schema}.monitor_task_throughput(", 1
+    )[1].split("$function$;", 1)[0]
+    assert "LANGUAGE plpgsql\nSTABLE\nPARALLEL SAFE" in task_throughput
+    assert "p_lookback_hours integer DEFAULT 24" in task_throughput
+    assert "p_planner_name text DEFAULT NULL" in task_throughput
+    assert "), bounds AS NOT MATERIALIZED (" in task_throughput
+    assert "RETURN QUERY EXECUTE $query$" in task_throughput
+    assert "$query$ USING p_lookback_hours, p_planner_name;" in task_throughput
+    assert "GREATEST(COALESCE($1, 24), 1)" in task_throughput
+    assert "NULLIF(BTRIM($2), '') AS planner_name" in task_throughput
+    assert "SET enable_parallel_append" not in task_throughput
+    assert "SET work_mem" not in task_throughput
+    assert task_throughput.count(f"FROM {schema}.job j") == 1
+    assert "j.state AS terminal_state" in task_throughput
+    assert "j.state::text" not in task_throughput
+    assert "UNION ALL" not in task_throughput
+    assert "GROUP BY GROUPING SETS (" in task_throughput
+    assert "WHEN GROUPING(t.bucket_start_utc) = 1 THEN 'window_total'" in task_throughput
+    assert "ELSE 'hour'" in task_throughput
+    assert "GROUPING(t.bucket_start_utc) AS bucket_group" in task_throughput
+    assert task_throughput.count("PERCENTILE_CONT(0.95) WITHIN GROUP") == 1
+    assert "AND t.execution_seconds IS NOT NULL" in task_throughput
+    assert "ROUND(AVG(t.execution_seconds) FILTER (" in task_throughput
+    for state in ("completed", "failed", "expired", "cancelled", "skipped"):
+        assert f"WHERE t.terminal_state = '{state}'" in task_throughput
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schema", ["marie_scheduler", "scheduler_test"])
+async def test_create_tables_installs_operational_attempt_event_indexes(
+    schema: str,
+) -> None:
+    connection = FakeConnection(fetchval=[True, True])
+    repository = build_repository(connection)
+
+    await repository.create_tables(schema)
+
+    schema_query = " ".join(
+        " ".join(query.split())
+        for method, query, _args in connection.calls
+        if method == "execute"
+    )
+    for event in ("terminal", "recovery"):
+        definition = (
+            f"CREATE INDEX IF NOT EXISTS job_attempt_operational_{event}_idx "
+            f"ON {schema}.job_attempt ({event}_at DESC, run_attempt_id DESC) "
+            f"WHERE {event}_at IS NOT NULL;"
+        )
+        assert schema_query.count(definition) == 1
+
+    assert (
+        f"CREATE INDEX IF NOT EXISTS job_attempt_operational_facets_idx "
+        f"ON {schema}.job_attempt (gateway_instance_id, executor);"
+    ) in schema_query
+    assert schema_query.count(
+        "CREATE INDEX IF NOT EXISTS job_attempt_operational_attention_idx"
+    ) == 1
+
+
+def test_unpartitioned_reconciliation_includes_operational_event_indexes() -> None:
+    schema_dir = Path(__file__).resolve().parents[4] / "config/psql/schema"
+    index_definitions = (
+        (schema_dir / "076_operational_observability_indexes.sql")
+        .read_text()
+        .format(schema="marie_scheduler")
+    )
+    reconciliation = (
+        schema_dir / "maitenance/apply_unpartitioned_scheduler_definitions.sql"
+    ).read_text()
+
+    assert index_definitions in reconciliation
+
+
+def test_operational_attempt_paging_limits_ids_before_hydration() -> None:
+    schema_dir = Path(__file__).resolve().parents[4] / "config/psql/schema"
+    query = (schema_dir / "077_list_operational_attempts.sql").read_text()
+    paging = query.split("), page_budget AS (", 1)[1].split("), other_page AS (", 1)[0]
+
+    assert "GREATEST($2, 0)::BIGINT" in paging
+    assert "GREATEST($2, 0) < (SELECT total_count FROM metadata)" in paging
+    assert "SELECT *\n    FROM filtered" not in paging
+    for page in ("rejected", "owner", "recovered", "long_running", "stale"):
+        assert f"), {page}_page AS MATERIALIZED (" in paging
+        assert f"(SELECT COUNT(*) FROM {page}_page)" in paging
+    assert "(age_seconds > $9) IS NOT TRUE" in paging
+    assert "(last_update_age_seconds > $10) IS NOT TRUE" in paging
+    assert "WHERE $8 IS DISTINCT FROM 'attention'" in query
+    assert "FROM page_ids\n    JOIN filtered USING (run_attempt_id)" in query
+    assert "LANGUAGE plpgsql\nSTABLE\nPARALLEL SAFE" in query
+    assert "RETURN QUERY EXECUTE $query$" in query
+    assert (
+        "$query$ USING\n"
+        "        p_limit, p_offset, p_states, p_attention, p_gateway,\n"
+        "        p_executor, p_search, p_sort, p_active_too_long_seconds, p_stale_update_seconds;"
+    ) in query
+
+
+def test_operational_attention_index_uses_only_static_categories() -> None:
+    schema_dir = Path(__file__).resolve().parents[4] / "config/psql/schema"
+    indexes = (schema_dir / "076_operational_observability_indexes.sql").read_text()
+    attention = indexes.split(
+        "CREATE INDEX IF NOT EXISTS job_attempt_operational_attention_idx", 1
+    )[1].split(";", 1)[0]
+
+    assert "NOW()" not in attention
+    assert "EXTRACT" not in attention
+    assert "WHEN terminal_at IS NULL AND recovery_at IS NULL THEN 3" in attention
+    assert "updated_on DESC,\n        run_attempt_id DESC" in attention
 
 
 @pytest.mark.asyncio
