@@ -38,7 +38,6 @@ from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
 from marie.prompt.template import PromptTemplate
-from marie.utils.docs import frames_from_file
 from marie.utils.types import to_bool
 from marie.utils.utils import batchify
 
@@ -499,15 +498,19 @@ async def process_batch(
     if request_contexts:
         call_kwargs["request_contexts"] = request_contexts
 
-    if is_multimodal:
-        batch_t = [[b[0], b[1]] for b in batch]
-        responses = await llm_call.acall(batch_t, **call_kwargs)
-    else:
-        batch_t = [b[1] for b in batch]
-        responses = await llm_call.acall(batch_t, **call_kwargs)
+    try:
+        if is_multimodal:
+            batch_t = [[b[0], b[1]] for b in batch]
+            responses = await llm_call.acall(batch_t, **call_kwargs)
+        else:
+            batch_t = [b[1] for b in batch]
+            responses = await llm_call.acall(batch_t, **call_kwargs)
 
-    if write_errors:
-        raise write_errors[0]
+        if write_errors:
+            raise write_errors[0]
+    finally:
+        # Callbacks may fail before the LLM call itself raises.
+        write_errors.clear()
 
     assert isinstance(responses, list), "Expected a list of responses."
     assert len(responses) == len(batch), (
@@ -657,7 +660,6 @@ def prepare_batch_with_meta(
 def prepare_batch_with_meta_units(
     file_batch: List[str],
     units_by_index: Dict[int, Optional["ProcessingUnit"]],
-    frames: list[ndarray],
     doc: UnstructuredDocument,
     prompt: PromptTemplate,
     source_dir: str,
@@ -673,7 +675,6 @@ def prepare_batch_with_meta_units(
     Args:
         file_batch: List of filenames in the batch
         units_by_index: Mapping from batch index to ProcessingUnit (None for legacy mode)
-        frames: List of image frames (numpy arrays)
         doc: The UnstructuredDocument being processed
         prompt: The prompt template
         source_dir: Directory containing the image files
@@ -1059,13 +1060,6 @@ async def ascan_and_process_images(
         return
     processing_items = pending_items
 
-    # Load frames for unique files
-    unique_files = list(dict.fromkeys(item.file_name for item in processing_items))
-    file_to_frame = {
-        f: frames_from_file(os.path.join(source_dir, f))[0] for f in unique_files
-    }
-    frames = [file_to_frame[item.file_name] for item in processing_items]
-
     batched_items = list(batchify(processing_items, mini_batch_size))
     logging.info(
         "Batching %d processing items into %d batches.",
@@ -1081,7 +1075,6 @@ async def ascan_and_process_images(
         gen = prepare_batch_with_meta_units(
             file_batch=file_batch,
             units_by_index=units_by_index,
-            frames=frames,
             doc=document,
             prompt=prompt,
             source_dir=source_dir,
@@ -1132,8 +1125,12 @@ async def ascan_and_process_images(
                 errors.append(exc)
                 stop.set()
 
-    await asyncio.gather(*(_batch_worker() for _ in range(worker_count)))
-    if errors:
-        raise errors[0]
+    try:
+        await asyncio.gather(*(_batch_worker() for _ in range(worker_count)))
+        if errors:
+            raise errors[0]
+    finally:
+        # Tracebacks retain this frame; clear saved errors on every exit.
+        errors.clear()
 
     logging.debug("All image batches have been processed.")

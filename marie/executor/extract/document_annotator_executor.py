@@ -337,12 +337,12 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 pass
 
             self.logger.error(f"Extract error : {error}", exc_info=True)
-            reported_error = (
+            error_type = type(
                 error.primary_error
                 if isinstance(error, BatchExecutionError)
                 and error.primary_error is not None
                 else error
-            )
+            ).__name__
             msg = "inference exception"
             if self.show_error:
                 msg = (str(error),)
@@ -351,7 +351,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 "runtime_info": self.runtime_info,
                 "error": msg,
                 "error_details": {
-                    "type": type(reported_error).__name__,
+                    "type": error_type,
                     "message": str(error) if self.show_error else msg,
                 },
             }

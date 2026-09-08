@@ -881,7 +881,12 @@ def test_scan_stops_new_work_and_finishes_active_batches(tmp_path):
 
     async def run():
         with (
-            mock.patch.object(util, "frames_from_file", return_value=[object()]),
+            mock.patch.object(
+                util,
+                "frames_from_file",
+                side_effect=AssertionError("full-document frames must not be loaded"),
+                create=True,
+            ) as eager_frame_loader,
             mock.patch.object(
                 util,
                 "prepare_batch_with_meta_units",
@@ -908,6 +913,7 @@ def test_scan_stops_new_work_and_finishes_active_batches(tmp_path):
 
         assert second_finished.is_set()
         assert processed == ["00001.png", "00002.png"]
+        eager_frame_loader.assert_not_called()
 
     asyncio.run(run())
 
@@ -940,7 +946,12 @@ def test_scan_resumes_missing_and_invalid_outputs(tmp_path):
 
     async def run():
         with (
-            mock.patch.object(util, "frames_from_file", return_value=[object()]),
+            mock.patch.object(
+                util,
+                "frames_from_file",
+                side_effect=AssertionError("full-document frames must not be loaded"),
+                create=True,
+            ) as eager_frame_loader,
             mock.patch.object(
                 util,
                 "prepare_batch_with_meta_units",
@@ -963,6 +974,8 @@ def test_scan_resumes_missing_and_invalid_outputs(tmp_path):
                 expect_output="json",
                 mini_batch_size=1,
             )
+
+        eager_frame_loader.assert_not_called()
 
     asyncio.run(run())
 
