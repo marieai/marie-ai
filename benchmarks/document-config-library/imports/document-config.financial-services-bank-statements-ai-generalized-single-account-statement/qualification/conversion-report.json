@@ -1,0 +1,36 @@
+{
+  "blueprintId": "bp.document-config.financial-services-bank-statements-ai-generalized-single-account-statement",
+  "configurationId": "document-config.financial-services-bank-statements-ai-generalized-single-account-statement",
+  "fieldCount": 23,
+  "findings": [
+    {
+      "code": "multiple-extraction-candidates",
+      "fieldPath": "start_date",
+      "message": "2 source extraction candidates target the same output field",
+      "severity": "info"
+    },
+    {
+      "code": "multiple-extraction-candidates",
+      "fieldPath": "end_date",
+      "message": "2 source extraction candidates target the same output field",
+      "severity": "info"
+    },
+    {
+      "code": "multiple-extraction-candidates",
+      "fieldPath": "beginning_balance",
+      "message": "2 source extraction candidates target the same output field",
+      "severity": "info"
+    }
+  ],
+  "parseMode": "strict",
+  "primitiveCounts": {
+    "list": 2,
+    "property": 9,
+    "query": 9,
+    "suppressOutput": 1,
+    "zip": 2
+  },
+  "qualificationRequired": true,
+  "readiness": "candidate",
+  "schemaVersion": 1
+}

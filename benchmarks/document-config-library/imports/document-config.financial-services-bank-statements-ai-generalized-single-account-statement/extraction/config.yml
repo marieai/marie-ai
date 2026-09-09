@@ -1,0 +1,20 @@
+annotators:
+  document-config-extract:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      expect_output: json
+      frequency_penalty: 0
+      model_name: qwen_3_instruct
+      multimodal: true
+      presence_penalty: 0
+      prompt_path: ./prompts/document-config-extract.j2
+      temperature: 0
+      top_p: 1
+    parser: noop
+    validators: []
+grounding:
+  key-value: []
+layout_id: document-config-financial-services-bank-statements-ai-generalized-single-account-statement
+processing:
+  convert_to_structure: false

@@ -1,0 +1,195 @@
+{
+  "beginning_balance": 159.63,
+  "checks": [
+    {
+      "amount": 2884.38,
+      "check_number": "1001",
+      "date": "06/06/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 3057.0,
+      "check_number": "1002",
+      "date": "06/06/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 8173.45,
+      "check_number": "1003",
+      "date": "06/13/2023",
+      "description": "Skipped check number marker in source",
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 6146.5,
+      "check_number": "1004",
+      "date": "06/07/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 45000.0,
+      "check_number": "1005",
+      "date": "06/09/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 2104.2,
+      "check_number": "1006",
+      "date": "06/20/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 389.44,
+      "check_number": "1007",
+      "date": "06/21/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 85.8,
+      "check_number": "1008",
+      "date": "06/30/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    },
+    {
+      "amount": 86459.85,
+      "check_number": "1009",
+      "date": "06/30/2023",
+      "description": null,
+      "type_of_check": "Checks Cleared"
+    }
+  ],
+  "customer_address": "1234 TEST STREET, SAN FRANCISCO CA 94016",
+  "customer_name": "JOHN SMITH",
+  "end_date": "06/30/2023",
+  "ending_balance": 23346.82,
+  "start_date": "06/01/2023",
+  "transactions": [
+    {
+      "amount": 15000.0,
+      "date": "06/01/2023",
+      "description": "Internet Transfer from SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 50000.0,
+      "date": "06/06/2023",
+      "description": "Internet Transfer from SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 6000.0,
+      "date": "06/13/2023",
+      "description": "Internet Transfer from SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 2000.0,
+      "date": "06/20/2023",
+      "description": "Internet Transfer from SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 169896.39,
+      "date": "06/20/2023",
+      "description": "INCOMING WIRE TRANSFER",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 500.0,
+      "date": "06/23/2023",
+      "description": "Internet Transfer from SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 1000.0,
+      "date": "06/23/2023",
+      "description": "Internet Transfer from SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 110000.0,
+      "date": "06/26/2023",
+      "description": "Internet Transfer from SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Credit"
+    },
+    {
+      "amount": 5000.0,
+      "date": "06/02/2023",
+      "description": "Internet Transfer to SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 566.56,
+      "date": "06/07/2023",
+      "description": "UNITED RENTALS",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 110.88,
+      "date": "06/08/2023",
+      "description": "LOWES SIG PURCH 06/07 18:36",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 62.05,
+      "date": "06/09/2023",
+      "description": "LOWES SIG PURCH 06/08 20:38",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 45500.0,
+      "date": "06/21/2023",
+      "description": "Internet Transfer to SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 51.86,
+      "date": "06/22/2023",
+      "description": "THE HOME DEPOT SIG PURCH 06/21 11:38",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 2000.0,
+      "date": "06/22/2023",
+      "description": "Internet Transfer to SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 25000.0,
+      "date": "06/22/2023",
+      "description": "Internet Transfer to SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 98400.0,
+      "date": "06/23/2023",
+      "description": "Internet Transfer to SMALL BUSINESS CHECKING",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 27.23,
+      "date": "06/26/2023",
+      "description": "THE HOME DEPOT SIG PURCH 06/23 08:37",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 175.0,
+      "date": "06/29/2023",
+      "description": "SMART & QUICK SIG PURCH 06/28 11:10",
+      "type_of_transaction": "Electronic Debit"
+    },
+    {
+      "amount": 15.0,
+      "date": "06/20/2023",
+      "description": "INCOMING WIRE TRANSFER FEE",
+      "type_of_transaction": "Other Debit"
+    }
+  ]
+}
