@@ -2970,6 +2970,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", marker = "extra == 'queue'", specifier = ">=4,<5" },
+    { name = "httpcore", marker = "extra == 'queue'", specifier = ">=1.0.9,<1.1" },
+    { name = "httpx", marker = "extra == 'queue'", specifier = ">=0.28,<0.29" },
     { name = "diskcache", specifier = ">=5.6.0" },
     { name = "json-repair", specifier = ">=0.55.0" },
     { name = "json5", specifier = ">=0.12.0" },

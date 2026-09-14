@@ -508,7 +508,7 @@ def test_build_dispatcher_builds_lane_endpoint_adapters():
         if lane["pool_id"] == "interactive"
     )
     assert lane["pool_id"] == "interactive"
-    assert lane["endpoint_url"] == "http://interactive:4000/v1"
+    assert "endpoint_url" not in lane
 
 
 @pytest.mark.asyncio
@@ -591,18 +591,21 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
         if message.startswith("Started LLM DRR dispatch runtime")
     )
     assert "  pools: 3" in started_message
+    assert "http://" not in started_message
+    assert "secret" not in started_message
+    assert "queue-backend" not in started_message
     assert (
-        "interactive -> http://interactive:4000/v1 "
+        "interactive "
         "(explicit; quantum=1, protected=0, max=unbounded, burst=default)"
         in started_message
     )
     assert (
-        "backfill -> http://queue-backend:4000/v1 "
+        "backfill "
         "(runtime default; quantum=1, protected=0, max=unbounded, burst=default)"
         in started_message
     )
     assert (
-        "default -> http://queue-backend:4000/v1 "
+        "default "
         "(runtime default; quantum=1, protected=0, max=unbounded, burst=default)"
         in started_message
     )
@@ -625,8 +628,23 @@ async def test_gateway_llm_dispatch_runtime_requires_valkey_when_enabled():
     )
 
     with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
-        with pytest.raises(RuntimeFailToStart, match="LLM_QUEUE_VALKEY_URL"):
+        with pytest.raises(RuntimeFailToStart, match="LLM_QUEUE_URL"):
             await runtime.start()
+
+
+def test_gateway_llm_dispatch_runtime_reports_canonical_queue_diagnostic():
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "LLM_QUEUE_ENABLED": "true",
+            "LLM_QUEUE_URL": "redis://queue:6379/0",
+        },
+        clear=True,
+    ):
+        health = GatewayLlmDispatchRuntime(logger=_Logger()).health()
+
+    assert health["queue_configured"] is True
+    assert "valkey_configured" not in health
 
 
 @pytest.mark.asyncio

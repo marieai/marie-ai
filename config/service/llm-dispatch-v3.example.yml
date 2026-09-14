@@ -1,0 +1,24 @@
+# Opt in only for a qualified fabric. Also set LLM_QUEUE_ENABLED=true and LLM_QUEUE_URL.
+# Producer V3 integration is a separate rollout requirement; the deployed default remains v2.
+queue_contract_version: v3
+fabric_group_id: example-fabric
+llm_dispatch:
+  endpoints:
+    - endpoint_id: primary
+      base_url: https://inference.example/v1
+      credential_env: PRIMARY_INFERENCE_API_KEY
+      allow_private: false
+      allow_loopback: false
+      enabled: true
+      execution_limit: 8
+      execution_bytes: 67108864
+      call_timeout_seconds: 60
+      max_response_bytes: 1048576
+      retry_429: false
+  lanes:
+    - pool_id: default
+      endpoint_id: primary
+      revision: r1
+      enabled: true
+      execution_limit: 8
+      execution_bytes: 67108864

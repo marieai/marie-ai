@@ -21,6 +21,7 @@ from grpc_health.v1.health_pb2 import HealthCheckResponse
 from marie.engine.llm_queue.registry import (
     dispatch_runtime_live_state,
     dispatch_runtime_snapshot,
+    read_runtime_snapshot,
 )
 from rich.traceback import install
 
@@ -219,7 +220,27 @@ LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S = 5.0
 
 
 def _llm_dispatch_runtime_event_fingerprint(snapshot: dict[str, Any]) -> str:
-    return json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
+    def stable(value):
+        if isinstance(value, dict):
+            return {
+                key: stable(item)
+                for key, item in value.items()
+                if key
+                not in {
+                    'observed_at',
+                    'snapshot_at',
+                    'inflight_age_seconds',
+                    'oldest_pending_age_seconds',
+                    'pending_age_seconds',
+                }
+            }
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+
+    return json.dumps(
+        stable(snapshot), sort_keys=True, separators=(",", ":"), default=str
+    )
 
 
 def _llm_dispatch_runtime_event_result(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -584,6 +605,7 @@ class MarieServerGateway(CompositeServer):
             async def http_exception_handler(request: Request, exc: HTTPException):
                 return JSONResponse(
                     status_code=exc.status_code,
+                    headers=exc.headers,
                     content={"status": "error", "message": exc.detail},
                 )
 
@@ -597,54 +619,13 @@ class MarieServerGateway(CompositeServer):
                 self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 return {"result": "ok"}
 
-            @app.api_route(
-                path="/api/debug",
-                methods=["GET"],
-                summary="Get scheduler debug information /api/debug",
+            from marie.serve.runtimes.gateway.marie.operator_routes import (
+                add_runtime_routes,
             )
-            async def get_debug_info():
-                """
-                Get debug information from the job scheduler.
-                :return:
-                """
-                self.logger.info(
-                    f"Debug info requested at {datetime.now(timezone.utc)}"
-                )
-                try:
-                    debug_data = await self.job_scheduler.debug_info()
-                    debug_data["llm_dispatch"] = dispatch_runtime_live_state(
-                        limit_per_pool=50
-                    )
-                    return {"status": "OK", "result": debug_data}
-                except Exception as e:
-                    self.logger.error(f"Error getting debug info: {str(e)}")
-                    return {
-                        "status": "error",
-                        "result": f"Failed to get debug info: {str(e)}",
-                    }
 
-            @app.api_route(
-                path="/api/llm-dispatch/runtime",
-                methods=["GET"],
-                summary="Get live LLM dispatch runtime information /api/llm-dispatch/runtime",
+            add_runtime_routes(
+                app, lambda: self.llm_dispatch_runtime.config.fabric_group_id
             )
-            async def get_llm_dispatch_runtime(
-                limit: int = Query(default=50, ge=1, le=250),
-            ):
-                self.logger.info(
-                    f"LLM dispatch runtime requested at {datetime.now(timezone.utc)}"
-                )
-                try:
-                    runtime_data = dispatch_runtime_live_state(limit_per_pool=limit)
-                    return {"status": "OK", "result": runtime_data}
-                except Exception as e:
-                    self.logger.error(
-                        f"Error getting LLM dispatch runtime info: {str(e)}"
-                    )
-                    return {
-                        "status": "error",
-                        "result": f"Failed to get LLM dispatch runtime info: {str(e)}",
-                    }
 
             @app.api_route(
                 path="/api/debug/reset-dags",
@@ -1166,7 +1147,6 @@ class MarieServerGateway(CompositeServer):
                 request: Request, token: str = Depends(TokenBearer())
             ):
                 self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
-                self.logger.debug(f"Token : {token}")
 
                 metric_labels = {"endpoint": "/api/v1/invoke", "status": "success"}
 
@@ -2310,7 +2290,9 @@ class MarieServerGateway(CompositeServer):
         *,
         unchanged_interval_s: float = LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
     ) -> None:
-        snapshot = dispatch_runtime_live_state(limit_per_pool=50)
+        snapshot = await read_runtime_snapshot(
+            fabric_group_id=self.llm_dispatch_runtime.config.fabric_group_id, limit=50
+        )
         fingerprint = _llm_dispatch_runtime_event_fingerprint(snapshot)
         now = time.monotonic()
         if not _should_publish_llm_dispatch_runtime_event(
@@ -2342,9 +2324,7 @@ class MarieServerGateway(CompositeServer):
                 await self._publish_llm_dispatch_runtime_event()
             except Exception as exc:
                 self.logger.error(
-                    "LLM dispatch broadcast error: %s",
-                    exc,
-                    exc_info=True,
+                    "LLM dispatch broadcast unavailable",
                 )
             await asyncio.sleep(interval_s)
 

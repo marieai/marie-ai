@@ -334,22 +334,10 @@ spec:
                   key: {{ $storageS3.existingSecretSecretKeyKey | default "secret-key" }}
             {{- end }}
             {{- end }}
-            {{- if .Values.global.valkey.enabled }}
-            {{- $valkeyHost := default (printf "%s-valkey" .Release.Name) .Values.global.valkey.host }}
-            {{- $valkeyPort := default 6379 .Values.global.valkey.port }}
-            {{- $valkeyDatabase := default 0 .Values.global.valkey.database }}
-            {{- $valkeyTls := default false .Values.global.valkey.tls }}
-            {{- if .Values.global.valkey.auth.enabled }}
-            - name: VALKEY_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (printf "%s-valkey-auth" .Release.Name) .Values.global.valkey.auth.existingSecret }}
-                  key: {{ .Values.global.valkey.auth.existingSecretPasswordKey | default "password" }}
-            {{- end }}
             - name: LLM_QUEUE_ENABLED
               value: {{ .Values.global.llmQueue.enabled | default false | quote }}
-            - name: LLM_QUEUE_VALKEY_URL
-              value: {{ printf "%s://%s%s:%v/%v" (ternary "rediss" "redis" $valkeyTls) (ternary ":$(VALKEY_PASSWORD)@" "" .Values.global.valkey.auth.enabled) $valkeyHost $valkeyPort $valkeyDatabase | quote }}
+            {{- include "marie.llmQueueConnection" . | nindent 12 }}
+            {{- if .Values.global.llmQueue.enabled }}
             - name: LLM_QUEUE_POOL_ID
               value: {{ .Values.global.llmQueue.poolId | default "default" | quote }}
             - name: LLM_QUEUE_FABRIC_GROUP_ID

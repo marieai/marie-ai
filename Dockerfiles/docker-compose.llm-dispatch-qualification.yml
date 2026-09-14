@@ -1,0 +1,25 @@
+# Owned fixtures only. Choose unused loopback ports before starting; keep them fixed across restarts.
+# Build AIMock using only Dockerfile, package.json, package-lock.json, *.ts and *.mjs from aimock/programmatic/.
+services:
+  valkey:
+    image: valkey/valkey:8.1.6
+    command: [valkey-server, --appendonly, 'yes', --appendfsync, always, --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    ports: ['127.0.0.1:${QUAL_VALKEY_PORT:-4032}:6379']
+    volumes: [valkey-data:/data]
+    labels: {marie.test.owner: llm-dispatch-task10}
+  redis:
+    image: redis:7.4.2
+    command: [redis-server, --appendonly, 'yes', --appendfsync, always, --maxmemory, 128mb, --maxmemory-policy, noeviction]
+    ports: ['127.0.0.1:${QUAL_REDIS_PORT:-4033}:6379']
+    volumes: [redis-data:/data]
+    labels: {marie.test.owner: llm-dispatch-task10}
+  aimock:
+    image: marie-aimock-llm-dispatch-task10:qualification
+    environment:
+      AIMOCK_JOURNAL_MAX_ENTRIES: '2'
+      AIMOCK_FIXTURE_COUNTS_MAX_TEST_IDS: '4'
+    ports: ['127.0.0.1:${QUAL_MOCK_PORT:-4030}:4010', '127.0.0.1:${QUAL_ADMIN_PORT:-4031}:4011']
+    labels: {marie.test.owner: llm-dispatch-task10}
+volumes:
+  valkey-data:
+  redis-data:

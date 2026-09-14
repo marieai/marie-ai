@@ -1,11 +1,11 @@
 from pathlib import Path
 
 import pytest
-
 from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
 from marie.engine.llm_queue.scheduler_config import (
     scheduler_config_from_mapping,
 )
+
 from marie.serve.runtimes.gateway.marie.llm_scheduler_config import (
     DEFAULT_FABRIC_CONFIG_TABLE,
     DEFAULT_POOL_TABLE,
@@ -53,3 +53,25 @@ def test_drr_scheduler_config_adds_default_catch_all_lane():
     ]
     assert config.lanes[-1].display_name == "Default"
     assert config.lanes[-1].enabled is True
+
+
+@pytest.mark.parametrize(
+    'lanes',
+    [
+        [
+            {
+                'pool_id': 'default',
+                'enabled': False,
+                'endpoint_url': 'https://untrusted.example',
+            }
+        ],
+        [{'pool_id': 'default'}, {'pool_id': 'default', 'enabled': False}],
+        [{'pool_id': 'default', 'quantum': '2'}],
+        [{'pool_id': 'default', 'enabled': 'true'}],
+    ],
+)
+def test_disabled_duplicate_and_coerced_lane_config_rejected(lanes):
+    with pytest.raises(ValueError):
+        scheduler_config_from_mapping(
+            {'policy': 'drr', 'total_concurrent_dispatch': 2, 'lanes': lanes}
+        )

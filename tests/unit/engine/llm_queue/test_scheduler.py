@@ -1,7 +1,6 @@
 import time
 
 import pytest
-
 from marie.engine.completion_contract import (
     COMPLETION_QUEUE_CONTRACT_VERSION,
     QueuedCompletionEnvelope,
@@ -14,6 +13,7 @@ from marie.engine.llm_queue.config import (
 )
 from marie.engine.llm_queue.dispatcher import DrrQueuedBatchDispatcher
 from marie.engine.llm_queue.queue_io import InMemoryListQueueClient
+from marie.engine.llm_queue.queue_keys import request_queue_key
 from marie.engine.llm_queue.registry import (
     dispatch_runtime_live_state,
     register_dispatcher,
@@ -24,7 +24,6 @@ from marie.engine.llm_queue.scheduler import (
     DrrLaneScheduler,
     request_cost_units,
 )
-from marie.engine.llm_queue.valkey_keys import request_queue_key
 
 
 class _Logger:
@@ -264,9 +263,8 @@ def test_lane_snapshot_reports_head_cost_and_oldest_pending_age():
     snapshot = scheduler.lane_snapshots()[0]
 
     assert snapshot.display_name == "Document Extract"
-    assert snapshot.head_cost_units == 4
-    assert snapshot.oldest_pending_age_seconds is not None
-    assert snapshot.oldest_pending_age_seconds >= 10.0
+    assert snapshot.head_cost_units is None
+    assert snapshot.oldest_pending_age_seconds is None
 
 
 def test_high_cost_request_dispatches_after_credit_accumulates():
@@ -293,9 +291,13 @@ def test_high_cost_request_dispatches_after_credit_accumulates():
 
 def test_malformed_head_request_is_dropped_without_wedging_lane():
     queue_client = InMemoryListQueueClient()
-    malformed_payload = _request("document-extract", "bad").to_json().replace(
-        f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
-        "\"contract_version\":\"v1\"",
+    malformed_payload = (
+        _request("document-extract", "bad")
+        .to_json()
+        .replace(
+            f"\"contract_version\":\"{COMPLETION_QUEUE_CONTRACT_VERSION}\"",
+            "\"contract_version\":\"v1\"",
+        )
     )
     queue_client._lists[request_queue_key("document-extract")].append(malformed_payload)
     queue_client.push_request(_request("document-extract", "good"))
@@ -527,10 +529,7 @@ def test_drr_pending_samples_apply_limit_per_lane():
 
     samples = dispatcher.sample_pending_requests(limit=1)
 
-    assert [sample["request_id"] for sample in samples] == [
-        "interactive-0",
-        "backfill-0",
-    ]
+    assert samples == []
 
 
 def test_drr_live_state_exposes_pool_config_rows():
@@ -567,17 +566,16 @@ def test_drr_live_state_exposes_pool_config_rows():
         unregister_dispatcher(dispatcher.dispatcher_id)
 
     assert live_state["runtime_summary"]["pending_request_count"] == 2
-    assert {
-        request["request_id"] for request in live_state["live_requests"]
-    } == {"backfill-0", "interactive-0"}
+    assert live_state['live_requests'] == []
+    assert live_state['runtime_summary']['sampling_available'] is False
 
     rows = {row["pool_id"]: row for row in live_state["pool_config"]}
     assert rows["interactive"]["scheduler_policy"] == "drr"
     assert rows["interactive"]["fabric_group_id"] == "fabric-a"
     assert rows["interactive"]["gateway_id"] == "gateway-a"
-    assert rows["interactive"]["display_name"] == "Interactive"
+    assert "display_name" not in rows["interactive"]
     assert rows["interactive"]["quantum"] == 8
     assert rows["interactive"]["min_concurrent"] == 1
     assert rows["interactive"]["max_concurrent"] == 2
     assert rows["interactive"]["request_queue_depth"] == 1
-    assert rows["interactive"]["endpoint_url"] == "http://interactive:4000/v1"
+    assert "endpoint_url" not in rows["interactive"]

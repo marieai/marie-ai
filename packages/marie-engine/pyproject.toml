@@ -43,7 +43,7 @@ transformers = [
     "torch>=2.1.0",
     "transformers>=4.49.0",
 ]
-queue = ["valkey>=6.0.0"]
+queue = ["valkey>=6.0.0", "httpx>=0.28,<0.29", "httpcore>=1.0.9,<1.1", "anyio>=4,<5"]
 dev = [
     "marie-agent",
     "openai>=1.0.0",

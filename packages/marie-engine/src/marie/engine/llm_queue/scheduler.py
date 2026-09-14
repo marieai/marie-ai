@@ -4,10 +4,13 @@ import math
 import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Optional
+from typing import Any, Callable, Deque, Optional
 
-from marie.engine.completion_contract import QueuedCompletionEnvelope
-from marie.engine.llm_queue.queue_io import ListQueueClient
+from marie.engine.completion_contract import (
+    CompletionCallParams,
+    QueuedCompletionEnvelope,
+)
+from marie.engine.llm_queue.queue_io import ListQueueClient, MalformedQueueRequest
 
 MIN_REQUEST_COST_UNITS = 1
 MAX_REQUEST_COST_UNITS = 16
@@ -27,6 +30,17 @@ class DrrLaneConfig:
     enabled: bool = True
 
     def __post_init__(self) -> None:
+        for name in (
+            'quantum',
+            'min_concurrent',
+            'max_concurrent',
+            'max_burst_per_visit',
+        ):
+            value = getattr(self, name)
+            if value is not None and type(value) is not int:
+                raise ValueError(f'{name} must be an integer')
+        if type(self.enabled) is not bool:
+            raise ValueError('enabled must be a boolean')
         if not self.pool_id:
             raise ValueError("pool_id is required")
         if self.quantum < 1:
@@ -84,7 +98,7 @@ class DrrLaneScheduler:
     def __init__(
         self,
         *,
-        queue_client: ListQueueClient,
+        queue_client: ListQueueClient | None,
         lanes: list[DrrLaneConfig],
         total_concurrent_dispatch: int,
     ) -> None:
@@ -92,11 +106,9 @@ class DrrLaneScheduler:
             raise ValueError("total_concurrent_dispatch must be at least 1")
 
         enabled_lanes = [lane for lane in lanes if lane.enabled]
-        pool_ids = [lane.pool_id for lane in enabled_lanes]
+        pool_ids = [lane.pool_id for lane in lanes]
         if len(pool_ids) != len(set(pool_ids)):
             raise ValueError("lane pool_id values must be unique")
-        if not enabled_lanes:
-            raise ValueError("at least one enabled lane is required")
         min_concurrent_total = sum(lane.min_concurrent for lane in enabled_lanes)
         if min_concurrent_total > total_concurrent_dispatch:
             raise ValueError(
@@ -109,6 +121,7 @@ class DrrLaneScheduler:
         self._rotation: Deque[str] = deque()
         self._active: set[str] = set()
         self._global_inflight = 0
+        self._backlogs: set[str] | None = None
 
     @property
     def inflight_count(self) -> int:
@@ -144,8 +157,9 @@ class DrrLaneScheduler:
 
             try:
                 request = self.queue_client.peek_request(pool_id)
-            except Exception:
-                self._drop_malformed_head(state)
+            except MalformedQueueRequest as exc:
+                if self.queue_client.discard_malformed_head(pool_id, exc.digest):
+                    self._record_malformed_drop(state)
                 return None
 
             if request is None:
@@ -162,7 +176,7 @@ class DrrLaneScheduler:
 
             try:
                 popped = self.queue_client.try_pop_request(pool_id)
-            except Exception:
+            except MalformedQueueRequest:
                 self._record_malformed_drop(state)
                 return None
 
@@ -177,7 +191,8 @@ class DrrLaneScheduler:
             self._global_inflight += 1
 
             deficit_after_dispatch = state.deficit
-            self._advance_after_dispatch(state)
+            # The popped request must be returned before any further queue I/O.
+            self._advance_after_dispatch(state, read_backlog=False)
             return DrrDispatch(
                 pool_id=pool_id,
                 request=popped,
@@ -187,6 +202,102 @@ class DrrLaneScheduler:
 
         return None
 
+    def sync_reservations(
+        self, reserved: dict[str, int], total: int, backlogged: set[str]
+    ) -> None:
+        """Use authoritative V3 reservations, including unresolved remote calls."""
+        self._global_inflight = total
+        self._backlogs = backlogged
+        for pool, state in self._states.items():
+            state.inflight = reserved.get(pool, 0)
+            if pool not in backlogged:
+                state.deficit = 0
+                state.visit_started = False
+                state.visit_dispatches = 0
+
+    def select_metadata(self, costs: dict[str, int]) -> str | None:
+        """Inspect a bounded round using metadata supplied by the fenced owner."""
+        self._backlogs = set(costs)
+        self._refresh_rotation()
+        for _ in range(len(self._rotation)):
+            pool = self._rotation[0]
+            state = self._states[pool]
+            if pool not in costs:
+                self._drop_current_lane(reset_deficit=False)
+                continue
+            allowed, reason = self._can_launch(state)
+            if not allowed:
+                state.skip_counts[reason] += 1
+                self._finish_current_visit()
+                continue
+            if not state.visit_started:
+                state.deficit = min(1_000_000, state.deficit + state.config.quantum)
+                state.visit_started = True
+                state.visit_dispatches = 0
+            if costs[pool] <= state.deficit:
+                return pool
+            state.skip_counts['insufficient_credit'] += 1
+            self._finish_current_visit()
+        # Skip virtual empty rounds arithmetically; work stays bounded for large costs.
+        eligible = [
+            self._states[pool]
+            for pool in costs
+            if self._can_launch(self._states[pool])[0]
+        ]
+        if eligible:
+            rounds = min(
+                max(
+                    1,
+                    math.ceil(
+                        (costs[state.config.pool_id] - state.deficit)
+                        / state.config.quantum
+                    ),
+                )
+                for state in eligible
+            )
+            for state in eligible:
+                state.deficit = min(
+                    1_000_000, state.deficit + rounds * state.config.quantum
+                )
+                state.visit_started = True
+            for pool in self._rotation:
+                if (
+                    pool in costs
+                    and costs[pool] <= self._states[pool].deficit
+                    and self._can_launch(self._states[pool])[0]
+                ):
+                    while self._rotation[0] != pool:
+                        self._finish_current_visit()
+                    return pool
+        return None
+
+    def claimed(self, pool_id: str, cost: int) -> None:
+        """Charge only the cost returned by a successful atomic claim; perform no I/O."""
+        state = self._states[pool_id]
+        state.deficit -= cost
+        state.inflight += 1
+        state.visit_dispatches += 1
+        self._global_inflight += 1
+        self._advance_after_dispatch(state, read_backlog=False)
+
+    def rejected(self, pool_id: str, reason: str) -> None:
+        state = self._states[pool_id]
+        state.skip_counts[reason] += 1
+        self._finish_current_visit()
+
+    def lane_metadata(self, pool_id: str) -> dict[str, Any]:
+        state = self._states.get(pool_id)
+        if state is None:
+            return {}
+        return dict(
+            quantum=state.config.quantum,
+            deficit=state.deficit,
+            inflight=state.inflight,
+            min_concurrent=state.config.min_concurrent,
+            max_burst_per_visit=state.config.max_burst_per_visit,
+            skip_counts=dict(state.skip_counts),
+        )
+
     def release(self, pool_id: str) -> None:
         state = self._states[pool_id]
         if state.inflight <= 0:
@@ -194,23 +305,20 @@ class DrrLaneScheduler:
         state.inflight -= 1
         self._global_inflight -= 1
 
-    def lane_snapshots(self) -> list[DrrLaneSnapshot]:
+    def lane_snapshots(
+        self, *, before_read: Callable[[], None] | None = None
+    ) -> list[DrrLaneSnapshot]:
         snapshots: list[DrrLaneSnapshot] = []
         now = time.time()
         for pool_id, state in sorted(self._states.items()):
+            if before_read:
+                before_read()
             try:
                 queue_depth = self.queue_client.request_queue_depth(pool_id)
             except Exception:
                 queue_depth = None
-            try:
-                head_request = self.queue_client.peek_request(pool_id)
-            except Exception:
-                head_request = None
             oldest_pending_age_seconds = None
             head_cost_units = None
-            if head_request is not None:
-                oldest_pending_age_seconds = max(0.0, now - head_request.submitted_at)
-                head_cost_units = request_cost_units(head_request)
             snapshots.append(
                 DrrLaneSnapshot(
                     pool_id=pool_id,
@@ -239,6 +347,8 @@ class DrrLaneScheduler:
                 self._active.add(pool_id)
 
     def _lane_has_backlog(self, pool_id: str) -> bool:
+        if self._backlogs is not None:
+            return pool_id in self._backlogs
         return self.queue_client.request_queue_depth(pool_id) > 0
 
     def _can_launch(self, state: _LaneState) -> tuple[bool, str]:
@@ -265,9 +375,11 @@ class DrrLaneScheduler:
 
         return True, ""
 
-    def _advance_after_dispatch(self, state: _LaneState) -> None:
+    def _advance_after_dispatch(
+        self, state: _LaneState, *, read_backlog: bool = True
+    ) -> None:
         pool_id = state.config.pool_id
-        if not self._lane_has_backlog(pool_id):
+        if read_backlog and not self._lane_has_backlog(pool_id):
             self._drop_current_lane(reset_deficit=True)
             return
 
@@ -276,8 +388,7 @@ class DrrLaneScheduler:
             self._finish_current_visit()
             return
 
-        can_launch, _ = self._can_launch(state)
-        if not can_launch or state.deficit <= 0:
+        if state.deficit <= 0:
             self._finish_current_visit()
 
     def _finish_current_visit(self) -> None:
@@ -295,13 +406,6 @@ class DrrLaneScheduler:
         state.visit_dispatches = 0
         if reset_deficit:
             state.deficit = 0
-
-    def _drop_malformed_head(self, state: _LaneState) -> None:
-        try:
-            self.queue_client.try_pop_request(state.config.pool_id)
-        except Exception:
-            pass
-        self._record_malformed_drop(state)
 
     def _record_malformed_drop(self, state: _LaneState) -> None:
         state.malformed_requests_dropped += 1
@@ -356,3 +460,46 @@ def _count_message_images(request: QueuedCompletionEnvelope) -> int:
 
 def _clamp_cost(value: int) -> int:
     return max(MIN_REQUEST_COST_UNITS, min(MAX_REQUEST_COST_UNITS, value))
+
+
+def prepared_cost_units(
+    call: CompletionCallParams, metadata: dict[str, Any] | None = None
+) -> int:
+    """Estimate the effective prepared call once, before releasing its body."""
+    metadata = metadata or {}
+    for name in (
+        'estimated_cost_units',
+        'image_count',
+        'chunk_page_count',
+        'page_count',
+    ):
+        value = metadata.get(name)
+        if value is not None and (
+            type(value) is not int or value < 0 or value > 1_000_000
+        ):
+            raise ValueError('Invalid scheduling cost metadata')
+    explicit = metadata.get('estimated_cost_units')
+    if explicit is not None:
+        if not MIN_REQUEST_COST_UNITS <= explicit <= MAX_REQUEST_COST_UNITS:
+            raise ValueError('Invalid scheduling cost override')
+    prepared = call.to_create_kwargs()
+    if prepared.get('extra_body'):
+        prepared.update(prepared['extra_body'])
+    messages = prepared.get('messages', [])
+    images = sum(
+        1
+        for message in messages
+        if isinstance(message, dict)
+        for item in (
+            message.get('content') if isinstance(message.get('content'), list) else []
+        )
+        if isinstance(item, dict) and item.get('type') == 'image_url'
+    )
+    images = max(images, metadata.get('image_count', 0))
+    pages = metadata.get('chunk_page_count', metadata.get('page_count', 0))
+    return _clamp_cost(
+        max(
+            explicit or MIN_REQUEST_COST_UNITS,
+            1 + IMAGE_COST_UNITS * images + math.ceil(pages / PAGES_PER_COST_UNIT),
+        )
+    )

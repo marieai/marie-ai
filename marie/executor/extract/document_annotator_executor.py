@@ -289,6 +289,10 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             purge_annotators=purge_annotators,
         )
 
+        if not getattr(annotator, "requires_frames", True):
+            del docs
+            frames = []
+
         # --- Execution: catch task-level errors only ---
         try:
             await annotator.aannotate(doc, frames)
