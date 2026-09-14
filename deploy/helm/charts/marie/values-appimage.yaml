@@ -105,14 +105,14 @@ minio:
   enabled: true
   progressDeadlineSeconds: 1800
   image:
-    registry: docker.io
+    registry: quay.io
     repository: minio/minio
     tag: latest
     pullPolicy: IfNotPresent
   provisioning:
     enabled: true
     image:
-      registry: docker.io
+      registry: quay.io
       repository: minio/mc
       tag: latest
       pullPolicy: IfNotPresent
