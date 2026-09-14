@@ -4,8 +4,6 @@ import asyncio
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from opentelemetry import trace as otel_trace
-
 from marie.engine.completion_contract import (
     CompletionCallParams,
     CompletionReplyEnvelope,
@@ -13,12 +11,14 @@ from marie.engine.completion_contract import (
     build_dispatch_profile_key,
     completion_finish_reason,
     extract_completion_text,
+    require_terminal_completion,
 )
 from marie.engine.exceptions import MaxTokensExceededError
 from marie.engine.llm_queue.config import LlmQueueConfig
 from marie.engine.llm_queue.queue_io import ListQueueClient
 from marie.engine.llm_queue.replies import ProducerSession, ReplyWaiter
 from marie.engine.llm_queue.result_types import BatchResult
+from opentelemetry import trace as otel_trace
 
 
 class QueuedBatchExecutor:
@@ -51,6 +51,8 @@ class QueuedBatchExecutor:
         on_result=None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> List[BatchResult]:
+        for call in calls:
+            require_terminal_completion(call)
         traceparent, tracestate = _current_trace_headers()
         waiters: Dict[str, ReplyWaiter] = {}
         ordered_ids: List[str] = []

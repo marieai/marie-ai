@@ -26,7 +26,7 @@ from marie.engine.exceptions import (
     RepetitionError,
 )
 from marie.engine.llm_queue.config import LlmQueueConfig
-from marie.engine.llm_queue.queue_io import ListQueueClient, ValkeyListQueueClient
+from marie.engine.llm_queue.queue_io import ListQueueClient, StoreListQueueClient
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.openai_compat import execute_completion_call
 from marie.instrumentation import (
@@ -148,7 +148,10 @@ class BatchProcessor:
         queue_client: Optional[ListQueueClient] = None,
         queue_pool_id: Optional[str] = None,
         queue_producer_id: Optional[str] = None,
+        queue_url: Optional[str] = None,
         queue_valkey_url: Optional[str] = None,
+        queue_contract_version: Optional[str] = None,
+        queue_fabric_group_id: Optional[str] = None,
     ):
         self.client = client
         self.model_string = model_string
@@ -191,13 +194,25 @@ class BatchProcessor:
         self._gate_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._queue_client = queue_client
         self._queued_executor = None
+        self._queued_executor_lock = threading.Lock()
+        self._queue_pid = os.getpid()
         self._queue_config = LlmQueueConfig.from_env(
             enabled=queue_enabled,
+            queue_url=queue_url,
             valkey_url=queue_valkey_url,
             pool_id=queue_pool_id,
             producer_id=queue_producer_id,
+            queue_contract_version=queue_contract_version,
+            fabric_group_id=queue_fabric_group_id,
         )
         self._queue_mode_logged = False
+
+    @property
+    def uses_v3_queue(self) -> bool:
+        return (
+            self._queue_config.enabled
+            and self._queue_config.queue_contract_version == 'v3'
+        )
 
     def _log_queue_mode_once(self) -> None:
         if self._queue_mode_logged:
@@ -205,9 +220,9 @@ class BatchProcessor:
         self._queue_mode_logged = True
         if self._queue_config.enabled:
             self.logger.info(
-                "LLM dispatch queue enabled: pool=%s valkey_configured=%s max_inline_payload_bytes=%s",
+                "LLM dispatch queue enabled: pool=%s queue_configured=%s max_inline_payload_bytes=%s",
                 self._queue_config.pool_id,
-                bool(self._queue_config.valkey_url),
+                bool(self._queue_config.queue_url),
                 self._queue_config.max_inline_payload_bytes,
             )
         else:
@@ -221,23 +236,35 @@ class BatchProcessor:
     def _get_queue_client(self) -> ListQueueClient:
         if self._queue_client is not None:
             return self._queue_client
-        if not self._queue_config.valkey_url:
+        if not self._queue_config.queue_url:
             raise ValueError(
-                "LLM queue is enabled but LLM_QUEUE_VALKEY_URL (or queue_valkey_url) is not configured."
+                "LLM queue is enabled but LLM_QUEUE_URL (or LLM_QUEUE_VALKEY_URL, "
+                "queue_url, or queue_valkey_url) is not configured."
             )
-        self._queue_client = ValkeyListQueueClient(self._queue_config.valkey_url)
+        self._queue_client = StoreListQueueClient(self._queue_config.queue_url)
         return self._queue_client
 
     def _get_queued_executor(self):
-        if self._queued_executor is None:
-            from marie.engine.llm_queue.submitter import QueuedBatchExecutor
+        if self._queue_config.queue_contract_version != 'v3':
+            if self._queued_executor is None:
+                from marie.engine.llm_queue.submitter import QueuedBatchExecutor
 
-            self._queued_executor = QueuedBatchExecutor(
-                queue_client=self._get_queue_client(),
-                config=self._queue_config,
-                logger=self.logger,
-            )
-        return self._queued_executor
+                self._queued_executor = QueuedBatchExecutor(
+                    queue_client=self._get_queue_client(),
+                    config=self._queue_config,
+                    logger=self.logger,
+                )
+            return self._queued_executor
+        if self._queue_pid != os.getpid():
+            self._queue_pid = os.getpid()
+            self._queued_executor = None
+            self._queued_executor_lock = threading.Lock()
+        with self._queued_executor_lock:
+            if self._queued_executor is None:
+                from marie.engine.llm_queue.producer import V3Producer
+
+                self._queued_executor = V3Producer(config=self._queue_config)
+            return self._queued_executor
 
     def build_queue_dispatcher(self):
         from marie.engine.llm_queue.adapters.openai_compatible import (
@@ -602,6 +629,9 @@ class BatchProcessor:
                 or were rejected by the circuit breaker.
             asyncio.TimeoutError: When the batch exceeds the configured timeout.
         """
+        queue_deadline = kwargs.get('queue_deadline')
+        if self.uses_v3_queue:
+            queue_deadline = queue_deadline or time.monotonic() + self.batch_timeout
         request_id = str(uuid.uuid4())
         self.logger.info(
             f"Request {request_id} - Initiating batch inference with {len(messages_list)} requests."
@@ -641,8 +671,9 @@ class BatchProcessor:
             )
             request_contexts = None
 
-        calls = [
-            build_completion_call(
+        def prepare(index: int) -> CompletionCallParams:
+            messages = messages_list[index]
+            return build_completion_call(
                 model=self.model_string,
                 messages=messages,
                 default_completion_params=self.default_completion_params,
@@ -656,8 +687,24 @@ class BatchProcessor:
                     request_contexts[index] if request_contexts is not None else None
                 ),
             )
-            for index, messages in enumerate(messages_list)
-        ]
+
+        if self.uses_v3_queue:
+            from marie.engine.llm_queue.producer import PreparedCalls
+
+            calls = PreparedCalls(
+                len(messages_list),
+                prepare,
+                build_completion_call(
+                    model=self.model_string,
+                    messages=[],
+                    default_completion_params=self.default_completion_params,
+                    completion_params=completion_params,
+                    guided_json=guided_json,
+                    stream=False,
+                ),
+            )
+        else:
+            calls = [prepare(index) for index in range(len(messages_list))]
         return self.batch_generate_calls(
             calls=calls,
             request_id=request_id,
@@ -665,6 +712,8 @@ class BatchProcessor:
             batch_span=batch_span,
             on_result=on_result,
             metadata=metadata,
+            queue_deadline=queue_deadline,
+            cancellation=kwargs.get('cancellation'),
         )
 
     def batch_generate_calls(
@@ -676,7 +725,15 @@ class BatchProcessor:
         batch_span=None,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        queue_deadline: float | None = None,
+        cancellation: threading.Event | None = None,
     ) -> List[str]:
+        if self.uses_v3_queue and not calls:
+            if batch_span is not None:
+                batch_span.end()
+            return []
+        if self.uses_v3_queue and queue_deadline is None:
+            queue_deadline = time.monotonic() + self.batch_timeout
         request_id = request_id or str(uuid.uuid4())
         start_time = start_time or time.time()
 
@@ -715,10 +772,16 @@ class BatchProcessor:
                     effective_pool_id,
                     len(calls),
                 )
+                controls = {}
+                if self._queue_config.queue_contract_version == 'v3':
+                    controls = dict(
+                        queue_deadline=queue_deadline, cancellation=cancellation
+                    )
                 batch_results = self._get_queued_executor().execute(
                     calls=calls,
                     batch_request_id=request_id,
                     batch_timeout=self.batch_timeout,
+                    **controls,
                     on_result=on_result,
                     metadata=metadata,
                 )
@@ -780,6 +843,11 @@ class BatchProcessor:
                     request_id=request_id,
                     failed_results=failed_results,
                     total=len(calls),
+                    successful_results=[
+                        br
+                        for br in batch_results
+                        if br is not None and br.error is None
+                    ],
                 )
 
             self.logger.info(

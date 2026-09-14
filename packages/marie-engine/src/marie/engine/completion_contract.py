@@ -373,3 +373,54 @@ def _validate_contract_version(data: dict[str, Any], *, envelope_type: str) -> N
             f"Unsupported {envelope_type} contract version: {actual!r}; "
             f"expected {COMPLETION_QUEUE_CONTRACT_VERSION!r}"
         )
+
+
+COMPLETION_QUEUE_CONTRACT_VERSION_V3 = 'v3'
+
+
+class UnsupportedQueueStreaming(ValueError):
+    """Terminal completion queues cannot transport streaming responses."""
+
+
+def require_terminal_completion(call: CompletionCallParams) -> None:
+    """Reject streaming after applying SDK keyword and extra-body overrides."""
+    kwargs = call.to_create_kwargs()
+    body = kwargs.get('extra_body')
+    if kwargs.get('stream') or (isinstance(body, dict) and body.get('stream')):
+        raise UnsupportedQueueStreaming('Streaming is unsupported by completion queues')
+
+
+@dataclass(frozen=True, slots=True)
+class QueuedCompletionEnvelopeV3:
+    """One prepared ordered call, owned permanently by its original session.
+
+    expires_at_ms is an absolute queue-server timestamp, fixed at first admission.
+    """
+
+    contract_version: str
+    fabric_group_id: str
+    producer_id: str
+    attempt_id: str
+    pool_id: str
+    endpoint_id: str
+    config_revision: str
+    logical_batch_id: str
+    logical_task_id: str
+    item_index: int
+    expires_at_ms: int
+    call: CompletionCallParams
+    estimated_cost_units: int = 1
+
+    def to_json(self) -> str:
+        return json.dumps(
+            asdict(self), separators=(',', ':'), sort_keys=True, allow_nan=False
+        )
+
+    @classmethod
+    def from_json(cls, payload: str) -> QueuedCompletionEnvelopeV3:
+        data = json.loads(payload)
+        if data.get('contract_version') != COMPLETION_QUEUE_CONTRACT_VERSION_V3:
+            raise ValueError('Expected explicit v3 completion contract')
+        data['call'] = CompletionCallParams.from_dict(data['call'])
+        require_terminal_completion(data['call'])
+        return cls(**data)

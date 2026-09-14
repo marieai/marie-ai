@@ -83,7 +83,9 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
         logger.info(f"New event stream connection: {connection_id}")
 
         # Register connection
-        event_queue = await self.broker.register_connection(connection_id)
+        event_queue = await self.broker.register_connection(
+            connection_id, api_key=api_key
+        )
 
         # Start background tasks
         heartbeat_task = asyncio.create_task(
@@ -113,7 +115,8 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
                         elif msg_type == "error":
                             yield data
                     elif isinstance(item, EventEnvelope):
-                        yield self._build_event_message(item)
+                        if self.broker.can_deliver_envelope(connection_id, item):
+                            yield self._build_event_message(item)
 
                 except asyncio.TimeoutError:
                     continue
@@ -208,7 +211,7 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
             confirm = pb2.ServerMessage(
                 subscription_confirm=pb2.SubscriptionConfirm(
                     subscription_id=req.subscription_id,
-                    topics=list(topics),
+                    topics=[],
                     replay_from=replay_from,
                     current_head=current_head,
                 )
@@ -218,15 +221,15 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
             except asyncio.QueueFull:
                 pass
 
-            logger.info(f"Subscription created: {req.subscription_id} topics={topics}")
+            logger.info(f"Subscription created: {req.subscription_id}")
 
         except Exception as e:
-            logger.error(f"Subscribe failed for {req.subscription_id}: {e}")
+            logger.error(f"Subscribe failed for {req.subscription_id}")
             error_msg = pb2.ServerMessage(
                 error=pb2.ErrorMessage(
                     subscription_id=req.subscription_id,
                     code=pb2.ERROR_INTERNAL,
-                    message=str(e),
+                    message="subscription_failed",
                 )
             )
             try:
@@ -286,15 +289,10 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
             while True:
                 await asyncio.sleep(self._heartbeat_interval_s)
 
-                # Build topic heads
-                topic_heads = {}
-                for topic, ts in self.broker._topics.items():
-                    topic_heads[topic] = ts.next_seq - 1
-
                 heartbeat = pb2.ServerMessage(
                     heartbeat=pb2.ServerHeartbeat(
                         timestamp=current_milli_time(),
-                        topic_heads=topic_heads,
+                        topic_heads={},
                     )
                 )
 
@@ -362,7 +360,7 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
                 event=pb2.EventData(
                     id=envelope.event.id,
                     source=envelope.event.source,
-                    api_key=envelope.event.api_key,
+                    api_key="",
                     jobid=envelope.event.jobid,
                     event=envelope.event.event,
                     jobtag=envelope.event.jobtag,
@@ -397,6 +395,7 @@ class EventStreamServicer(event_stream_pb2_grpc.EventStreamServiceServicer):
             request.topic,
             request.from_sequence_num,
             request.max_events,
+            api_key=extract_api_key_from_context(context),
         )
 
         # Convert stored events to protobuf envelopes

@@ -32,6 +32,9 @@ global:
       existingSecretPasswordKey: password
   llmQueue:
     enabled: false
+    url: ""
+    existingSecret: ""
+    existingSecretUrlKey: url
     poolId: default
     fabricGroupId: default
     gatewayId: default

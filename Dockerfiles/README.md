@@ -163,7 +163,7 @@ Required gateway environment:
 
 ```bash
 LLM_QUEUE_ENABLED=true
-LLM_QUEUE_VALKEY_URL=redis://marie-valkey:6379/0
+LLM_QUEUE_URL=redis://marie-valkey:6379/0
 LLM_QUEUE_POOL_ID=default
 LLM_QUEUE_FABRIC_GROUP_ID=default
 LLM_QUEUE_GATEWAY_ID=gateway-localhost
@@ -176,7 +176,7 @@ Required processor environment:
 
 ```bash
 LLM_QUEUE_ENABLED=true
-LLM_QUEUE_VALKEY_URL=redis://marie-valkey:6379/0
+LLM_QUEUE_URL=redis://marie-valkey:6379/0
 LLM_QUEUE_POOL_ID=default
 LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
 OPENAI_API_KEY=EMPTY
@@ -186,6 +186,7 @@ OPENAI_API_BASE=http://litellm:4000/v1
 Operational notes:
 
 - `OPENAI_API_BASE` can also be set as `OPENAI_BASE_URL`.
+- `LLM_QUEUE_URL` is the preferred queue connection setting. `LLM_QUEUE_VALKEY_URL` remains accepted for existing deployments; Compose forwards the selected connection to both names while images transition.
 - The default inline payload limit is `16777216` bytes (`16 MiB`) to support multimodal requests with serialized image content.
 - `LLM_QUEUE_FABRIC_GROUP_ID` should match the Runtime Fabric `groupId` in Marie Studio.
 - `LLM_QUEUE_GATEWAY_ID` should match the gateway id registered in Marie Studio.
@@ -252,8 +253,8 @@ RABBIT_MQ_HOSTNAME=marie-rabbitmq    # Container hostname for internal access
 RABBIT_MQ_USERNAME=guest
 RABBIT_MQ_PASSWORD=guest
 
-# Valkey
-LLM_QUEUE_VALKEY_URL=redis://localhost:6379/0
+# LLM queue (LLM_QUEUE_VALKEY_URL remains a legacy-compatible alias)
+LLM_QUEUE_URL=redis://localhost:6379/0
 LLM_QUEUE_ENABLED=false
 LLM_QUEUE_POOL_ID=default
 LLM_QUEUE_FABRIC_GROUP_ID=

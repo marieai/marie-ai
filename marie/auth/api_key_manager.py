@@ -1,3 +1,4 @@
+import re
 import secrets
 from typing import Any, Dict, List, Optional
 
@@ -80,9 +81,7 @@ class APIKeyManager:
         # validate that there are no duplicated keys
         for key in cls._keys:
             if cls._keys[key]["api_key"] == key_conf["api_key"]:
-                raise ValueError(
-                    f"Key with name '{name}' has the same api_key as key '{key}'"
-                )
+                raise ValueError("Duplicate API credential")
 
         # validate that the key is valid
         if not KeyGenerator.validate_key(key_conf["api_key"]):
@@ -91,11 +90,39 @@ class APIKeyManager:
                 f" (must be 58 characters long and start with 'mas_' or 'mau_')"
             )
 
+        scopes = key_conf.get('scopes', [])
+        fabrics = key_conf.get('allowed_fabrics', [])
+        if (
+            not isinstance(scopes, list)
+            or not all(isinstance(v, str) for v in scopes)
+            or not isinstance(fabrics, list)
+            or not all(
+                isinstance(v, str) and re.fullmatch(r'[a-z0-9_-]{1,128}', v)
+                for v in fabrics
+            )
+        ):
+            raise ValueError('Invalid API key observability policy')
+        if key_conf.get('tenant_id') and 'runtime-observability' in scopes:
+            raise ValueError('Delegated runtime observability is unsupported')
         cls._keys[key_conf["api_key"]] = {
             "name": key_conf["name"],
             "api_key": key_conf["api_key"],
             "enabled": enabled,
+            "scopes": tuple(scopes),
+            "allowed_fabrics": tuple(fabrics),
         }
+
+    @classmethod
+    def can_observe_runtime(
+        cls, key: str, fabric_id: str, tenant_id: str | None = None
+    ) -> bool:
+        policy = cls._keys.get(key, {})
+        return bool(
+            not tenant_id
+            and cls.is_valid(key)
+            and 'runtime-observability' in policy.get('scopes', ())
+            and fabric_id in policy.get('allowed_fabrics', ())
+        )
 
     @classmethod
     def get_keys(cls) -> dict[str, Any]:

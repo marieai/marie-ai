@@ -28,7 +28,15 @@ from marie.engine.llm_queue.config import (
 from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
 from marie.engine.llm_queue.queue_io import (
     InMemoryListQueueClient,
-    ValkeyListQueueClient,
+    StoreListQueueClient,
+)
+from marie.engine.llm_queue.queue_keys import (
+    QueueKeys,
+    producer_alive_key,
+    queue_namespace,
+    reply_queue_key,
+    request_queue_key,
+    validate_identifier,
 )
 from marie.engine.llm_queue.registry import (
     dispatch_runtime_live_state,
@@ -41,12 +49,6 @@ from marie.engine.llm_queue.submitter import (
     QueuedBatchExecutor,
     _reply_to_batch_result,
     _resolve_queue_pool_id,
-)
-from marie.engine.llm_queue.valkey_keys import (
-    producer_alive_key,
-    queue_namespace,
-    reply_queue_key,
-    request_queue_key,
 )
 
 
@@ -155,14 +157,17 @@ class _FakeSyncQueueBackend:
         self.pipeline_exec_count = 0
         self.closed = False
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
 
     def rpush(self, key, value):
-        with self._lock:
+        with self._condition:
             self.lists.setdefault(key, []).append(value)
+            self._condition.notify_all()
 
     def lpush(self, key, value):
-        with self._lock:
+        with self._condition:
             self.lists.setdefault(key, []).insert(0, value)
+            self._condition.notify_all()
 
     def lpop(self, key):
         with self._lock:
@@ -179,12 +184,18 @@ class _FakeSyncQueueBackend:
             return values[index]
 
     def blpop(self, key, timeout):
-        with self._lock:
+        deadline = time.monotonic() + timeout
+        with self._condition:
             self.blpop_calls.append((key, timeout))
-        value = self.lpop(key)
-        if value is None:
-            return None
-        return (key, value)
+            while not self.closed:
+                values = self.lists.get(key, [])
+                if values:
+                    return key, values.pop(0)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._condition.wait(remaining)
+        return None
 
     def pipeline(self):
         return _FakePipeline(self)
@@ -222,8 +233,9 @@ class _FakeSyncQueueBackend:
             self.expiry.pop(key, None)
 
     def close(self):
-        with self._lock:
+        with self._condition:
             self.closed = True
+            self._condition.notify_all()
 
 
 def _build_processor(
@@ -455,11 +467,34 @@ def test_queue_keyspace_is_versioned():
     assert producer_alive_key("producer-A") == "key:llm:v2:producer:producer-A:alive"
 
 
-def test_valkey_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
-    backend = _FakeSyncQueueBackend()
-    monkeypatch.setattr(queue_io_module, "_build_sync_client", lambda url: backend)
+def test_queue_keys_preserve_v3_bytes_and_validate_generic_identifiers():
+    keys = QueueKeys('Fabric-A')
+    assert keys.fabric_id == 'fabric-a'
+    assert keys.prefix == 'llm:v3:{fabric:fabric-a}:'
+    assert keys.owner == 'llm:v3:{fabric:fabric-a}:owner'
+    assert keys.request('attempt-1') == 'llm:v3:{fabric:fabric-a}:request:attempt-1'
+    assert keys.ready('pool-1') == 'llm:v3:{fabric:fabric-a}:ready:pool-1'
+    assert (
+        keys.alive('producer-1') == 'llm:v3:{fabric:fabric-a}:producer:producer-1:alive'
+    )
+    assert (
+        keys.members('producer-1')
+        == 'llm:v3:{fabric:fabric-a}:producer:producer-1:requests'
+    )
+    assert keys.route('pool-1') == 'llm:v3:{fabric:fabric-a}:route:pool-1'
+    assert keys.endpoint('endpoint-1') == 'llm:v3:{fabric:fabric-a}:endpoint:endpoint-1'
+    assert validate_identifier('pool_1') == 'pool_1'
+    with pytest.raises(ValueError, match='Identifiers must contain'):
+        validate_identifier('bad:{identifier}')
 
-    queue_client = ValkeyListQueueClient("valkey://unit-test")
+
+def test_store_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
+    backend = _FakeSyncQueueBackend()
+    monkeypatch.setattr(
+        queue_io_module, "_build_sync_client", lambda url, **kwargs: backend
+    )
+
+    queue_client = StoreListQueueClient("valkey://unit-test")
     request = QueuedCompletionEnvelope(
         request_id="req-1",
         producer_id="producer-A",
@@ -487,7 +522,7 @@ def test_valkey_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
     restored_request = queue_client.pop_request("default", timeout=0.1)
     assert restored_request is not None
     assert restored_request.request_id == "req-1"
-    assert backend.blpop_calls[-1] == (request_queue_key("default"), 1)
+    assert backend.blpop_calls[-1] == (request_queue_key("default"), 0.1)
 
     queue_client.push_request_front(request)
     assert queue_client.try_pop_request("default").request_id == "req-1"
@@ -511,11 +546,13 @@ def test_valkey_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
     assert backend.closed is True
 
 
-def test_valkey_queue_runtime_end_to_end_with_dispatcher_thread(monkeypatch):
+def test_store_queue_runtime_end_to_end_with_dispatcher_thread(monkeypatch):
     backend = _FakeSyncQueueBackend()
-    monkeypatch.setattr(queue_io_module, "_build_sync_client", lambda url: backend)
+    monkeypatch.setattr(
+        queue_io_module, "_build_sync_client", lambda url, **kwargs: backend
+    )
 
-    queue_client = ValkeyListQueueClient("valkey://unit-test")
+    queue_client = StoreListQueueClient("valkey://unit-test")
 
     class _Completions:
         async def create(self, **kwargs):
@@ -723,7 +760,7 @@ def test_dispatcher_skips_malformed_request_and_processes_next_live_one():
     assert completion_payload_to_text(reply.completion) == "done:keep"
 
 
-def test_dispatcher_records_openinference_input_and_output(monkeypatch):
+def test_dispatcher_omits_openinference_input_and_output(monkeypatch):
     queue_client = InMemoryListQueueClient()
     config = _queue_config(producer_id="producer-live")
     adapter = _FakeAdapter()
@@ -750,7 +787,7 @@ def test_dispatcher_records_openinference_input_and_output(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(dispatcher_module, "set_llm_io", record_llm_io)
+    monkeypatch.setattr(dispatcher_module, "set_llm_io", record_llm_io, raising=False)
     queue_client.set_producer_alive("producer-live", "producer-live", 5)
     queue_client.push_request(
         QueuedCompletionEnvelope(
@@ -763,18 +800,7 @@ def test_dispatcher_records_openinference_input_and_output(monkeypatch):
     )
 
     assert dispatcher.run_once() == 1
-    assert recorded_io == [
-        {
-            "input_messages": messages,
-            "output_messages": None,
-            "context": context,
-        },
-        {
-            "input_messages": None,
-            "output_messages": "done:keep",
-            "context": None,
-        },
-    ]
+    assert recorded_io == []
 
 
 def test_batch_processor_uses_queued_executor_when_enabled(monkeypatch):
@@ -992,24 +1018,21 @@ def test_dispatch_runtime_live_state_merges_pending_and_inflight_requests():
         pool_config = runtime_state["pool_config"]
 
         assert summary["pending_request_count"] == 1
-        assert summary["pending_request_sample_count"] == 1
+        assert summary["pending_request_sample_count"] == 0
         assert summary["inflight_request_count"] == 1
-        assert summary["live_request_sample_limit_per_pool"] == 10
+        assert summary["live_request_sample_limit"] == 10
         assert pool_config[0]["scheduler_policy"] == "fifo"
         assert pool_config[0]["pool_id"] == "default"
         assert pool_config[0]["request_queue_depth"] == 1
 
         by_id = {item["request_id"]: item for item in live_requests}
-        assert by_id["req-pending"]["state_source"] == "valkey"
-        assert by_id["req-pending"]["lifecycle_stage"] == "pending"
-        assert by_id["req-pending"]["dispatcher_id"] is None
-        assert by_id["req-pending"]["estimated_cost_units"] == 1
-        assert by_id["req-pending"]["request_summary"] == "user: second prompt"
-
+        assert 'req-pending' not in by_id
+        assert summary['sampling_available'] is False
+        assert 'second prompt' not in str(runtime_state)
         assert by_id["req-inflight"]["state_source"] == "dispatcher"
         assert by_id["req-inflight"]["lifecycle_stage"] == "executing"
         assert by_id["req-inflight"]["dispatcher_id"] == dispatcher.dispatcher_id
-        assert by_id["req-inflight"]["inflight_age_seconds"] is not None
+        assert "request_summary" not in by_id["req-inflight"]
     finally:
         release.set()
         dispatcher.stop()
@@ -1080,10 +1103,10 @@ def test_dispatch_runtime_live_state_reports_full_pending_depth_with_sample_cap(
         summary = runtime_state["runtime_summary"]
 
         assert summary["pending_request_count"] == 3
-        assert summary["pending_request_sample_count"] == 1
-        assert summary["live_request_sample_limit_per_pool"] == 1
-        assert len(runtime_state["live_requests"]) == 1
-        assert runtime_state["live_requests"][0]["state_source"] == "valkey"
+        assert summary["pending_request_sample_count"] == 0
+        assert summary["live_request_sample_limit"] == 1
+        assert len(runtime_state["live_requests"]) == 0
+        assert summary["sampling_available"] is False
     finally:
         unregister_dispatcher(dispatcher.dispatcher_id)
 

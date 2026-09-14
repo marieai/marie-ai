@@ -236,7 +236,13 @@ function startAdminServer(): Server {
 }
 
 async function main() {
-  const mock = new LLMock({ port: PORT, host: HOST });
+  const journalMaxEntries = Number(process.env.AIMOCK_JOURNAL_MAX_ENTRIES || "1000");
+  const fixtureCountsMaxTestIds = Number(process.env.AIMOCK_FIXTURE_COUNTS_MAX_TEST_IDS || "500");
+  if (!Number.isSafeInteger(journalMaxEntries) || journalMaxEntries < 1 ||
+      !Number.isSafeInteger(fixtureCountsMaxTestIds) || fixtureCountsMaxTestIds < 1) {
+    throw new Error("AIMock retention limits must be positive integers");
+  }
+  const mock = new LLMock({ port: PORT, host: HOST, journalMaxEntries, fixtureCountsMaxTestIds });
   const adminServer = startAdminServer();
 
   // ==========================================================================

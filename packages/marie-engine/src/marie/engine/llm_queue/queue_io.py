@@ -1,20 +1,43 @@
 from __future__ import annotations
 
-import math
+import hashlib
 import threading
 import time
 from collections import defaultdict, deque
-from typing import Deque, Dict, Optional, Protocol
+from typing import Any, Deque, Dict, Optional, Protocol
 
 from marie.engine.completion_contract import (
     CompletionReplyEnvelope,
     QueuedCompletionEnvelope,
 )
-from marie.engine.llm_queue.valkey_keys import (
+from marie.engine.llm_queue.queue_keys import (
     producer_alive_key,
     reply_queue_key,
     request_queue_key,
 )
+
+
+class QueueUnavailable(RuntimeError):
+    """Queue transport failed without evidence that an entry is malformed."""
+
+
+class MalformedQueueRequest(ValueError):
+    def __init__(self, digest: str):
+        super().__init__('malformed_queue_request')
+        self.digest = digest
+
+
+def _payload_digest(payload: str | bytes) -> str:
+    return hashlib.sha1(
+        payload.encode() if isinstance(payload, str) else payload
+    ).hexdigest()
+
+
+def _decode_request(payload: str | bytes) -> QueuedCompletionEnvelope:
+    try:
+        return QueuedCompletionEnvelope.from_json(payload)
+    except (ValueError, TypeError, KeyError):
+        raise MalformedQueueRequest(_payload_digest(payload)) from None
 
 
 class ListQueueClient(Protocol):
@@ -27,6 +50,8 @@ class ListQueueClient(Protocol):
     def peek_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]: ...
 
     def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]: ...
+
+    def discard_malformed_head(self, pool_id: str, digest: str) -> bool: ...
 
     def push_request_front(self, request: QueuedCompletionEnvelope) -> None: ...
 
@@ -55,9 +80,34 @@ class ListQueueClient(Protocol):
     def close(self) -> None: ...
 
 
-class ValkeyListQueueClient:
+class StoreListQueueClient:
     def __init__(self, url: str):
-        self._client = _build_sync_client(url)
+        self._client = _build_sync_client(
+            url, socket_connect_timeout=2, socket_timeout=2, retry_on_timeout=False
+        )
+
+    def _read(self, method: str, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return getattr(self._client, method)(*args, **kwargs)
+        except Exception:
+            raise QueueUnavailable('queue_unavailable') from None
+
+    def discard_malformed_head(self, pool_id: str, digest: str) -> bool:
+        return bool(
+            self._read(
+                'eval',
+                """
+            local head = redis.call('LINDEX', KEYS[1], 0)
+            if head and redis.sha1hex(head) == ARGV[1] then
+                redis.call('LPOP', KEYS[1]); return 1
+            end
+            return 0
+        """,
+                1,
+                request_queue_key(pool_id),
+                digest,
+            )
+        )
 
     def push_request(self, request: QueuedCompletionEnvelope) -> None:
         self._client.rpush(request_queue_key(request.pool_id), request.to_json())
@@ -65,25 +115,26 @@ class ValkeyListQueueClient:
     def pop_request(
         self, pool_id: str, timeout: float
     ) -> Optional[QueuedCompletionEnvelope]:
-        result = self._client.blpop(
+        result = self._read(
+            'blpop',
             request_queue_key(pool_id),
-            timeout=max(1, math.ceil(timeout)),
+            timeout=min(1, max(0.001, timeout)),
         )
         if not result:
             return None
-        return QueuedCompletionEnvelope.from_json(result[1])
+        return _decode_request(result[1])
 
     def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
-        payload = self._client.lpop(request_queue_key(pool_id))
+        payload = self._read('lpop', request_queue_key(pool_id))
         if payload is None:
             return None
-        return QueuedCompletionEnvelope.from_json(payload)
+        return _decode_request(payload)
 
     def peek_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
-        payload = self._client.lindex(request_queue_key(pool_id), 0)
+        payload = self._read('lindex', request_queue_key(pool_id), 0)
         if payload is None:
             return None
-        return QueuedCompletionEnvelope.from_json(payload)
+        return _decode_request(payload)
 
     def push_request_front(self, request: QueuedCompletionEnvelope) -> None:
         self._client.lpush(request_queue_key(request.pool_id), request.to_json())
@@ -101,9 +152,10 @@ class ValkeyListQueueClient:
     def pop_reply(
         self, producer_id: str, timeout: float
     ) -> Optional[CompletionReplyEnvelope]:
-        result = self._client.blpop(
+        result = self._read(
+            'blpop',
             reply_queue_key(producer_id),
-            timeout=max(1, math.ceil(timeout)),
+            timeout=min(1, max(0.001, timeout)),
         )
         if not result:
             return None
@@ -118,10 +170,10 @@ class ValkeyListQueueClient:
         self._client.delete(producer_alive_key(producer_id))
 
     def is_producer_alive(self, producer_id: str) -> bool:
-        return bool(self._client.exists(producer_alive_key(producer_id)))
+        return bool(self._read('exists', producer_alive_key(producer_id)))
 
     def request_queue_depth(self, pool_id: str) -> int:
-        return int(self._client.llen(request_queue_key(pool_id)) or 0)
+        return int(self._read('llen', request_queue_key(pool_id)) or 0)
 
     def sample_requests(
         self, pool_id: str, limit: int
@@ -157,7 +209,7 @@ class InMemoryListQueueClient:
         payload = self._blocking_pop(request_queue_key(pool_id), timeout)
         if payload is None:
             return None
-        return QueuedCompletionEnvelope.from_json(payload)
+        return _decode_request(payload)
 
     def try_pop_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
         with self._condition:
@@ -165,7 +217,7 @@ class InMemoryListQueueClient:
             queue_key = request_queue_key(pool_id)
             if not self._lists[queue_key]:
                 return None
-            return QueuedCompletionEnvelope.from_json(self._lists[queue_key].popleft())
+            return _decode_request(self._lists[queue_key].popleft())
 
     def peek_request(self, pool_id: str) -> Optional[QueuedCompletionEnvelope]:
         with self._condition:
@@ -173,7 +225,15 @@ class InMemoryListQueueClient:
             queue_key = request_queue_key(pool_id)
             if not self._lists[queue_key]:
                 return None
-            return QueuedCompletionEnvelope.from_json(self._lists[queue_key][0])
+            return _decode_request(self._lists[queue_key][0])
+
+    def discard_malformed_head(self, pool_id: str, digest: str) -> bool:
+        with self._condition:
+            queue = self._lists[request_queue_key(pool_id)]
+            if queue and _payload_digest(queue[0]) == digest:
+                queue.popleft()
+                return True
+            return False
 
     def push_request_front(self, request: QueuedCompletionEnvelope) -> None:
         with self._condition:
@@ -269,16 +329,16 @@ class InMemoryListQueueClient:
             self._alive.pop(key, None)
 
 
-def _build_sync_client(url: str):
+def _build_sync_client(url: str, **connection_options: Any) -> Any:
     try:
         from valkey import Valkey
 
-        return Valkey.from_url(url, decode_responses=True)
+        return Valkey.from_url(url, decode_responses=True, **connection_options)
     except ImportError:
         try:
             from redis import Redis
 
-            return Redis.from_url(url, decode_responses=True)
+            return Redis.from_url(url, decode_responses=True, **connection_options)
         except ImportError as exc:
             raise ImportError(
                 "LLM queue requires the `valkey` package (preferred) or `redis` package."

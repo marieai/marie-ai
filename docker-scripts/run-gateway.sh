@@ -70,7 +70,9 @@ else
     -e LLM_QUEUE_ENABLED="${LLM_QUEUE_ENABLED:-true}" \
     -e LLM_QUEUE_FABRIC_GROUP_ID="${LLM_QUEUE_FABRIC_GROUP_ID:-default}" \
     -e LLM_QUEUE_GATEWAY_ID="${LLM_QUEUE_GATEWAY_ID:-default}" \
-    -e LLM_QUEUE_VALKEY_URL="${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}" \
+    -e LLM_QUEUE_CONTRACT_VERSION="${LLM_QUEUE_CONTRACT_VERSION:-v2}" \
+    -e LLM_QUEUE_URL="${LLM_QUEUE_URL:-${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}}" \
+    -e LLM_QUEUE_VALKEY_URL="${LLM_QUEUE_URL:-${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}}" \
     -e OPENAI_API_BASE="${OPENAI_API_BASE:-http://192.222.48.192}" \
     -e OPENAI_API_KEY="${OPENAI_API_KEY:-EMPTY}" \
     --env-file ./service.env \

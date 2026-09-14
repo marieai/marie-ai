@@ -34,7 +34,9 @@ class BatchExecutionError(Exception):
         failed_results: list[Any],
         total: int,
         message: str = "",
+        successful_results: list[Any] | None = None,
     ) -> None:
+        self.successful_results = successful_results or []
         self.request_id = request_id
         self.failed_results = failed_results
         self.total = total

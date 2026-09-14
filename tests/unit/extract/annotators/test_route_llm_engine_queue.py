@@ -39,10 +39,7 @@ def test_route_llm_engine_cache_includes_queue_configuration():
     assert engine_cls.call_count == 2
     assert engine_cls.call_args_list[0].kwargs["queue_enabled"] is False
     assert engine_cls.call_args_list[1].kwargs["queue_enabled"] is True
-    assert (
-        engine_cls.call_args_list[1].kwargs["queue_valkey_url"]
-        == "redis://localhost:6379/0"
-    )
+    assert engine_cls.call_args_list[1].kwargs["queue_url"] == "redis://localhost:6379/0"
     assert engine_cls.call_args_list[1].kwargs["queue_pool_id"] == "default"
 
     annotator_util.clear_engine_cache()
@@ -65,5 +62,46 @@ def test_route_llm_engine_treats_unresolved_pool_env_as_default():
             annotator_util.route_llm_engine("model-a", True)
 
     assert engine_cls.call_args.kwargs["queue_pool_id"] == "default"
+
+    annotator_util.clear_engine_cache()
+
+
+def test_route_llm_engine_reuses_cache_for_equivalent_queue_url_aliases():
+    annotator_util.clear_engine_cache()
+    engine = object()
+
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "OPENAI_API_KEY": "EMPTY",
+            "OPENAI_API_BASE": "http://llm-backend/v1",
+            "LLM_QUEUE_ENABLED": "true",
+            "LLM_QUEUE_URL": " redis://queue:6379/0 ",
+        },
+        clear=True,
+    ):
+        with mock.patch.object(
+            annotator_util,
+            "OpenAIEngine",
+            return_value=engine,
+        ) as engine_cls:
+            canonical_engine = annotator_util.route_llm_engine("model-a", True)
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_API_KEY": "EMPTY",
+                    "OPENAI_API_BASE": "http://llm-backend/v1",
+                    "LLM_QUEUE_ENABLED": "true",
+                    "LLM_QUEUE_VALKEY_URL": "redis://queue:6379/0",
+                },
+                clear=True,
+            ):
+                legacy_engine = annotator_util.route_llm_engine("model-a", True)
+
+    assert canonical_engine is engine
+    assert legacy_engine is engine
+    assert engine_cls.call_count == 1
+    assert engine_cls.call_args.kwargs["queue_url"] == "redis://queue:6379/0"
 
     annotator_util.clear_engine_cache()

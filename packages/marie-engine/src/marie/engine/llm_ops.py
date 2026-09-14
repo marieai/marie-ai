@@ -2,13 +2,14 @@ import asyncio
 import contextvars
 import functools
 import logging
+import threading
+import time
 from typing import Callable, Dict, List, Optional, Union
-
-from pydantic import BaseModel
 
 from marie.engine import EngineLM, get_engine
 from marie.engine.config import validate_engine_or_get_default
 from marie.engine.function import Function, FunctionReturnType
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,10 @@ class LLMCall(Function):
         :example:
         >>> engine = get_engine("qwen_vl_3b")
         >>> llm_call = LLMCall(engine)
-        >>> prompt = ["What is the capital of France?", "What is the capital of Germany?"]
+        >>> prompt = [
+        ...     "What is the capital of France?",
+        ...     "What is the capital of Germany?",
+        ... ]
         >>> response = llm_call(prompt)
         """
         # TODO: Should we allow default roles? It will make things less performant.
@@ -125,6 +129,14 @@ class LLMCall(Function):
         :param kwargs: Additional parameters for generation.
         :return: response sampled from the LLM
         """
+        cancellation = threading.Event()
+        processor = getattr(self.engine, 'batch_processor', None)
+        if processor is not None and processor.uses_v3_queue:
+            kwargs['cancellation'] = cancellation
+            kwargs.setdefault(
+                'queue_deadline', time.monotonic() + processor.batch_timeout
+            )
+
         system_prompt_value = self.system_prompt
 
         # Check if engine has async call capability
@@ -162,7 +174,11 @@ class LLMCall(Function):
                 on_result=on_result,
                 **kwargs,
             )
-            response_text = await loop.run_in_executor(None, ctx.run, fn)
+            try:
+                response_text = await loop.run_in_executor(None, ctx.run, fn)
+            except asyncio.CancelledError:
+                cancellation.set()
+                raise
 
         logger.info(
             "LLMCall function aforward",
@@ -224,7 +240,6 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 if __name__ == "__main__":
-
     # some sample text
     document_context = """
         ### **Input Text:**

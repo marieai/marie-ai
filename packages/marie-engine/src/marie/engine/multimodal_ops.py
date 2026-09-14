@@ -2,6 +2,8 @@ import asyncio
 import contextvars
 import functools
 import logging
+import threading
+import time
 from typing import Callable, Dict, List, Optional, Union
 
 from marie.engine import EngineLM
@@ -72,6 +74,8 @@ class MultimodalLLMCall(Function):
                         f"MultimodalLLMCall only accepts str, bytes or PIL Image, got {type(variable)}"
                     )
 
+        if not inputs:
+            return []
         if isinstance(inputs[0], list):
             for sublist in inputs:
                 validate_input(sublist)
@@ -135,6 +139,14 @@ class MultimodalLLMCall(Function):
         :return: response sampled from the LLM
         """
 
+        cancellation = threading.Event()
+        processor = getattr(self.engine, 'batch_processor', None)
+        if processor is not None and processor.uses_v3_queue:
+            kwargs['cancellation'] = cancellation
+            kwargs.setdefault(
+                'queue_deadline', time.monotonic() + processor.batch_timeout
+            )
+
         def validate_input(input_items: List[Union[str, bytes, Image.Image]]):
             for variable in input_items:
                 if not isinstance(variable, (str, bytes, Image.Image)):
@@ -142,6 +154,8 @@ class MultimodalLLMCall(Function):
                         f"MultimodalLLMCall only accepts str, bytes or PIL Image, got {type(variable)}"
                     )
 
+        if not inputs:
+            return []
         if isinstance(inputs[0], list):
             for sublist in inputs:
                 validate_input(sublist)
@@ -183,7 +197,11 @@ class MultimodalLLMCall(Function):
                 on_result=on_result,
                 **kwargs,
             )
-            response_text = await loop.run_in_executor(None, ctx.run, fn)
+            try:
+                response_text = await loop.run_in_executor(None, ctx.run, fn)
+            except asyncio.CancelledError:
+                cancellation.set()
+                raise
 
         logger.debug(
             "MultimodalLLMCall function aforward",

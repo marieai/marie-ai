@@ -71,6 +71,8 @@ def _requested_pages_tuple(value: Any) -> tuple[int, ...] | None:
 class LLMAnnotator(DocumentAnnotator):
     """LLM Annotator with optional multi-pass refinement."""
 
+    requires_frames = False
+
     def __init__(
         self,
         working_dir: str,
@@ -1023,6 +1025,7 @@ class LLMAnnotator(DocumentAnnotator):
         Upstream task data is available via self.run_context if provided.
         Example: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         """
+        del frames
         self.logger.info(f"Annotating document with {self.name}...")
 
         with start_as_current_span(

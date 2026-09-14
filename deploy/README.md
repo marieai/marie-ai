@@ -108,6 +108,15 @@ helm template marie deploy/helm/charts/marie \
   >/tmp/marie-rendered.yaml
 ```
 
+For an external LLM queue, set `global.llmQueue.url` or reference a Secret with
+`global.llmQueue.existingSecret` and `global.llmQueue.existingSecretUrlKey`.
+When the queue is enabled, the chart forwards the selected connection as both
+`LLM_QUEUE_URL` and the legacy-compatible `LLM_QUEUE_VALKEY_URL`. Existing
+values with a nonblank `global.valkey.host` continue to select that external
+Valkey connection. The bundled `<release>-valkey` fallback is available only
+when both `global.valkey.enabled=true` and the top-level
+`valkey.enabled=true` chart dependency are enabled.
+
 Check the rendered images:
 
 ```bash
