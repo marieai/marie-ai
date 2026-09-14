@@ -3,11 +3,11 @@
 global:
   marie:
     image:
-      digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
+      digest: sha256:315859c43359f927d83ce9845f3bd5d6ec2f30438ef5e80392e5800d499fc6ca
 
 server:
   image:
-    digest: sha256:e65a1a3b2b7f3e2999229f2b1c898d0b83fa2a1f61d19af642daf4c9d21fa997
+    digest: sha256:09b35e5203d4083792f1a43875814e09f69c0878e2fcce8b208e5cdf6f2712b1
 
 executor:
   pools:
@@ -21,8 +21,8 @@ executor:
         type: Recreate
       image:
         repository: docker.io/marieai/marie
-        tag: "5.0.4-cuda"
-        digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
+        tag: "5.0.3-cuda"
+        digest: sha256:315859c43359f927d83ce9845f3bd5d6ec2f30438ef5e80392e5800d499fc6ca
         pullPolicy: IfNotPresent
       resources:
         requests:
