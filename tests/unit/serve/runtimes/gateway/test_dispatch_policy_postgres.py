@@ -228,6 +228,9 @@ async def test_actual_postgres_policy_selects_v3_startup_and_producer_limits(eng
         assert activated.generation == 1
         assert active_policy.policy_digest == activated.policy_digest
         assert active_policy.match({'workload.kind': 'document'}).pool_id == 'default'
+        binding = active_policy.endpoint_binding('default')
+        assert binding.endpoint_group_id == 'primary'
+        assert binding.revision == 'r1'
         runtime = GatewayLlmDispatchRuntime(
             queue_config=LlmQueueConfig(
                 enabled=True,

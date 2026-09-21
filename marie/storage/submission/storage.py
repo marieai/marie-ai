@@ -157,6 +157,31 @@ class SubmissionStorage(PostgresqlMixin):
             self._close_cursor(cursor)
             self._close_connection(conn)
 
+    def update_document_page_count(
+        self, document_id: str, storage_key: str, page_count: int
+    ) -> bool:
+        """Cache a positive page count without changing a different document."""
+        if type(page_count) is not int or page_count < 1:
+            raise ValueError('page_count must be a positive integer')
+        self._ensure_started()
+        conn = self._get_connection()
+        cursor = None
+        try:
+            cursor = self._execute_sql_gracefully(
+                f"""
+                UPDATE {self._qualified_table('submission_documents')}
+                SET page_count = %s, updated_at = NOW()
+                WHERE id = %s AND storage_key = %s AND page_count IS NULL
+                """,
+                (page_count, document_id, storage_key),
+                return_cursor=True,
+                connection=conn,
+            )
+            return cursor.rowcount == 1
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
     def update_document_indexing_status(
         self,
         document_id: str,

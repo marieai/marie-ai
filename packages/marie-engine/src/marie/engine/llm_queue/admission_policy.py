@@ -148,11 +148,19 @@ class RoutingDecision:
 
 
 @dataclass(frozen=True, slots=True)
+class PoolEndpointBinding:
+    pool_id: str
+    endpoint_group_id: str
+    revision: str
+
+
+@dataclass(frozen=True, slots=True)
 class AdmissionPolicy:
     fabric_group_id: str
     generation: int
     policy_digest: str
     rules: tuple[AdmissionRule, ...]
+    endpoint_bindings: tuple[PoolEndpointBinding, ...] = ()
 
     @classmethod
     def from_rows(
@@ -168,6 +176,7 @@ class AdmissionPolicy:
 
         seen: set[str] = set()
         rules: list[AdmissionRule] = []
+        endpoint_bindings: list[PoolEndpointBinding] = []
         for row in rows:
             pool_id = row.get('pool_id')
             if not isinstance(pool_id, str) or not _POOL_ID.fullmatch(pool_id):
@@ -188,6 +197,9 @@ class AdmissionPolicy:
             if admission is None:
                 continue
             rules.append(_parse_rule(pool_id, enabled, admission))
+            dispatch = metadata.get('llm_dispatch')
+            if dispatch is not None:
+                endpoint_bindings.append(_parse_endpoint_binding(pool_id, dispatch))
 
         normalized = tuple(sorted(rules, key=lambda rule: rule.pool_id))
         _validate_complete_rule_set(normalized)
@@ -197,6 +209,9 @@ class AdmissionPolicy:
             generation=generation,
             policy_digest=_digest(snapshot),
             rules=normalized,
+            endpoint_bindings=tuple(
+                sorted(endpoint_bindings, key=lambda binding: binding.pool_id)
+            ),
         )
 
     def to_snapshot(self) -> dict[str, object]:
@@ -222,6 +237,28 @@ class AdmissionPolicy:
             normalized_fact_digest=_digest(normalized),
             matched_facts=tuple(condition.fact_name for condition in rule.conditions),
         )
+
+    def endpoint_binding(self, pool_id: str) -> PoolEndpointBinding:
+        for binding in self.endpoint_bindings:
+            if binding.pool_id == pool_id:
+                return binding
+        raise AdmissionMatchError('routing_endpoint_binding_missing')
+
+
+def _parse_endpoint_binding(pool_id: str, value: object) -> PoolEndpointBinding:
+    if not isinstance(value, Mapping):
+        raise AdmissionPolicyError('routing_policy_endpoint_invalid')
+    endpoint_id = value.get('endpoint_id')
+    revision = value.get('revision')
+    if (
+        value.get('schema_version') != 1
+        or not isinstance(endpoint_id, str)
+        or not _POOL_ID.fullmatch(endpoint_id)
+        or not isinstance(revision, str)
+        or not _POOL_ID.fullmatch(revision)
+    ):
+        raise AdmissionPolicyError('routing_policy_endpoint_invalid')
+    return PoolEndpointBinding(pool_id, endpoint_id, revision)
 
 
 def _parse_rule(pool_id: str, enabled: bool, value: object) -> AdmissionRule:

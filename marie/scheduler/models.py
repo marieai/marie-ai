@@ -6,6 +6,7 @@ from typing import Any, Dict, Literal, Optional
 from pydantic import BaseModel, Field
 from uuid_extensions import uuid7str
 
+from marie.scheduler.llm_routing import TrustedRoutingContext
 from marie.scheduler.state import WorkState
 
 
@@ -31,6 +32,7 @@ class WorkInfo(BaseModel):
     run_owner: Optional[str] = None
     run_attempt_id: Optional[str] = None
     branch_metadata: Optional[Dict[str, Any]] = None
+    routing_context: TrustedRoutingContext | None = Field(default=None, exclude=True)
 
 
 class JobSubmissionModel(BaseModel):

@@ -245,11 +245,25 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             admission_snapshot = snapshot.get('admission')
             if not isinstance(admission_snapshot, dict):
                 raise ValueError('LLM admission policy snapshot is unavailable')
+            dispatch_lanes = {
+                lane['pool_id']: lane
+                for lane in snapshot.get('dispatch', {}).get('lanes', [])
+                if isinstance(lane, dict) and isinstance(lane.get('pool_id'), str)
+            }
             rows = [
                 {
                     'pool_id': rule['pool_id'],
                     'enabled': rule['enabled'],
-                    'metadata': {'admission': rule['admission']},
+                    'metadata': {
+                        'admission': rule['admission'],
+                        'llm_dispatch': {
+                            'schema_version': 1,
+                            'endpoint_id': dispatch_lanes[rule['pool_id']][
+                                'endpoint_id'
+                            ],
+                            'revision': dispatch_lanes[rule['pool_id']]['revision'],
+                        },
+                    },
                 }
                 for rule in admission_snapshot.get('rules', [])
             ]
