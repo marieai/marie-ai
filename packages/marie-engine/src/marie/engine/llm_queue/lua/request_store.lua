@@ -47,8 +47,9 @@ for i=18,#KEYS do
 end
 local R, alive, members, ready, route, usage, owner, generation,
       delayed, processing, deadlines, retention, producers, limits_key, routes, endpoint, endpoints = unpack(KEYS)
+local manifest = KEYS[18]
 local operations = {route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
-    producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,
+    producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,admit_manifest=true,
     metadata=true,result=true,claim=true,payload=true,start=true,defer=true,promote=true,
     finish=true,cancel=true,recover=true,discard=true,purge=true,settle=true,prune=true}
 if not operations[op] then return redis.error_reply('invalid operation') end
@@ -114,12 +115,17 @@ if op == 'route' and (not identifier(a.endpoint_id) or not identifier(a.revision
     (a.enabled ~= '1' and a.enabled ~= '0') or (a.gate ~= 'open' and a.gate ~= 'closed')) then
     return redis.error_reply('invalid route arguments')
 end
-if op == 'admit' and (type(a.model) ~= 'string' or #a.model < 1 or #a.model > 128 or not identifier(a.endpoint_id) or not identifier(a.config_revision) or
+if (op == 'admit' or op == 'admit_manifest') and (type(a.model) ~= 'string' or #a.model < 1 or #a.model > 128 or not identifier(a.endpoint_id) or not identifier(a.config_revision) or
     not identifier(a.logical_batch_id) or not identifier(a.logical_task_id) or
     not integer(a.item_index,0,2^31-1) or not integer(a.cost,1,1000000) or
     not integer(a.expires_at_ms,1,2^53-1) or type(a.payload) ~= 'string' or
     not integer(a.payload_bytes,1,a.limits.max_inline_payload_bytes) or #a.payload ~= a.payload_bytes or
     type(a.digest) ~= 'string' or #a.digest ~= 64) then return redis.error_reply('invalid admission arguments') end
+if op == 'admit_manifest' and (#KEYS ~= 18 or not identifier(a.job_id) or
+    not identifier(a.work_unit_id) or type(a.manifest_digest) ~= 'string' or
+    #a.manifest_digest ~= 64 or string.find(a.manifest_digest,'[^0-9a-f]')) then
+    return redis.error_reply('invalid manifest admission arguments')
+end
 local t = redis.call('TIME')
 local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local function h(key, field) return redis.call('HGET', key, field) end
@@ -361,9 +367,23 @@ elseif op == 'route' then
         'enabled',a.enabled,'gate',a.gate,'execution_limit',a.execution_limit,
         'execution_bytes',a.execution_bytes)
     return reply('configured')
-elseif op == 'admit' then
+elseif op == 'admit' or op == 'admit_manifest' then
+    if op == 'admit_manifest' then
+        local projected_digest = h(manifest,'route_digest')
+        if not projected_digest then return reply('routing_manifest_missing') end
+        if h(manifest,'job_id') ~= a.job_id or h(manifest,'work_unit_id') ~= a.work_unit_id or
+           h(manifest,'fabric_group_id') ~= a.fabric_id or projected_digest ~= a.manifest_digest or
+           h(manifest,'pool_id') ~= a.pool_id or h(manifest,'endpoint_group_id') ~= a.endpoint_id or
+           h(manifest,'endpoint_revision') ~= a.config_revision then
+            return reply('routing_binding_conflict')
+        end
+    end
     if redis.call('EXISTS',R) == 1 then
         if h(R,'digest') ~= a.digest or h(R,'producer_id') ~= a.producer_id then return reply('conflict') end
+        if op == 'admit_manifest' and (h(R,'job_id') ~= a.job_id or
+           h(R,'work_unit_id') ~= a.work_unit_id or h(R,'route_digest') ~= a.manifest_digest) then
+            return reply('routing_binding_conflict')
+        end
         if not live() then return reply('producer_dead') end
         return reply('existing')
     end
@@ -384,6 +404,9 @@ elseif op == 'admit' then
         'expires_at_ms',a.expires_at_ms,'payload',a.payload,'payload_bytes',a.payload_bytes,
         'model',a.model,'admitted_at_ms',now,'cost',a.cost,'state','ready','execution_seq',0,'active',1,'reserved',0,
         'storage_charge',charge,'result_allowance',a.limits.result_allowance)
+    if op == 'admit_manifest' then
+        redis.call('HSET',R,'job_id',a.job_id,'work_unit_id',a.work_unit_id,'route_digest',a.manifest_digest)
+    end
     redis.call('SADD',members,a.id)
     redis.call('RPUSH',ready,a.id)
     redis.call('ZADD',deadlines,a.expires_at_ms,a.id)

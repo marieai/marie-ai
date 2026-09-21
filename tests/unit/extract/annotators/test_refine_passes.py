@@ -98,8 +98,7 @@ class TestRefinementContextProvider:
 
         variables = provider.get_variables(doc, page_number=1, unit=None)
         assert "PREVIOUS_EXTRACTION" in variables
-        assert payload in variables["PREVIOUS_EXTRACTION"]
-        assert "Previous Extraction Results" in variables["PREVIOUS_EXTRACTION"]
+        assert variables["PREVIOUS_EXTRACTION"] == payload
 
     def test_get_variables_empty_when_no_match(self):
         provider = RefinementContextProvider({}, "test-ann")
@@ -239,12 +238,14 @@ def _make_annotator(
     }
     layout_conf = {"layout_id": "999"}
 
-    with patch(
-        "marie.extract.annotators.llm_annotator.route_llm_engine"
-    ) as mock_engine, patch(
-        "marie.extract.annotators.llm_annotator.ContextProviderManager"
-    ) as mock_cpm:
-        mock_engine.return_value = MagicMock(spec=["close"])
+    with (
+        patch("marie.extract.annotators.llm_annotator.route_llm_engine") as mock_engine,
+        patch(
+            "marie.extract.annotators.llm_annotator.ContextProviderManager"
+        ) as mock_cpm,
+    ):
+        mock_engine.return_value = MagicMock(spec=["close", "model_string"])
+        mock_engine.return_value.model_string = "test-model"
         mock_cpm_instance = MagicMock()
         mock_cpm_instance.has_providers.return_value = False
         mock_cpm.return_value = mock_cpm_instance
@@ -356,9 +357,7 @@ class TestComparePassReports:
             "processing_keys": {ProcessingKey(1, None)},
             "file_count": 1,
             "total_element_count": 10,
-            "fingerprints_by_key": {
-                ProcessingKey(1, None): {("a", 1), ("b", 2)}
-            },
+            "fingerprints_by_key": {ProcessingKey(1, None): {("a", 1), ("b", 2)}},
             "total_json_size": 1000,
             "errors": [],
         }
@@ -382,16 +381,17 @@ class TestComparePassReports:
         prev = self._make_report(
             processing_keys={ProcessingKey(1, None), ProcessingKey(2, None)}
         )
-        curr = self._make_report(
-            processing_keys={ProcessingKey(1, None)}
-        )
+        curr = self._make_report(processing_keys={ProcessingKey(1, None)})
         assert ann._compare_pass_reports(prev, curr) is False
 
     def test_allows_different_keys_when_not_required(self, tmp_path):
         ann = _make_annotator(
             tmp_path,
             refine_passes=1,
-            refinement_validation={"require_same_units": False, "max_segment_drop_ratio": 0.2},
+            refinement_validation={
+                "require_same_units": False,
+                "max_segment_drop_ratio": 0.2,
+            },
         )
         prev = self._make_report(
             processing_keys={ProcessingKey(1, None), ProcessingKey(2, None)}
@@ -428,9 +428,7 @@ class TestComparePassReports:
         )
         # Only 1/4 retained = 25% < 50%
         curr = self._make_report(
-            fingerprints_by_key={
-                ProcessingKey(1, None): {("a", 1), ("x", 5), ("y", 6)}
-            }
+            fingerprints_by_key={ProcessingKey(1, None): {("a", 1), ("x", 5), ("y", 6)}}
         )
         assert ann._compare_pass_reports(prev, curr) is False
 
@@ -461,8 +459,8 @@ class TestEngineForPass:
                 engine_a if name == "model_a" else engine_b
             )
 
-            assert ann._engine_for_pass(0) is engine_a
-            assert ann._engine_for_pass(1) is engine_b
+            assert ann._engine_for_pass(0) is ann.engine
+            assert ann._engine_for_pass(1) is engine_a
 
     def test_falls_back_when_index_out_of_range(self, tmp_path):
         ann = _make_annotator(
@@ -475,14 +473,14 @@ class TestEngineForPass:
 
 
 class TestSpanMetadata:
-    def test_includes_queue_pool_id_when_provided(self, tmp_path):
+    def test_omits_internal_queue_pool_id(self, tmp_path):
         ann = _make_annotator(tmp_path, pool_id="document-small")
         ann.engine = MagicMock()
         ann.engine.model_string = "test-model"
 
         metadata = ann._build_span_metadata()
 
-        assert metadata["pool_id"] == "document-small"
+        assert "pool_id" not in metadata
 
 
 # ======================================================================
@@ -666,14 +664,21 @@ class TestRefinementIntegration:
         ann = _make_annotator(tmp_path, refine_passes=1)
 
         pass0_data = {"extractions": [{"label": "a", "line_number": 1, "value": "v"}]}
-        pass1_data = {"extractions": [{"label": "a", "line_number": 1, "value": "v_refined"}]}
+        pass1_data = {
+            "extractions": [{"label": "a", "line_number": 1, "value": "v_refined"}]
+        }
 
         call_count = {"n": 0}
         captured_contexts: list = []
 
         async def mock_extraction(
-            frames_dir, output_dir, prompt_text, document,
-            completion_params, context_manager, engine=None,
+            frames_dir,
+            output_dir,
+            prompt_text,
+            document,
+            completion_params,
+            context_manager,
+            engine=None,
         ):
             idx = call_count["n"]
             call_count["n"] += 1
@@ -714,8 +719,13 @@ class TestRefinementIntegration:
         call_count = {"n": 0}
 
         async def mock_extraction(
-            frames_dir, output_dir, prompt_text, document,
-            completion_params, context_manager, engine=None,
+            frames_dir,
+            output_dir,
+            prompt_text,
+            document,
+            completion_params,
+            context_manager,
+            engine=None,
         ):
             idx = call_count["n"]
             call_count["n"] += 1
@@ -749,15 +759,18 @@ class TestRefinementIntegration:
             ]
         }
         # Severe regression: only 1 extraction
-        pass1_data = {
-            "extractions": [{"label": "a", "line_number": 1, "value": "v1"}]
-        }
+        pass1_data = {"extractions": [{"label": "a", "line_number": 1, "value": "v1"}]}
 
         call_count = {"n": 0}
 
         async def mock_extraction(
-            frames_dir, output_dir, prompt_text, document,
-            completion_params, context_manager, engine=None,
+            frames_dir,
+            output_dir,
+            prompt_text,
+            document,
+            completion_params,
+            context_manager,
+            engine=None,
         ):
             idx = call_count["n"]
             call_count["n"] += 1
@@ -785,8 +798,13 @@ class TestRefinementIntegration:
         call_count = {"n": 0}
 
         async def mock_extraction(
-            frames_dir, output_dir, prompt_text, document,
-            completion_params, context_manager, engine=None,
+            frames_dir,
+            output_dir,
+            prompt_text,
+            document,
+            completion_params,
+            context_manager,
+            engine=None,
         ):
             idx = call_count["n"]
             call_count["n"] += 1
@@ -822,8 +840,13 @@ class TestRefinementIntegration:
         engines_used: list = []
 
         async def mock_extraction(
-            frames_dir, output_dir, prompt_text, document,
-            completion_params, context_manager, engine=None,
+            frames_dir,
+            output_dir,
+            prompt_text,
+            document,
+            completion_params,
+            context_manager,
+            engine=None,
         ):
             engines_used.append(engine)
             data = {"extractions": [{"label": "a", "line_number": 1, "value": "v"}]}
@@ -846,8 +869,8 @@ class TestRefinementIntegration:
             await ann._arun_refine_passes(doc)
 
         assert len(engines_used) == 2
-        assert engines_used[0] is engine_fast
-        assert engines_used[1] is engine_accurate
+        assert engines_used[0] is ann.engine
+        assert engines_used[1] is engine_fast
 
 
 # ======================================================================
@@ -890,16 +913,12 @@ class TestCompletionParamsForPass:
         assert ann._completion_params_for_pass(1)["max_tokens"] == 8192
 
     def test_per_pass_temperature_override(self, tmp_path):
-        ann = _make_annotator(
-            tmp_path, refine_passes=1, pass_temperatures=[0.0, 0.3]
-        )
+        ann = _make_annotator(tmp_path, refine_passes=1, pass_temperatures=[0.3])
         assert ann._completion_params_for_pass(0)["temperature"] == 0.0
         assert ann._completion_params_for_pass(1)["temperature"] == 0.3
 
     def test_does_not_mutate_original(self, tmp_path):
-        ann = _make_annotator(
-            tmp_path, refine_passes=1, pass_temperatures=[0.0, 0.5]
-        )
+        ann = _make_annotator(tmp_path, refine_passes=1, pass_temperatures=[0.5])
         params = ann._completion_params_for_pass(1)
         params["temperature"] = 999
         # Original should be untouched

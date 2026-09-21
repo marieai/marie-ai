@@ -484,16 +484,18 @@ class LLMAnnotator(DocumentAnnotator):
             meta["dag_id"] = self.dag_id
         if self.node_task_id:
             meta["node_task_id"] = self.node_task_id
-        if self.llm_pool_id:
-            meta["pool_id"] = self.llm_pool_id
         return meta
 
     def _build_model_request_context(self) -> RequestContext | None:
         """Build source provenance for model requests from annotator runtime fields."""
         requested_pages = _requested_pages_tuple(self.requested_pages)
-        if not self.ref_id or not self.ref_type:
+        has_route_identity = bool(self.dag_id and self.node_task_id)
+        has_source_identity = bool(self.ref_id and self.ref_type)
+        if not has_route_identity and not has_source_identity:
             return None
         return RequestContext(
+            job_id=self.dag_id,
+            work_unit_id=self.node_task_id,
             ref_id=self.ref_id,
             ref_type=self.ref_type,
             requested_pages=requested_pages,

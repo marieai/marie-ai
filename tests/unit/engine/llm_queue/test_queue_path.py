@@ -1,8 +1,9 @@
 import asyncio
+import json
 import threading
 import time
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from unittest import mock
 
 import pytest
@@ -27,6 +28,7 @@ from marie.engine.llm_queue.config import (
     LlmQueueConfig,
 )
 from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
+from marie.engine.llm_queue.producer import V3Producer
 from marie.engine.llm_queue.queue_io import (
     InMemoryListQueueClient,
     StoreListQueueClient,
@@ -48,8 +50,11 @@ from marie.engine.llm_queue.registry import (
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.llm_queue.store import (
     AdmissionConflict,
+    PreparedAdmission,
     RequestStore,
     RoutingManifestProjection,
+    StoreLimits,
+    StoreReply,
 )
 from marie.engine.llm_queue.submitter import (
     QueuedBatchExecutor,
@@ -134,6 +139,167 @@ def test_routing_manifest_rejects_unsafe_policy_generation() -> None:
 
     with pytest.raises(ValueError, match='policy generation'):
         store.project_routing_manifest(projection)
+
+
+def test_manifest_admission_uses_projected_pool_without_pool_metadata() -> None:
+    projection = RoutingManifestProjection(
+        job_id="job-1",
+        work_unit_id="node-1",
+        fabric_group_id="default",
+        policy_generation=1,
+        route_digest="a" * 64,
+        pool_id="document-small",
+        endpoint_group_id="primary",
+        endpoint_revision="r1",
+    )
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+    store.limits = StoreLimits()
+    store._limits_json = json.dumps(
+        asdict(store.limits),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    store._client_error = RuntimeError
+    store.resolve_routing_manifest = lambda *_args: projection
+    captured = {}
+
+    def script(*, keys, args):
+        import json
+
+        captured["keys"] = keys
+        captured["payload"] = json.loads(args[0])
+        return json.dumps({"disposition": "admitted"})
+
+    store._script = script
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+    request = PreparedAdmission.create(
+        fabric_group_id="default",
+        producer_id="producer-1",
+        attempt_id="attempt-1",
+        job_id="job-1",
+        work_unit_id="node-1",
+        logical_batch_id="batch-1",
+        logical_task_id="task-1",
+        item_index=0,
+        expires_at_ms=1000,
+        call=call,
+        estimated_cost_units=1,
+    )
+
+    assert store.admit_from_manifest(request).disposition == "admitted"
+    assert captured["keys"][3] == store.keys.ready("document-small")
+    assert captured["payload"]["pool_id"] == "document-small"
+    assert captured["payload"]["job_id"] == "job-1"
+    assert captured["payload"]["work_unit_id"] == "node-1"
+
+
+def test_manifest_admission_rejects_tampered_content_digest() -> None:
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+    request = PreparedAdmission.create(
+        fabric_group_id="default",
+        producer_id="producer-1",
+        attempt_id="attempt-1",
+        job_id="job-1",
+        work_unit_id="node-1",
+        logical_batch_id="batch-1",
+        logical_task_id="task-1",
+        item_index=0,
+        expires_at_ms=1000,
+        call=call,
+        estimated_cost_units=1,
+    )
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+
+    with pytest.raises(ValueError, match="content digest"):
+        store.admit_from_manifest(replace(request, content_digest="b" * 64))
+
+
+def test_manifest_admission_rejects_missing_route() -> None:
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+    request = PreparedAdmission.create(
+        fabric_group_id="default",
+        producer_id="producer-1",
+        attempt_id="attempt-1",
+        job_id="job-1",
+        work_unit_id="node-1",
+        logical_batch_id="batch-1",
+        logical_task_id="task-1",
+        item_index=0,
+        expires_at_ms=1000,
+        call=call,
+        estimated_cost_units=1,
+    )
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+    store.resolve_routing_manifest = lambda *_args: None
+
+    assert store.admit_from_manifest(request).disposition == "routing_manifest_missing"
+
+
+def test_v3_producer_submits_durable_provenance_without_pool_metadata() -> None:
+    producer = V3Producer(
+        config=_queue_config(
+            queue_url="redis://unused:6379/0",
+            fabric_group_id="default",
+            queue_contract_version="v3",
+        )
+    )
+    producer.producer_id = "producer-1"
+    captured = []
+
+    class Store:
+        @staticmethod
+        def server_time_ms():
+            return 1000
+
+        @staticmethod
+        def admit_from_manifest(request):
+            captured.append(request)
+            producer._pending[request.attempt_id].result = BatchResult(
+                request.logical_task_id, "done", None
+            )
+            return StoreReply(disposition="admitted")
+
+    producer._start = lambda *_args: Store()
+    producer._check = lambda: None
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+
+    results = producer.execute(
+        calls=[call],
+        batch_request_id="batch-1",
+        batch_timeout=1,
+        metadata={},
+    )
+
+    assert [result.response for result in results] == ["done"]
+    assert captured[0].job_id == "job-1"
+    assert captured[0].work_unit_id == "node-1"
+    assert not hasattr(captured[0], "pool_id")
+
+
+def test_request_context_round_trip_preserves_durable_provenance() -> None:
+    context = RequestContext(
+        job_id="job-1",
+        work_unit_id="node-1",
+        ref_id="doc-1",
+        ref_type="stress",
+    )
+
+    assert RequestContext.from_dict(context.to_dict()) == context
 
 
 def _queue_config(**overrides) -> LlmQueueConfig:

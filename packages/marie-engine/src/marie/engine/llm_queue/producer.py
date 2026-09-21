@@ -14,7 +14,6 @@ from uuid import uuid4
 
 from marie.engine.completion_contract import (
     CompletionCallParams,
-    QueuedCompletionEnvelopeV3,
     completion_finish_reason,
     extract_completion_text,
     require_terminal_completion,
@@ -24,19 +23,19 @@ from marie.engine.llm_queue.config import LlmQueueConfig, resolve_fabric_id
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.llm_queue.scheduler import prepared_cost_units
 from marie.engine.llm_queue.store import (
+    PreparedAdmission,
     ProducerDead,
     RequestStore,
     StoreUnavailable,
     TransitionRejected,
 )
-from marie.engine.llm_queue.submitter import _resolve_queue_pool_id
 
 
 class QueueTaskError(RuntimeError):
     """Bounded task category; cancellation confirmation is distinct from a request."""
 
     def __init__(
-        self, category: str, *, state: str = '', confirmed: bool = False
+        self, category: str, *, state: str = "", confirmed: bool = False
     ) -> None:
         self.category = category
         self.state = state
@@ -55,7 +54,7 @@ class _Pending:
     result: BatchResult | None = None
     cancel: bool = False
     expire: bool = False
-    category: str = 'deadline_exceeded'
+    category: str = "deadline_exceeded"
 
 
 @dataclass(frozen=True)
@@ -78,7 +77,7 @@ class V3Producer:
         self.config = config
         self.fabric_id = resolve_fabric_id(config.fabric_group_id)
         if not config.queue_url:
-            raise ValueError('V3 requires a configured queue URL')
+            raise ValueError("V3 requires a configured queue URL")
         self._pid = os.getpid()
         self._condition = threading.Condition()
         self._start_lock = threading.Lock()
@@ -93,42 +92,42 @@ class V3Producer:
             type(config.max_buffered_requests_per_pool) is not int
             or config.max_buffered_requests_per_pool < 1
         ):
-            raise ValueError('Producer admission window must be positive')
+            raise ValueError("Producer admission window must be positive")
         self._poll_ids: deque[str] = deque()
         self._threads: list[threading.Thread] = []
         self._lease_ms = int(config.producer_ttl_seconds * 1000)
         self._refresh = config.producer_refresh_interval_seconds
         if not 0 < self._refresh < config.producer_ttl_seconds / 2:
             raise ValueError(
-                'Producer refresh must be positive and less than half its lease'
+                "Producer refresh must be positive and less than half its lease"
             )
 
     def _check(self) -> None:
         if os.getpid() != self._pid:
-            raise ProducerClosed('An inherited producer cannot own child requests')
+            raise ProducerClosed("An inherited producer cannot own child requests")
         if self._error is not None:
             raise self._error
         if self._stop.is_set():
-            raise ProducerClosed('Producer session closed')
+            raise ProducerClosed("Producer session closed")
 
     def _start(self, deadline: float, cancellation: threading.Event) -> RequestStore:
         self._check()
         while True:
             self._check()
             if cancellation.is_set():
-                raise QueueTaskError('cancellation_requested')
+                raise QueueTaskError("cancellation_requested")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise QueueTaskError('deadline_exceeded')
+                raise QueueTaskError("deadline_exceeded")
             if self._start_lock.acquire(timeout=min(0.05, remaining)):
                 break
         try:
             while self.producer_id is None:
                 self._check()
                 if cancellation.is_set():
-                    raise QueueTaskError('cancellation_requested')
+                    raise QueueTaskError("cancellation_requested")
                 if time.monotonic() >= deadline:
-                    raise QueueTaskError('store_unavailable')
+                    raise QueueTaskError("store_unavailable")
                 try:
                     if self._store is None:
                         self._store = RequestStore.for_producer(
@@ -146,7 +145,7 @@ class V3Producer:
                 except (StoreUnavailable, TransitionRejected) as exc:
                     if (
                         isinstance(exc, TransitionRejected)
-                        and str(exc) != 'backpressure'
+                        and str(exc) != "backpressure"
                     ):
                         raise
                     cancellation.wait(min(0.05, max(0, deadline - time.monotonic())))
@@ -156,7 +155,7 @@ class V3Producer:
                         target=self._supervise,
                         args=(target,),
                         daemon=True,
-                        name=f'llm-v3-{target.__name__}',
+                        name=f"llm-v3-{target.__name__}",
                     )
                     self._threads.append(thread)
                     thread.start()
@@ -170,7 +169,7 @@ class V3Producer:
             target()
         except Exception:
             # Never leave healthy-looking waiters after an unexpected worker failure.
-            self._fail(ProducerClosed('Producer background worker stopped'))
+            self._fail(ProducerClosed("Producer background worker stopped"))
 
     def _fail(self, error: Exception) -> None:
         with self._condition:
@@ -184,7 +183,7 @@ class V3Producer:
                 if not self._store.renew_producer(
                     self.producer_id, lease_ms=self._lease_ms
                 ):
-                    self._fail(ProducerDead('Original producer lease expired'))
+                    self._fail(ProducerDead("Original producer lease expired"))
                     return
             except StoreUnavailable:
                 # Unknown is not dead; a later renew must still validate the old lease.
@@ -216,9 +215,9 @@ class V3Producer:
                             expire=pending.expire and not pending.cancel,
                         )
                         if reply.disposition in {
-                            'finished',
-                            'existing',
-                            'producer_dead',
+                            "finished",
+                            "existing",
+                            "producer_dead",
                         }:
                             with self._condition:
                                 self._pending.pop(attempt, None)
@@ -230,10 +229,10 @@ class V3Producer:
                         if metadata is not None and metadata.last_error:
                             pending.category = _category(metadata.last_error)
                         if metadata is not None and metadata.state in {
-                            'succeeded',
-                            'failed',
-                            'cancelled',
-                            'expired',
+                            "succeeded",
+                            "failed",
+                            "cancelled",
+                            "expired",
                         }:
                             if self._stop.is_set():
                                 return
@@ -292,13 +291,11 @@ class V3Producer:
         preparing = False
         try:
             store = self._start(deadline, cancellation)
-            pool = _resolve_queue_pool_id(self.config.pool_id, metadata)
-            route = None
             expires = None
             while next_index < len(calls) or any(result is None for result in results):
                 self._check()
                 if cancellation.is_set():
-                    raise QueueTaskError('cancellation_requested')
+                    raise QueueTaskError("cancellation_requested")
                 for attempt, (index, pending) in list(owned.items()):
                     if pending.result is None or results[index] is not None:
                         continue
@@ -309,84 +306,78 @@ class V3Producer:
                             on_result(pending.task_id, pending.result.response)
                         except Exception:
                             results[index] = BatchResult(
-                                pending.task_id, None, QueueTaskError('callback_failed')
+                                pending.task_id, None, QueueTaskError("callback_failed")
                             )
                 if cancellation.is_set():
-                    raise QueueTaskError('cancellation_requested')
+                    raise QueueTaskError("cancellation_requested")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise QueueTaskError('deadline_exceeded')
+                    raise QueueTaskError("deadline_exceeded")
                 if all(result is not None for result in results):
                     break
                 if next_index < len(calls):
                     try:
-                        if route is None:
-                            route = store.resolve_route(pool)
-                            if route is None:
-                                raise QueueTaskError('route_unavailable')
                         if time.monotonic() >= deadline or cancellation.is_set():
                             continue
-                        if route is not None:
-                            if expires is None:
-                                # Timestamp taken before envelope serialization; subtract clock roundtrip.
-                                server_now = store.server_time_ms()
-                                expires = server_now + int(
-                                    max(0, deadline - time.monotonic()) * 1000
-                                )
-                            if time.monotonic() >= deadline or cancellation.is_set():
-                                continue
-                            if envelope is None:
-                                with self._condition:
-                                    if (
-                                        len(self._pending) + self._preparing
-                                        >= self.config.max_buffered_requests_per_pool
-                                    ):
-                                        self._condition.wait(
-                                            timeout=min(0.02, remaining)
-                                        )
-                                        continue
-                                    self._preparing += 1
-                                    preparing = True
-                                attempt = uuid4().hex
-                                task_id = f'{batch_request_id}_task_{next_index}'
-                                prepared = calls[next_index]
-                                if not isinstance(calls, PreparedCalls):
-                                    prepared = copy.deepcopy(prepared)
-                                require_terminal_completion(prepared)
-                                envelope = QueuedCompletionEnvelopeV3(
-                                    contract_version='v3',
-                                    fabric_group_id=self.fabric_id,
-                                    producer_id=self.producer_id,
-                                    attempt_id=attempt,
-                                    logical_batch_id=batch_request_id,
-                                    logical_task_id=task_id,
-                                    item_index=next_index,
-                                    expires_at_ms=expires,
-                                    call=prepared,
-                                    estimated_cost_units=prepared_cost_units(
-                                        prepared, metadata
-                                    ),
-                                    **route,
-                                )
-                                del prepared
-                                pending = _Pending(task_id, deadline)
-                                owned[attempt] = (next_index, pending)
-                                with self._condition:
-                                    self._preparing -= 1
-                                    preparing = False
-                                    self._pending[attempt] = pending
-                                    self._poll_ids.append(attempt)
-                            if time.monotonic() >= deadline or cancellation.is_set():
-                                continue
-                            reply = store.admit(envelope)
-                            if reply.disposition in {'admitted', 'existing'}:
-                                envelope = None
-                                next_index += 1
-                                continue
-                            if reply.disposition == 'producer_dead':
-                                raise ProducerDead('Original producer lease expired')
-                            if reply.disposition != 'backpressure':
-                                raise QueueTaskError(reply.disposition)
+                        if expires is None:
+                            # Timestamp taken before serialization; subtract clock roundtrip.
+                            server_now = store.server_time_ms()
+                            expires = server_now + int(
+                                max(0, deadline - time.monotonic()) * 1000
+                            )
+                        if time.monotonic() >= deadline or cancellation.is_set():
+                            continue
+                        if envelope is None:
+                            with self._condition:
+                                if (
+                                    len(self._pending) + self._preparing
+                                    >= self.config.max_buffered_requests_per_pool
+                                ):
+                                    self._condition.wait(timeout=min(0.02, remaining))
+                                    continue
+                                self._preparing += 1
+                                preparing = True
+                            attempt = uuid4().hex
+                            task_id = f"{batch_request_id}_task_{next_index}"
+                            prepared = calls[next_index]
+                            if not isinstance(calls, PreparedCalls):
+                                prepared = copy.deepcopy(prepared)
+                            require_terminal_completion(prepared)
+                            context = prepared.context
+                            envelope = PreparedAdmission.create(
+                                fabric_group_id=self.fabric_id,
+                                producer_id=self.producer_id,
+                                attempt_id=attempt,
+                                job_id=context.job_id if context else "",
+                                work_unit_id=context.work_unit_id if context else "",
+                                logical_batch_id=batch_request_id,
+                                logical_task_id=task_id,
+                                item_index=next_index,
+                                expires_at_ms=expires,
+                                call=prepared,
+                                estimated_cost_units=prepared_cost_units(
+                                    prepared, metadata
+                                ),
+                            )
+                            del prepared
+                            pending = _Pending(task_id, deadline)
+                            owned[attempt] = (next_index, pending)
+                            with self._condition:
+                                self._preparing -= 1
+                                preparing = False
+                                self._pending[attempt] = pending
+                                self._poll_ids.append(attempt)
+                        if time.monotonic() >= deadline or cancellation.is_set():
+                            continue
+                        reply = store.admit_from_manifest(envelope)
+                        if reply.disposition in {"admitted", "existing"}:
+                            envelope = None
+                            next_index += 1
+                            continue
+                        if reply.disposition == "producer_dead":
+                            raise ProducerDead("Original producer lease expired")
+                        if reply.disposition != "backpressure":
+                            raise QueueTaskError(reply.disposition)
                     except StoreUnavailable:
                         pass
                     except (ValueError, TypeError, OverflowError):
@@ -395,9 +386,9 @@ class V3Producer:
                                 self._preparing -= 1
                                 preparing = False
                         results[next_index] = BatchResult(
-                            f'{batch_request_id}_task_{next_index}',
+                            f"{batch_request_id}_task_{next_index}",
                             None,
-                            QueueTaskError('invalid_request'),
+                            QueueTaskError("invalid_request"),
                         )
                         if envelope is not None:
                             with self._condition:
@@ -412,7 +403,7 @@ class V3Producer:
             for index, result in enumerate(results):
                 if result is None:
                     cause = error
-                    if error.category == 'deadline_exceeded':
+                    if error.category == "deadline_exceeded":
                         pending = next(
                             (
                                 entry
@@ -423,10 +414,10 @@ class V3Producer:
                         )
                         if pending is not None:
                             cause = QueueTaskError(
-                                pending.category, state='expiry_requested'
+                                pending.category, state="expiry_requested"
                             )
                     results[index] = BatchResult(
-                        f'{batch_request_id}_task_{index}', None, cause
+                        f"{batch_request_id}_task_{index}", None, cause
                     )
         finally:
             envelope = None
@@ -445,7 +436,7 @@ class V3Producer:
     def close(self) -> None:
         if os.getpid() != self._pid:
             return
-        self._fail(ProducerClosed('Producer session closed'))
+        self._fail(ProducerClosed("Producer session closed"))
         # Startup owns any in-flight join/create result until it releases this lock.
         with self._start_lock:
             if self._closed:
@@ -478,9 +469,9 @@ class V3Producer:
 
 
 def _batch_result(task_id: str, state: str, outcome: Any) -> BatchResult:
-    if state != 'succeeded':
+    if state != "succeeded":
         category = _category(
-            outcome.get('category') or outcome.get('error')
+            outcome.get("category") or outcome.get("error")
             if isinstance(outcome, dict)
             else None
         )
@@ -490,7 +481,7 @@ def _batch_result(task_id: str, state: str, outcome: Any) -> BatchResult:
     try:
         if not isinstance(outcome, dict):
             raise ValueError
-        if completion_finish_reason(outcome) == 'length':
+        if completion_finish_reason(outcome) == "length":
             return BatchResult(task_id, None, MaxTokensExceededError())
         _, text = extract_completion_text(outcome)
         return BatchResult(task_id, text, None)
@@ -498,7 +489,7 @@ def _batch_result(task_id: str, state: str, outcome: Any) -> BatchResult:
         return BatchResult(
             task_id,
             None,
-            QueueTaskError('invalid_completion', state=state, confirmed=True),
+            QueueTaskError("invalid_completion", state=state, confirmed=True),
         )
 
 
@@ -506,5 +497,5 @@ def _category(value: Any) -> str:
     return (
         value
         if isinstance(value, str) and value.isidentifier() and len(value) <= 64
-        else 'remote_failed'
+        else "remote_failed"
     )

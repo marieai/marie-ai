@@ -102,7 +102,9 @@ def _build_request_contexts(
         page_number = _extract_page_number_from_filename(os.path.basename(image_path))
 
         if (
-            request_context.ref_id
+            request_context.job_id
+            or request_context.work_unit_id
+            or request_context.ref_id
             or request_context.ref_type
             or page_number is not None
             or request_context.requested_pages is not None
@@ -110,6 +112,8 @@ def _build_request_contexts(
             has_context = True
             contexts.append(
                 RequestContext(
+                    job_id=request_context.job_id,
+                    work_unit_id=request_context.work_unit_id,
                     ref_id=request_context.ref_id,
                     ref_type=request_context.ref_type,
                     page_number=(

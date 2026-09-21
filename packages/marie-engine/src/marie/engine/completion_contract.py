@@ -32,6 +32,8 @@ class RequestContext:
     requested_pages=None means the request covers all available pages.
     """
 
+    job_id: str | None = None
+    work_unit_id: str | None = None
     ref_id: str | None = None
     ref_type: str | None = None
     page_number: int | None = None
@@ -39,6 +41,10 @@ class RequestContext:
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
+        if self.job_id is not None:
+            data["job_id"] = self.job_id
+        if self.work_unit_id is not None:
+            data["work_unit_id"] = self.work_unit_id
         if self.ref_id is not None:
             data["ref_id"] = self.ref_id
         if self.ref_type is not None:
@@ -63,6 +69,8 @@ class RequestContext:
             page_number = int(page_number)
 
         return cls(
+            job_id=data.get("job_id"),
+            work_unit_id=data.get("work_unit_id"),
             ref_id=data.get("ref_id"),
             ref_type=data.get("ref_type"),
             page_number=page_number,
@@ -375,7 +383,7 @@ def _validate_contract_version(data: dict[str, Any], *, envelope_type: str) -> N
         )
 
 
-COMPLETION_QUEUE_CONTRACT_VERSION_V3 = 'v3'
+COMPLETION_QUEUE_CONTRACT_VERSION_V3 = "v3"
 
 
 class UnsupportedQueueStreaming(ValueError):
@@ -385,9 +393,9 @@ class UnsupportedQueueStreaming(ValueError):
 def require_terminal_completion(call: CompletionCallParams) -> None:
     """Reject streaming after applying SDK keyword and extra-body overrides."""
     kwargs = call.to_create_kwargs()
-    body = kwargs.get('extra_body')
-    if kwargs.get('stream') or (isinstance(body, dict) and body.get('stream')):
-        raise UnsupportedQueueStreaming('Streaming is unsupported by completion queues')
+    body = kwargs.get("extra_body")
+    if kwargs.get("stream") or (isinstance(body, dict) and body.get("stream")):
+        raise UnsupportedQueueStreaming("Streaming is unsupported by completion queues")
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,14 +421,14 @@ class QueuedCompletionEnvelopeV3:
 
     def to_json(self) -> str:
         return json.dumps(
-            asdict(self), separators=(',', ':'), sort_keys=True, allow_nan=False
+            asdict(self), separators=(",", ":"), sort_keys=True, allow_nan=False
         )
 
     @classmethod
     def from_json(cls, payload: str) -> QueuedCompletionEnvelopeV3:
         data = json.loads(payload)
-        if data.get('contract_version') != COMPLETION_QUEUE_CONTRACT_VERSION_V3:
-            raise ValueError('Expected explicit v3 completion contract')
-        data['call'] = CompletionCallParams.from_dict(data['call'])
-        require_terminal_completion(data['call'])
+        if data.get("contract_version") != COMPLETION_QUEUE_CONTRACT_VERSION_V3:
+            raise ValueError("Expected explicit v3 completion contract")
+        data["call"] = CompletionCallParams.from_dict(data["call"])
+        require_terminal_completion(data["call"])
         return cls(**data)

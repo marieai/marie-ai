@@ -11,6 +11,7 @@ from typing import Any, Callable, Literal
 from uuid import uuid4
 
 from marie.engine.completion_contract import (
+    CompletionCallParams,
     QueuedCompletionEnvelopeV3,
     require_terminal_completion,
 )
@@ -104,6 +105,85 @@ class RoutingManifestProjection:
     pool_id: str
     endpoint_group_id: str
     endpoint_revision: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAdmission:
+    fabric_group_id: str
+    producer_id: str
+    attempt_id: str
+    job_id: str
+    work_unit_id: str
+    content_digest: str
+    logical_batch_id: str
+    logical_task_id: str
+    item_index: int
+    expires_at_ms: int
+    call: CompletionCallParams
+    estimated_cost_units: int
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        fabric_group_id: str,
+        producer_id: str,
+        attempt_id: str,
+        job_id: str,
+        work_unit_id: str,
+        logical_batch_id: str,
+        logical_task_id: str,
+        item_index: int,
+        expires_at_ms: int,
+        call: CompletionCallParams,
+        estimated_cost_units: int,
+    ) -> "PreparedAdmission":
+        values = {
+            "fabric_group_id": fabric_group_id,
+            "producer_id": producer_id,
+            "attempt_id": attempt_id,
+            "job_id": job_id,
+            "work_unit_id": work_unit_id,
+            "logical_batch_id": logical_batch_id,
+            "logical_task_id": logical_task_id,
+            "item_index": item_index,
+            "call": call.to_dict(),
+            "estimated_cost_units": estimated_cost_units,
+        }
+        content_digest = hashlib.sha256(
+            json.dumps(
+                values, separators=(",", ":"), sort_keys=True, allow_nan=False
+            ).encode()
+        ).hexdigest()
+        return cls(
+            fabric_group_id=fabric_group_id,
+            producer_id=producer_id,
+            attempt_id=attempt_id,
+            job_id=job_id,
+            work_unit_id=work_unit_id,
+            content_digest=content_digest,
+            logical_batch_id=logical_batch_id,
+            logical_task_id=logical_task_id,
+            item_index=item_index,
+            expires_at_ms=expires_at_ms,
+            call=call,
+            estimated_cost_units=estimated_cost_units,
+        )
+
+    def expected_content_digest(self) -> str:
+        return PreparedAdmission.create(
+            fabric_group_id=self.fabric_group_id,
+            producer_id=self.producer_id,
+            attempt_id=self.attempt_id,
+            job_id=self.job_id,
+            work_unit_id=self.work_unit_id,
+            logical_batch_id=self.logical_batch_id,
+            logical_task_id=self.logical_task_id,
+            item_index=self.item_index,
+            expires_at_ms=self.expires_at_ms,
+            call=self.call,
+            estimated_cost_units=self.estimated_cost_units,
+        ).content_digest
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,7 +316,7 @@ class RequestStore:
         **args: Any,
     ) -> dict[str, Any]:
         endpoint_id = args.get("endpoint_id")
-        if attempt_id is not None and op != "admit":
+        if attempt_id is not None and op not in {"admit", "admit_manifest"}:
             identity = self._read(
                 "hmget",
                 self.keys.request(attempt_id),
@@ -293,6 +373,10 @@ class RequestStore:
             ),
             self.keys.prefix + "endpoints",
         ]
+        if op == "admit_manifest":
+            keys.append(
+                self.keys.routing_manifest(args["job_id"], args["work_unit_id"])
+            )
         keys.extend(
             self.keys.endpoint(identity) for identity in args.get("registry_ids", [])
         )
@@ -327,6 +411,8 @@ class RequestStore:
             raise StaleOwner("Dispatcher owner lease is no longer current")
         if disposition == "conflict":
             raise AdmissionConflict("Attempt ID conflicts with its original admission")
+        if disposition == "routing_binding_conflict":
+            raise AdmissionConflict("routing_binding_conflict")
         return result
 
     def _change(self, op: str, **kwargs: Any) -> StoreReply:
@@ -682,12 +768,34 @@ class RequestStore:
 
     def admit(self, request: QueuedCompletionEnvelopeV3) -> StoreReply:
         """Admit one canonical call or reconcile its prior immutable admission."""
-        require_terminal_completion(request.call)
         if (
             request.contract_version != "v3"
             or QueueKeys(request.fabric_group_id) != self.keys
         ):
             raise ValueError("Request version and fabric must match this V3 store")
+        payload, payload_bytes, digest, model = self._serialize_admission(request)
+        return self._change(
+            "admit",
+            attempt_id=request.attempt_id,
+            producer_id=request.producer_id,
+            pool_id=request.pool_id,
+            endpoint_id=request.endpoint_id,
+            config_revision=request.config_revision,
+            logical_batch_id=request.logical_batch_id,
+            logical_task_id=request.logical_task_id,
+            item_index=request.item_index,
+            expires_at_ms=request.expires_at_ms,
+            payload=payload,
+            payload_bytes=payload_bytes,
+            digest=digest,
+            cost=request.estimated_cost_units,
+            model=model,
+        )
+
+    def _serialize_admission(
+        self, request: QueuedCompletionEnvelopeV3
+    ) -> tuple[str, int, str, str]:
+        require_terminal_completion(request.call)
         for value in (
             request.producer_id,
             request.attempt_id,
@@ -741,20 +849,68 @@ class RequestStore:
                 canonical, separators=(",", ":"), sort_keys=True, allow_nan=False
             ).encode()
         ).hexdigest()
+        return payload, payload_bytes, digest, model
+
+    def admit_from_manifest(self, request: PreparedAdmission) -> StoreReply:
+        """Admit from one projected immutable logical route."""
+        require_terminal_completion(request.call)
+        if QueueKeys(request.fabric_group_id) != self.keys:
+            raise ValueError("Request fabric must match this V3 store")
+        for value in (
+            request.producer_id,
+            request.attempt_id,
+            request.job_id,
+            request.work_unit_id,
+            request.logical_batch_id,
+            request.logical_task_id,
+        ):
+            validate_identifier(value)
+        context = request.call.context
+        if (
+            context is None
+            or context.job_id != request.job_id
+            or context.work_unit_id != request.work_unit_id
+        ):
+            raise ValueError("Request context must match durable routing provenance")
+        if request.content_digest != request.expected_content_digest():
+            raise ValueError("Invalid admission content digest")
+
+        projection = self.resolve_routing_manifest(request.job_id, request.work_unit_id)
+        if projection is None:
+            return StoreReply(disposition="routing_manifest_missing")
+        envelope = QueuedCompletionEnvelopeV3(
+            contract_version="v3",
+            fabric_group_id=self.keys.fabric_id,
+            producer_id=request.producer_id,
+            attempt_id=request.attempt_id,
+            pool_id=projection.pool_id,
+            endpoint_id=projection.endpoint_group_id,
+            config_revision=projection.endpoint_revision,
+            logical_batch_id=request.logical_batch_id,
+            logical_task_id=request.logical_task_id,
+            item_index=request.item_index,
+            expires_at_ms=request.expires_at_ms,
+            call=request.call,
+            estimated_cost_units=request.estimated_cost_units,
+        )
+        payload, payload_bytes, _, model = self._serialize_admission(envelope)
         return self._change(
-            "admit",
+            "admit_manifest",
             attempt_id=request.attempt_id,
             producer_id=request.producer_id,
-            pool_id=request.pool_id,
-            endpoint_id=request.endpoint_id,
-            config_revision=request.config_revision,
+            pool_id=projection.pool_id,
+            endpoint_id=projection.endpoint_group_id,
+            config_revision=projection.endpoint_revision,
+            job_id=request.job_id,
+            work_unit_id=request.work_unit_id,
+            manifest_digest=projection.route_digest,
             logical_batch_id=request.logical_batch_id,
             logical_task_id=request.logical_task_id,
             item_index=request.item_index,
             expires_at_ms=request.expires_at_ms,
             payload=payload,
             payload_bytes=payload_bytes,
-            digest=digest,
+            digest=request.content_digest,
             cost=request.estimated_cost_units,
             model=model,
         )
