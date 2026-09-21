@@ -102,8 +102,11 @@ class APIKeyManager:
             )
         ):
             raise ValueError('Invalid API key observability policy')
-        if key_conf.get('tenant_id') and 'runtime-observability' in scopes:
-            raise ValueError('Delegated runtime observability is unsupported')
+        if key_conf.get('tenant_id') and {
+            'runtime-observability',
+            'runtime-routing-admin',
+        }.intersection(scopes):
+            raise ValueError('Delegated runtime operator access is unsupported')
         cls._keys[key_conf["api_key"]] = {
             "name": key_conf["name"],
             "api_key": key_conf["api_key"],
@@ -123,6 +126,23 @@ class APIKeyManager:
             and 'runtime-observability' in policy.get('scopes', ())
             and fabric_id in policy.get('allowed_fabrics', ())
         )
+
+    @classmethod
+    def can_admin_runtime_routing(
+        cls, key: str, fabric_id: str, tenant_id: str | None = None
+    ) -> bool:
+        policy = cls._keys.get(key, {})
+        return bool(
+            not tenant_id
+            and cls.is_valid(key)
+            and 'runtime-routing-admin' in policy.get('scopes', ())
+            and fabric_id in policy.get('allowed_fabrics', ())
+        )
+
+    @classmethod
+    def key_name(cls, key: str) -> str | None:
+        policy = cls._keys.get(key)
+        return str(policy['name']) if policy and cls.is_valid(key) else None
 
     @classmethod
     def get_keys(cls) -> dict[str, Any]:

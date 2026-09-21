@@ -44,7 +44,13 @@ def persisted():
                         'endpoint_id': 'primary',
                         'revision': 'r1',
                         'execution_bytes': 67108864,
-                    }
+                    },
+                    'admission': {
+                        'schema_version': 1,
+                        'priority': 1_000_000,
+                        'accepting': True,
+                        'match': {},
+                    },
                 },
             }
         ],
@@ -60,6 +66,36 @@ def test_persisted_policy_uses_existing_pool_capacity_and_immutable_limits():
     assert policy['lanes'][0]['execution_limit'] == 2
     assert policy['limits']['max_execution_items'] == 4
     assert 'api_key' not in policy['endpoints'][0]
+
+
+def test_policy_generation_snapshot_includes_admission_and_dispatch_bindings():
+    from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+        build_policy_generation_snapshot,
+    )
+
+    snapshot, admission = build_policy_generation_snapshot('default', 3, persisted())
+
+    assert snapshot['fabric_group_id'] == 'default'
+    assert snapshot['scheduler'] == {
+        'enabled': True,
+        'policy': 'drr',
+        'total_concurrent_dispatch': 4,
+    }
+    assert snapshot['dispatch']['lanes'][0]['endpoint_id'] == 'primary'
+    assert snapshot['admission'] == admission.to_snapshot()
+    assert admission.match({'document.effective_page_count': 3}).pool_id == 'default'
+
+
+def test_policy_generation_rejects_accepting_pool_without_endpoint_binding():
+    from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+        build_policy_generation_snapshot,
+    )
+
+    data = persisted()
+    data['lanes'][0]['metadata']['llm_dispatch']['endpoint_id'] = 'missing'
+
+    with pytest.raises(ValueError, match='Invalid lane endpoint binding'):
+        build_policy_generation_snapshot('default', 1, data)
 
 
 @pytest.mark.parametrize(

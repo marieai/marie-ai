@@ -78,6 +78,105 @@ async def test_operator_routes_authorize_before_any_snapshot_or_debug_read(monke
         assert response.json()['correlation_id']
 
 
+@pytest.mark.asyncio
+async def test_routing_policy_routes_require_admin_scope(monkeypatch):
+    from marie.engine.llm_queue.admission_policy import AdmissionPolicy
+
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    policy = AdmissionPolicy.from_rows(
+        'a',
+        3,
+        [
+            {
+                'pool_id': 'default',
+                'enabled': True,
+                'metadata': {
+                    'admission': {
+                        'schema_version': 1,
+                        'priority': 1_000_000,
+                        'accepting': True,
+                        'match': {},
+                    }
+                },
+            }
+        ],
+    )
+    calls = []
+
+    class Repository:
+        def load_active_admission_policy(self, fabric_group_id):
+            calls.append(('preview', fabric_group_id))
+            return policy
+
+        def activate_admission_policy(self, fabric_group_id, actor_id):
+            calls.append(('activate', fabric_group_id, actor_id))
+            return SimpleNamespace(
+                fabric_group_id=fabric_group_id,
+                generation=4,
+                policy_digest='d' * 64,
+                activated_by=actor_id,
+            )
+
+    app = FastAPI()
+    repository = Repository()
+    add_runtime_routes(app, lambda: 'a', lambda: repository)
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    observer = 'mas_' + 'o' * 54
+    admin = 'mas_' + 'a' * 54
+    APIKeyManager.add_key(
+        {
+            'name': 'observer',
+            'api_key': observer,
+            'scopes': ['runtime-observability'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    APIKeyManager.add_key(
+        {
+            'name': 'routing-admin',
+            'api_key': admin,
+            'scopes': ['runtime-routing-admin'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.post(
+            '/api/llm-dispatch/policy/preview?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {observer}'},
+            json={'facts': {'document.effective_page_count': 3}},
+        )
+        assert response.status_code == 403
+        assert calls == []
+
+        response = await client.post(
+            '/api/llm-dispatch/policy/preview?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {admin}'},
+            json={'facts': {'document.effective_page_count': 3}},
+        )
+        assert response.status_code == 200
+        assert response.json()['result'] == {
+            'pool_id': 'default',
+            'priority': 1_000_000,
+            'policy_generation': 3,
+            'policy_digest': policy.policy_digest,
+            'rule_digest': policy.rules[0].rule_digest,
+            'matched_facts': [],
+        }
+        assert 'effective_page_count' not in response.text
+
+        response = await client.post(
+            '/api/llm-dispatch/policy/activate?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {admin}'},
+        )
+        assert response.status_code == 200
+        assert response.json()['result']['generation'] == 4
+        assert calls == [('preview', 'a'), ('activate', 'a', 'routing-admin')]
+
+
 def test_runtime_fingerprint_ignores_age_but_retains_state():
     from marie.serve.runtimes.servers.marie_gateway import (
         _llm_dispatch_runtime_event_fingerprint as fingerprint,

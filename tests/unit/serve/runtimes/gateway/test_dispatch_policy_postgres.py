@@ -3,7 +3,9 @@
 import asyncio
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import psycopg
@@ -21,6 +23,141 @@ from marie.serve.runtimes.gateway.marie.llm_scheduler_config import (
     PostgresSchedulerConfigRepository,
 )
 from tests.unit.serve.runtimes.gateway.test_dispatch_policy import persisted
+
+
+class _PolicyDatabase:
+    def __init__(self) -> None:
+        self.data = persisted()
+        self.data['enabled'] = True
+        self.data['admission_mode'] = 'shadow'
+        self.active_generation = None
+        self.generations: list[tuple[int, str, dict, str, datetime]] = []
+        self.commits = 0
+        self.rollbacks = 0
+
+    def connection(self):
+        database = self
+
+        class Cursor:
+            result = None
+            rows = None
+
+            def execute(self, query, params=None):
+                compact = ' '.join(query.split())
+                if compact.startswith('SET LOCAL'):
+                    return
+                if 'SELECT policy, total_concurrent_dispatch, enabled' in compact:
+                    self.result = (
+                        database.data['policy'],
+                        database.data['total_concurrent_dispatch'],
+                        database.data['enabled'],
+                        database.data['metadata'],
+                        database.data['admission_mode'],
+                        database.active_generation,
+                    )
+                elif 'FROM marie_scheduler.llm_queue_pool' in compact:
+                    self.rows = [
+                        (
+                            lane['pool_id'],
+                            lane.get('display_name'),
+                            lane.get('endpoint_url'),
+                            lane.get('quantum', 1),
+                            lane.get('min_concurrent', 0),
+                            lane.get('max_concurrent'),
+                            lane.get('max_burst_per_visit'),
+                            lane.get('enabled', True),
+                            lane.get('metadata', {}),
+                        )
+                        for lane in database.data['lanes']
+                    ]
+                elif 'SELECT generation, activated_by, created_on' in compact:
+                    digest = params[1]
+                    found = next(
+                        (row for row in database.generations if row[1] == digest),
+                        None,
+                    )
+                    self.result = (
+                        (found[0], found[3], found[4]) if found is not None else None
+                    )
+                elif 'SELECT COALESCE(MAX(generation), 0)' in compact:
+                    self.result = (max((row[0] for row in database.generations), default=0),)
+                elif 'INSERT INTO marie_scheduler.llm_queue_policy_generation' in compact:
+                    created_on = datetime(2026, 9, 21, tzinfo=timezone.utc)
+                    generation, digest, snapshot, actor = params[1:]
+                    database.generations.append(
+                        (generation, digest, snapshot.obj, actor, created_on)
+                    )
+                    self.result = (created_on,)
+                elif 'UPDATE marie_scheduler.llm_queue_fabric_config' in compact:
+                    database.active_generation = params[0]
+                elif 'SELECT active_policy_generation' in compact:
+                    self.result = (database.active_generation,)
+                elif 'SELECT policy_digest, policy_snapshot' in compact:
+                    generation = params[1]
+                    found = next(
+                        row for row in database.generations if row[0] == generation
+                    )
+                    self.result = (found[1], found[2])
+                else:
+                    raise AssertionError(compact)
+
+            def fetchone(self):
+                return self.result
+
+            def fetchall(self):
+                return self.rows
+
+            def close(self):
+                pass
+
+        return SimpleNamespace(
+            cursor=Cursor,
+            commit=lambda: setattr(database, 'commits', database.commits + 1),
+            rollback=lambda: setattr(database, 'rollbacks', database.rollbacks + 1),
+        )
+
+
+def _memory_repository(database: _PolicyDatabase) -> PostgresSchedulerConfigRepository:
+    repository = object.__new__(PostgresSchedulerConfigRepository)
+    repository.config_schema = 'marie_scheduler'
+    repository._get_connection = database.connection
+    repository._close_cursor = lambda cursor: cursor.close()
+    repository._close_connection = lambda connection: None
+    return repository
+
+
+def test_invalid_activation_keeps_previous_generation() -> None:
+    database = _PolicyDatabase()
+    repository = _memory_repository(database)
+
+    first = repository.activate_admission_policy('default', 'operator-1')
+    conflicting = persisted()['lanes'][0]
+    conflicting['pool_id'] = 'also-default'
+    conflicting['metadata']['admission']['match'] = {
+        'workload.kind': {'eq': 'document'}
+    }
+    database.data['lanes'].append(conflicting)
+
+    with pytest.raises(ValueError, match='routing_policy_ambiguous'):
+        repository.activate_admission_policy('default', 'operator-1')
+
+    active = repository.load_active_admission_policy('default')
+    assert first.generation == 1
+    assert active.generation == first.generation
+    assert database.active_generation == 1
+    assert database.rollbacks == 1
+
+
+def test_reactivating_same_policy_reuses_generation() -> None:
+    database = _PolicyDatabase()
+    repository = _memory_repository(database)
+
+    first = repository.activate_admission_policy('default', 'operator-1')
+    second = repository.activate_admission_policy('default', 'operator-2')
+
+    assert second.generation == first.generation
+    assert second.policy_digest == first.policy_digest
+    assert len(database.generations) == 1
 
 
 @pytest.mark.asyncio
@@ -58,6 +195,11 @@ async def test_actual_postgres_policy_selects_v3_startup_and_producer_limits(eng
             / 'config/psql/schema/066_llm_queue_scheduler.sql'
         ).read_text()
         connection.execute(ddl.replace('{schema}', schema))
+        routing_ddl = (
+            Path(__file__).resolve().parents[5]
+            / 'config/psql/schema/089_llm_queue_admission_routing.sql'
+        ).read_text()
+        connection.execute(routing_ddl.replace('{schema}', schema))
         data = persisted()
         data['metadata']['llm_dispatch']['endpoints'][0].pop('credential_env')
         connection.execute(
@@ -81,6 +223,11 @@ async def test_actual_postgres_policy_selects_v3_startup_and_producer_limits(eng
         loaded = repository.load_scheduler_config(identity)
         assert loaded['metadata'] == data['metadata']
         assert loaded['lanes'][0]['quantum'] == 3
+        activated = repository.activate_admission_policy(identity, 'operator-test')
+        active_policy = repository.load_active_admission_policy(identity)
+        assert activated.generation == 1
+        assert active_policy.policy_digest == activated.policy_digest
+        assert active_policy.match({'workload.kind': 'document'}).pool_id == 'default'
         runtime = GatewayLlmDispatchRuntime(
             queue_config=LlmQueueConfig(
                 enabled=True,

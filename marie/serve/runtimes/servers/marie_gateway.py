@@ -624,7 +624,17 @@ class MarieServerGateway(CompositeServer):
             )
 
             add_runtime_routes(
-                app, lambda: self.llm_dispatch_runtime.config.fabric_group_id
+                app,
+                lambda: self.llm_dispatch_runtime.config.fabric_group_id,
+                lambda: getattr(
+                    getattr(
+                        self.llm_dispatch_runtime,
+                        '_scheduler_config_source',
+                        None,
+                    ),
+                    'repository',
+                    None,
+                ),
             )
 
             @app.api_route(

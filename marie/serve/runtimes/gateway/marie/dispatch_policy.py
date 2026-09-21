@@ -7,6 +7,7 @@ from dataclasses import asdict
 from typing import Any
 from urllib.parse import urlsplit
 
+from marie.engine.llm_queue.admission_policy import AdmissionPolicy
 from marie.engine.llm_queue.endpoint import RegisteredEndpoint
 from marie.engine.llm_queue.request_dispatcher import DispatchLane
 from marie.engine.llm_queue.store import StoreLimits
@@ -129,6 +130,34 @@ def persisted_dispatch_policy(data: dict[str, Any]) -> dict[str, Any]:
             'total_concurrent_dispatch': data.get('total_concurrent_dispatch'),
         }
     )
+
+
+def build_policy_generation_snapshot(
+    fabric_group_id: str,
+    generation: int,
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], AdmissionPolicy]:
+    dispatch = persisted_dispatch_policy(data)
+    admission = AdmissionPolicy.from_rows(
+        fabric_group_id,
+        generation,
+        data.get('lanes', []),
+    )
+    dispatch_pools = {lane['pool_id'] for lane in dispatch['lanes']}
+    if any(rule.pool_id not in dispatch_pools for rule in admission.rules):
+        raise ValueError('Admission pool has no dispatch lane')
+    snapshot = {
+        'schema_version': 1,
+        'fabric_group_id': fabric_group_id,
+        'scheduler': {
+            'enabled': data.get('enabled', True),
+            'policy': dispatch['policy'],
+            'total_concurrent_dispatch': dispatch['total_concurrent_dispatch'],
+        },
+        'dispatch': dispatch,
+        'admission': admission.to_snapshot(),
+    }
+    return snapshot, admission
 
 
 def validate_legacy_lane_endpoints(
