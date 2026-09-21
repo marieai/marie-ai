@@ -21,6 +21,8 @@ from marie.engine.llm_queue.endpoint import (
     EndpointClient,
     ExecutionOutcome,
     RegisteredEndpoint,
+    RegisteredEndpointGroup,
+    RegisteredReplica,
 )
 from marie.engine.llm_queue.queue_keys import validate_identifier
 from marie.engine.llm_queue.registry import (
@@ -47,10 +49,14 @@ class _DispatchStopped(Exception):
     pass
 
 
+class _NoReplicaAvailable(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class DispatchLane:
     pool_id: str
-    endpoint_id: str
+    endpoint_id: str | None = None
     revision: str = 'r1'
     enabled: bool = True
     execution_limit: int = 8
@@ -58,6 +64,7 @@ class DispatchLane:
     quantum: int = 1
     min_concurrent: int = 0
     max_burst_per_visit: int | None = None
+    endpoint_group_id: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -74,7 +81,18 @@ class DispatchLane:
             max_burst_per_visit=self.max_burst_per_visit,
             enabled=self.enabled,
         )
-        for value in (self.pool_id, self.endpoint_id, self.revision):
+        if (
+            self.endpoint_id is not None
+            and self.endpoint_group_id is not None
+            and self.endpoint_id != self.endpoint_group_id
+        ):
+            raise ValueError('Lane endpoint aliases disagree')
+        endpoint_group_id = self.endpoint_group_id or self.endpoint_id
+        if endpoint_group_id is None:
+            raise ValueError('Lane endpoint group is required')
+        object.__setattr__(self, 'endpoint_id', endpoint_group_id)
+        object.__setattr__(self, 'endpoint_group_id', endpoint_group_id)
+        for value in (self.pool_id, endpoint_group_id, self.revision):
             validate_identifier(value)
 
 
@@ -85,7 +103,8 @@ class RequestDispatcher:
         self,
         *,
         store: RequestStore,
-        endpoints: list[RegisteredEndpoint],
+        endpoints: list[RegisteredEndpoint] | None = None,
+        endpoint_groups: list[RegisteredEndpointGroup] | None = None,
         lanes: list[DispatchLane],
         owner_lease_ms: int = 10_000,
         poll_seconds: float = 0.1,
@@ -101,22 +120,56 @@ class RequestDispatcher:
         refresh_timeout_seconds: float = 2.0,
     ) -> None:
         self.store = store
-        self.endpoints = {endpoint.endpoint_id: endpoint for endpoint in endpoints}
+        if endpoints and endpoint_groups:
+            raise ValueError('Use endpoint groups or legacy endpoints, not both')
+        if endpoint_groups is None:
+            endpoint_groups = [
+                RegisteredEndpointGroup(
+                    group_id=endpoint.endpoint_id,
+                    revision='r1',
+                    replicas=(
+                        RegisteredReplica(
+                            replica_id=endpoint.endpoint_id,
+                            base_url=endpoint.base_url,
+                            api_key=endpoint.api_key,
+                            allow_private=endpoint.allow_private,
+                            allow_loopback=endpoint.allow_loopback,
+                            execution_limit=endpoint.execution_limit,
+                            execution_bytes=endpoint.execution_bytes,
+                            call_timeout_seconds=endpoint.call_timeout_seconds,
+                            max_response_bytes=endpoint.max_response_bytes,
+                            retry_429=endpoint.retry_429,
+                            enabled=endpoint.enabled,
+                        ),
+                    ),
+                )
+                for endpoint in endpoints or []
+            ]
+        self.endpoint_groups = {group.group_id: group for group in endpoint_groups}
+        replicas = [replica for group in endpoint_groups for replica in group.replicas]
+        self.replicas = {replica.replica_id: replica for replica in replicas}
+        self.endpoints = {
+            replica.replica_id: replica.as_endpoint() for replica in replicas
+        }
         self.lanes = tuple(lanes)
-        if len(self.endpoints) != len(endpoints) or len(
-            {lane.pool_id for lane in lanes}
-        ) != len(lanes):
+        if (
+            len(self.endpoint_groups) != len(endpoint_groups)
+            or len(self.replicas) != len(replicas)
+            or len({lane.pool_id for lane in lanes}) != len(lanes)
+        ):
             raise ValueError('Duplicate endpoint or pool identity')
-        if any(lane.endpoint_id not in self.endpoints for lane in lanes):
-            raise ValueError('Lane must reference a registered endpoint')
-        if not lanes or not endpoints:
-            raise ValueError('V3 requires registered endpoints and explicit lanes')
+        if any(lane.endpoint_group_id not in self.endpoint_groups for lane in lanes):
+            raise ValueError('Lane must reference a registered endpoint group')
+        if not lanes or not endpoint_groups:
+            raise ValueError(
+                'V3 requires registered endpoint groups and explicit lanes'
+            )
         if (
             len(lanes) > store.limits.max_routes
-            or len(endpoints) > store.limits.max_endpoints
+            or len(replicas) > store.limits.max_endpoints
         ):
             raise ValueError('Registered routes exceed fabric bounds')
-        for bound in (*lanes, *endpoints):
+        for bound in (*lanes, *replicas):
             if not (
                 0 < bound.execution_limit <= store.limits.max_execution_items
                 and 0 < bound.execution_bytes <= store.limits.max_execution_bytes
@@ -192,6 +245,7 @@ class RequestDispatcher:
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._calling: set[str] = set()
         self._clients: dict[str, EndpointClient] = {}
+        self._replica_cursors: Counter[str] = Counter()
         self._stop = asyncio.Event()
         self._stop_workers = threading.Event()
         self._route_cursor = 0
@@ -211,6 +265,66 @@ class RequestDispatcher:
             max_workers=1, thread_name_prefix='llm-v3-lease'
         )
         self._store_futures: set[asyncio.Future[Any]] = set()
+
+    async def select_replica(
+        self, claim: ClaimRecord, *, excluded: set[str] | None = None
+    ) -> RegisteredReplica:
+        """Select one currently eligible physical replica within the durable group."""
+        group = self.endpoint_groups.get(claim.endpoint_group_id)
+        if group is None:
+            raise TransitionRejected('endpoint_group_unavailable')
+        metadata = await self._maintenance_io('metadata', claim.attempt_id)
+        if metadata is None:
+            raise TransitionRejected('request_missing')
+        now = await self._maintenance_io('server_time_ms')
+        excluded = excluded or set()
+        replicas = list(group.replicas)
+        start = self._replica_cursors[group.group_id] % len(replicas)
+        replicas = replicas[start:] + replicas[:start]
+        candidates = []
+        for position, replica in enumerate(replicas):
+            if not replica.enabled or replica.replica_id in excluded:
+                continue
+            status = await self._maintenance_io('endpoint_status', replica.replica_id)
+            if not self._replica_is_eligible(
+                replica, status, payload_bytes=metadata.payload_bytes, now=now
+            ):
+                continue
+            candidates.append(
+                (
+                    (
+                        int((status.get('circuit') or 'closed') == 'closed'),
+                        replica.execution_limit
+                        - int(status.get('reserved_items') or 0),
+                        replica.execution_bytes
+                        - int(status.get('reserved_bytes') or 0),
+                        -position,
+                    ),
+                    replica,
+                )
+            )
+        if candidates:
+            return max(candidates, key=lambda candidate: candidate[0])[1]
+        raise TransitionRejected('replica_unavailable')
+
+    @staticmethod
+    def _replica_is_eligible(
+        replica: RegisteredReplica,
+        status: dict[str, Any],
+        *,
+        payload_bytes: int,
+        now: int,
+    ) -> bool:
+        circuit = status.get('circuit') or 'closed'
+        return not (
+            not replica.enabled
+            or status.get('gate') == 'closed'
+            or status.get('probe_claim')
+            or (circuit != 'closed' and int(status.get('next_probe') or 0) > now)
+            or int(status.get('reserved_items') or 0) >= replica.execution_limit
+            or int(status.get('reserved_bytes') or 0) + payload_bytes
+            > replica.execution_bytes
+        )
 
     async def _io(self, method: str, *args: Any, **kwargs: Any) -> Any:
         executor = (
@@ -250,7 +364,7 @@ class RequestDispatcher:
         read_budget.before_read()
         usage = self.store.usage()
         endpoint_states = {}
-        for endpoint_id in dict.fromkeys(lane.endpoint_id for lane in self.lanes):
+        for endpoint_id in self.endpoints:
             read_budget.before_read()
             endpoint_states[endpoint_id] = self.store.endpoint_status(endpoint_id)
         lane_rows = []
@@ -269,11 +383,47 @@ class RequestDispatcher:
                 max_burst_per_visit=lane.max_burst_per_visit,
                 inflight=route['reserved_items'],
             )
-            endpoint = endpoint_states[lane.endpoint_id]
+            group = self.endpoint_groups[lane.endpoint_group_id]
+            group_states = [
+                endpoint_states[replica.replica_id] for replica in group.replicas
+            ]
+            replica_waiting_reasons = [
+                (
+                    'replica_unavailable'
+                    if not replica.enabled or state.get('gate') == 'closed'
+                    else state.get('waiting_reason')
+                    or (
+                        'replica_capacity'
+                        if int(state.get('reserved_items') or 0)
+                        >= replica.execution_limit
+                        or int(state.get('reserved_bytes') or 0)
+                        + (head[0].payload_bytes if head else 0)
+                        > replica.execution_bytes
+                        else None
+                    )
+                )
+                for replica, state in zip(group.replicas, group_states, strict=True)
+            ]
+            group_waiting_reason = None
+            if all(replica_waiting_reasons):
+                group_waiting_reason = next(
+                    (
+                        reason
+                        for reason in (
+                            'probe_unresolved',
+                            'circuit_cooldown',
+                            'replica_capacity',
+                            'replica_unavailable',
+                        )
+                        if reason in replica_waiting_reasons
+                    ),
+                    'replica_unavailable',
+                )
             waiting = (
                 'disabled'
-                if not lane.enabled or not self.endpoints[lane.endpoint_id].enabled
-                else endpoint.get('waiting_reason')
+                if not lane.enabled
+                or not any(replica.enabled for replica in group.replicas)
+                else group_waiting_reason
                 or (
                     'empty'
                     if not head
@@ -298,7 +448,9 @@ class RequestDispatcher:
                 dict(
                     pool_id=lane.pool_id,
                     endpoint_id=lane.endpoint_id,
-                    enabled=lane.enabled and self.endpoints[lane.endpoint_id].enabled,
+                    endpoint_group_id=lane.endpoint_group_id,
+                    enabled=lane.enabled
+                    and any(replica.enabled for replica in group.replicas),
                     max_concurrent=lane.execution_limit,
                     **fairness,
                     reserved_items=route['reserved_items'],
@@ -409,7 +561,12 @@ class RequestDispatcher:
             for identity, endpoint in self.endpoints.items()
             if endpoint.enabled
             and any(
-                lane.enabled and lane.endpoint_id == identity for lane in self.lanes
+                lane.enabled
+                and any(
+                    replica.replica_id == identity
+                    for replica in self.endpoint_groups[lane.endpoint_group_id].replicas
+                )
+                for lane in self.lanes
             )
         }
         self._runner = asyncio.create_task(self._run())
@@ -470,15 +627,22 @@ class RequestDispatcher:
             if result.disposition != 'configured':
                 raise TransitionRejected(result.disposition)
         for lane in self.lanes:
+            group = self.endpoint_groups[lane.endpoint_group_id]
+            legacy_endpoint = (
+                len(group.replicas) == 1
+                and group.replicas[0].replica_id == group.group_id
+            )
             result = await self._maintenance_io(
                 'configure_route',
                 self.owner,
                 lane.pool_id,
-                lane.endpoint_id,
+                lane.endpoint_group_id,
                 revision=lane.revision,
                 execution_limit=lane.execution_limit,
                 execution_bytes=lane.execution_bytes,
-                enabled=lane.enabled and self.endpoints[lane.endpoint_id].enabled,
+                enabled=lane.enabled
+                and any(replica.enabled for replica in group.replicas),
+                legacy_endpoint=legacy_endpoint,
             )
             if result.disposition != 'configured':
                 raise TransitionRejected(result.disposition)
@@ -510,7 +674,49 @@ class RequestDispatcher:
                 policy = future.result()
                 if policy['limits'] != self.store.limits:
                     raise ValueError('Immutable fabric limits changed')
-                endpoints = {entry.endpoint_id: entry for entry in policy['endpoints']}
+                endpoint_groups = list(policy.get('endpoint_groups') or [])
+                if not endpoint_groups:
+                    endpoint_groups = [
+                        RegisteredEndpointGroup(
+                            group_id=endpoint.endpoint_id,
+                            revision='r1',
+                            replicas=(
+                                RegisteredReplica(
+                                    replica_id=endpoint.endpoint_id,
+                                    base_url=endpoint.base_url,
+                                    api_key=endpoint.api_key,
+                                    allow_private=endpoint.allow_private,
+                                    allow_loopback=endpoint.allow_loopback,
+                                    execution_limit=endpoint.execution_limit,
+                                    execution_bytes=endpoint.execution_bytes,
+                                    call_timeout_seconds=endpoint.call_timeout_seconds,
+                                    max_response_bytes=endpoint.max_response_bytes,
+                                    retry_429=endpoint.retry_429,
+                                    enabled=endpoint.enabled,
+                                ),
+                            ),
+                        )
+                        for endpoint in policy['endpoints']
+                    ]
+                groups = {group.group_id: group for group in endpoint_groups}
+                for group_id, group in groups.items():
+                    previous = self.endpoint_groups.get(group_id)
+                    if (
+                        previous is not None
+                        and previous.revision == group.revision
+                        and tuple(replica.replica_id for replica in previous.replicas)
+                        != tuple(replica.replica_id for replica in group.replicas)
+                    ):
+                        raise ValueError('Endpoint group membership changed in place')
+                replicas = {
+                    replica.replica_id: replica
+                    for group in endpoint_groups
+                    for replica in group.replicas
+                }
+                endpoints = {
+                    identity: replica.as_endpoint()
+                    for identity, replica in replicas.items()
+                }
                 lanes = tuple(policy['lanes'])
                 for identity, endpoint in endpoints.items():
                     previous = self.endpoints.get(identity)
@@ -543,19 +749,33 @@ class RequestDispatcher:
                 )
                 changed = (
                     lanes != self.lanes
+                    or groups != self.endpoint_groups
                     or endpoints != self.endpoints
                     or policy['policy'] != self.policy
                     or scheduler.total_concurrent_dispatch
                     != self.scheduler.total_concurrent_dispatch
                 )
                 if changed or self._policy_paused:
-                    old_lanes, old_endpoints = self.lanes, self.endpoints
-                    self.lanes, self.endpoints = lanes, endpoints
+                    old_state = (
+                        self.lanes,
+                        self.endpoint_groups,
+                        self.replicas,
+                        self.endpoints,
+                    )
+                    self.lanes = lanes
+                    self.endpoint_groups = groups
+                    self.replicas = replicas
+                    self.endpoints = endpoints
                     self._routes_disabled = False
                     try:
                         await self._configure()
                     except BaseException:
-                        self.lanes, self.endpoints = old_lanes, old_endpoints
+                        (
+                            self.lanes,
+                            self.endpoint_groups,
+                            self.replicas,
+                            self.endpoints,
+                        ) = old_state
                         raise
                     for identity, endpoint in endpoints.items():
                         if endpoint.enabled and identity not in self._clients:
@@ -785,16 +1005,14 @@ class RequestDispatcher:
         heads = {}
         reserved = {}
         now = await self._maintenance_io('server_time_ms')
+        replica_statuses: dict[str, dict[str, Any]] = {}
         usage = await self._maintenance_io('usage')
         for lane in self.lanes:
             route = await self._maintenance_io('route_status', lane.pool_id)
             reserved[lane.pool_id] = route['reserved_items']
-            if not lane.enabled or not self.endpoints[lane.endpoint_id].enabled:
-                continue
-            endpoint = await self._maintenance_io('endpoint_status', lane.endpoint_id)
-            if endpoint['probe_claim'] or (
-                endpoint['circuit'] not in (None, 'closed')
-                and int(endpoint['next_probe'] or 0) > now
+            group = self.endpoint_groups[lane.endpoint_group_id]
+            if not lane.enabled or not any(
+                replica.enabled for replica in group.replicas
             ):
                 continue
             attempt = await self._maintenance_io('ready_head', lane.pool_id)
@@ -811,14 +1029,27 @@ class RequestDispatcher:
                     and head.config_revision == lane.revision
                     and route['enabled'] == '1'
                     and 1 <= head.cost <= 1_000_000
-                    and int(endpoint['reserved_items'] or 0)
-                    < self.endpoints[lane.endpoint_id].execution_limit
-                    and int(endpoint['reserved_bytes'] or 0) + head.payload_bytes
-                    <= self.endpoints[lane.endpoint_id].execution_bytes
                     and route['reserved_bytes'] + head.payload_bytes
                     <= lane.execution_bytes
                 ):
-                    heads[lane.pool_id] = head
+                    available = False
+                    for replica in group.replicas:
+                        status = replica_statuses.get(replica.replica_id)
+                        if status is None:
+                            status = await self._maintenance_io(
+                                'endpoint_status', replica.replica_id
+                            )
+                            replica_statuses[replica.replica_id] = status
+                        if self._replica_is_eligible(
+                            replica,
+                            status,
+                            payload_bytes=head.payload_bytes,
+                            now=now,
+                        ):
+                            available = True
+                            break
+                    if available:
+                        heads[lane.pool_id] = head
         self.scheduler.sync_reservations(reserved, usage['reserved_items'], set(heads))
         for _ in range(self.store.limits.max_execution_items):
             if (
@@ -880,14 +1111,57 @@ class RequestDispatcher:
             self._category = 'dispatch_error'
             self._counts['dispatch_errors'] += 1
 
-    async def _provider(
-        self, attempt: str, claim_id: str, endpoint_id: str
-    ) -> tuple[int, ExecutionOutcome]:
+    async def _reserve_replica(
+        self, claim: ClaimRecord, excluded: set[str]
+    ) -> RegisteredReplica:
+        group = self.endpoint_groups[claim.endpoint_group_id]
+        while len(excluded) < len(group.replicas):
+            try:
+                replica = await self.select_replica(claim, excluded=excluded)
+            except TransitionRejected as exc:
+                if str(exc) == 'replica_unavailable':
+                    raise _NoReplicaAvailable from None
+                raise
+            reply = await self._io(
+                'reserve_replica', self.owner, claim, replica.replica_id
+            )
+            if reply.disposition in {'reserved', 'existing'}:
+                self._replica_cursors[group.group_id] += 1
+                return replica
+            if reply.disposition not in {'capacity', 'gated', 'replica_unavailable'}:
+                raise TransitionRejected(reply.disposition)
+            excluded.add(replica.replica_id)
+        raise _NoReplicaAvailable
+
+    async def _return_untransmitted(self, claim: ClaimRecord) -> None:
+        while True:
+            reply = await self._commit('return_untransmitted_and_refund', claim)
+            if reply.disposition in {'returned', 'existing'}:
+                if reply.refund_state == 'refunded':
+                    self.scheduler.refunded(
+                        claim.pool_id,
+                        claim.charged_cost,
+                        charge_sequence=claim.charge_sequence,
+                    )
+                return
+            if reply.disposition != 'backpressure':
+                raise TransitionRejected(reply.disposition)
+            await asyncio.sleep(self.poll_seconds)
+
+    async def _provider(self, claim: ClaimRecord) -> tuple[int, ExecutionOutcome, str]:
+        attempt = claim.attempt_id
+        claim_id = claim.claim_id
         if self._stop.is_set():
             raise TransitionRejected('start_stopped')
         payload = call = None
         self._calling.add(attempt)
         try:
+            excluded: set[str] = set()
+            try:
+                replica = await self._reserve_replica(claim, excluded)
+            except _NoReplicaAvailable:
+                await self._return_untransmitted(claim)
+                raise
             metadata = await self._io('metadata', attempt)
             payload = await self._io(
                 'fetch_payload', self.owner, attempt, claim_id=claim_id
@@ -895,65 +1169,94 @@ class RequestDispatcher:
             call = CompletionCallParams.from_dict(payload['call'])
             clock_read_at = time.monotonic()
             now = await self._io('server_time_ms')
-            timeout = min(
-                (payload['expires_at_ms'] - now) / 1000,
-                self.endpoints[endpoint_id].call_timeout_seconds,
-            )
+            request_deadline = clock_read_at + (payload['expires_at_ms'] - now) / 1000
             from marie.engine.completion_contract import require_terminal_completion
 
             require_terminal_completion(call)
             if (
                 self._stop.is_set()
                 or time.monotonic() >= self._owner_until
-                or timeout <= 0
+                or request_deadline <= clock_read_at
             ):
                 raise TransitionRejected('start_stopped')
-            endpoint_state = await self._io('endpoint_status', endpoint_id)
             started = await self._io(
                 'authorize_start', self.owner, attempt, claim_id=claim_id
             )
             if started.disposition != 'started':
                 raise TransitionRejected('start_unconfirmed')
-            timeout -= time.monotonic() - clock_read_at
-            if (
-                timeout <= 0
-                or self._stop.is_set()
-                or time.monotonic() >= self._owner_until
-            ):
-                raise TransitionRejected('start_stopped')
-            self._counts['provider_starts'] += 1
-            if endpoint_state.get('probe_claim') == claim_id:
-                self._counts['probe_starts'] += 1
-            attributes = {
-                'marie.llm_dispatch.request_id': attempt,
-                'marie.llm_dispatch.claim_id': claim_id,
-                'marie.llm_dispatch.execution_seq': started.execution_seq,
-                'marie.llm_dispatch.fabric_group_id': self.store.keys.fabric_id,
-                'marie.llm_dispatch.pool_id': metadata.pool_id,
-                'marie.llm_dispatch.endpoint_id': endpoint_id,
-                'marie.llm_dispatch.dispatcher_id': self.dispatcher_id,
-                'marie.llm_dispatch.contract_version': 'v3',
-                'marie.llm_dispatch.model': (
-                    metadata.model
-                    if metadata.model
-                    and not metadata.model.lower().startswith(
-                        ('http:', 'https:', 'data:')
+            while True:
+                timeout = min(
+                    request_deadline - time.monotonic(),
+                    replica.call_timeout_seconds,
+                )
+                if timeout <= 0:
+                    await self._commit(
+                        'release_replica_for_failover',
+                        claim,
+                        replica.replica_id,
                     )
-                    else ''
-                ),
-                'marie.llm_dispatch.message_count': len(call.messages),
-                'marie.llm_dispatch.queue_wait_ms': max(
-                    0, now - metadata.admitted_at_ms
-                ),
-            }
-            began_ns = time.time_ns()
-            began = time.monotonic()
-            outcome = await self._clients[endpoint_id].execute(
-                call, timeout_seconds=timeout
-            )
-            payload = call = None
-            _emit_execution_history(attributes, outcome, began_ns, began)
-            return started.execution_seq, outcome
+                    await self._return_untransmitted(claim)
+                    raise _NoReplicaAvailable
+                if self._stop.is_set() or time.monotonic() >= self._owner_until:
+                    raise TransitionRejected('start_stopped')
+                endpoint_state = await self._io('endpoint_status', replica.replica_id)
+                self._counts['provider_starts'] += 1
+                if endpoint_state.get('probe_claim') == claim_id:
+                    self._counts['probe_starts'] += 1
+                attributes = {
+                    'marie.llm_dispatch.request_id': attempt,
+                    'marie.llm_dispatch.claim_id': claim_id,
+                    'marie.llm_dispatch.execution_seq': started.execution_seq,
+                    'marie.llm_dispatch.fabric_group_id': self.store.keys.fabric_id,
+                    'marie.llm_dispatch.pool_id': metadata.pool_id,
+                    'marie.llm_dispatch.endpoint_group_id': claim.endpoint_group_id,
+                    'marie.llm_dispatch.replica_id': replica.replica_id,
+                    'marie.llm_dispatch.dispatcher_id': self.dispatcher_id,
+                    'marie.llm_dispatch.contract_version': 'v3',
+                    'marie.llm_dispatch.model': (
+                        metadata.model
+                        if metadata.model
+                        and not metadata.model.lower().startswith(
+                            ('http:', 'https:', 'data:')
+                        )
+                        else ''
+                    ),
+                    'marie.llm_dispatch.message_count': len(call.messages),
+                    'marie.llm_dispatch.queue_wait_ms': max(
+                        0, now - metadata.admitted_at_ms
+                    ),
+                }
+                began_ns = time.time_ns()
+                began = time.monotonic()
+                outcome = await self._clients[replica.replica_id].execute(
+                    call, timeout_seconds=timeout
+                )
+                _emit_execution_history(attributes, outcome, began_ns, began)
+                if outcome.request_started:
+                    return started.execution_seq, outcome, replica.replica_id
+                await self._commit(
+                    'record_endpoint_outcome',
+                    attempt,
+                    claim_id=claim_id,
+                    execution_seq=started.execution_seq,
+                    replica_id=replica.replica_id,
+                    outcome=(
+                        'unavailable' if outcome.availability_failure else 'neutral'
+                    ),
+                    category=outcome.category or 'none',
+                    open_ms=self.circuit_open_ms,
+                )
+                await self._commit(
+                    'release_replica_for_failover',
+                    claim,
+                    replica.replica_id,
+                )
+                excluded.add(replica.replica_id)
+                try:
+                    replica = await self._reserve_replica(claim, excluded)
+                except _NoReplicaAvailable:
+                    await self._return_untransmitted(claim)
+                    raise
         finally:
             payload = call = None
             self._calling.discard(attempt)
@@ -971,11 +1274,10 @@ class RequestDispatcher:
     async def _execute(self, claim: ClaimRecord) -> None:
         attempt = claim.attempt_id
         claim_id = claim.claim_id
-        endpoint_id = claim.endpoint_group_id
         outcome = None
         try:
             try:
-                sequence, outcome = await self._provider(attempt, claim_id, endpoint_id)
+                sequence, outcome, replica_id = await self._provider(claim)
             except UnsupportedQueueStreaming:
                 reply = await self._commit(
                     'reject_claim',
@@ -989,6 +1291,9 @@ class RequestDispatcher:
                         claim.charged_cost,
                         charge_sequence=claim.charge_sequence,
                     )
+                return
+            except _NoReplicaAvailable:
+                self._category = 'replica_unavailable'
                 return
             except (StoreUnavailable, TransitionRejected):
                 self._category = 'start_unconfirmed'
@@ -1009,6 +1314,7 @@ class RequestDispatcher:
                 'record_endpoint_outcome',
                 attempt,
                 **args,
+                replica_id=replica_id,
                 outcome=feedback,
                 category=outcome.category or 'none',
                 open_ms=self.circuit_open_ms,

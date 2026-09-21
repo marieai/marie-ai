@@ -9,6 +9,7 @@ import ipaddress
 import json
 import logging
 import math
+import re
 import socket
 import time
 import traceback
@@ -167,6 +168,76 @@ class RegisteredEndpoint:
             raise EndpointPolicyError('Private endpoint requires operator policy')
 
 
+@dataclass(frozen=True, slots=True)
+class RegisteredReplica:
+    replica_id: str
+    base_url: str = field(repr=False)
+    credential_env: str | None = field(default=None, repr=False)
+    capability_digest: str = '0' * 64
+    api_key: str | None = field(default=None, repr=False)
+    allow_private: bool = False
+    allow_loopback: bool = False
+    execution_limit: int = 8
+    execution_bytes: int = 64 * 1024 * 1024
+    call_timeout_seconds: float = 60.0
+    max_response_bytes: int = 1024 * 1024
+    retry_429: bool = False
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.replica_id)
+        if self.credential_env is not None and not re.fullmatch(
+            r'[A-Z_][A-Z0-9_]{0,127}', self.credential_env
+        ):
+            raise ValueError('Invalid replica credential binding')
+        if not re.fullmatch(r'[0-9a-f]{64}', self.capability_digest):
+            raise ValueError('Invalid replica capability digest')
+        self.as_endpoint()
+
+    def as_endpoint(self) -> RegisteredEndpoint:
+        return RegisteredEndpoint(
+            endpoint_id=self.replica_id,
+            base_url=self.base_url,
+            api_key=self.api_key,
+            allow_private=self.allow_private,
+            allow_loopback=self.allow_loopback,
+            execution_limit=self.execution_limit,
+            execution_bytes=self.execution_bytes,
+            call_timeout_seconds=self.call_timeout_seconds,
+            max_response_bytes=self.max_response_bytes,
+            retry_429=self.retry_429,
+            enabled=self.enabled,
+        )
+
+    def target_fingerprint(self) -> str:
+        return self.as_endpoint().target_fingerprint()
+
+    def transport_fingerprint(self) -> str:
+        return self.as_endpoint().transport_fingerprint()
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredEndpointGroup:
+    group_id: str
+    revision: str
+    replicas: tuple[RegisteredReplica, ...]
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.group_id)
+        validate_identifier(self.revision)
+        if not self.replicas:
+            raise ValueError('Endpoint group requires at least one replica')
+        replica_ids = [replica.replica_id for replica in self.replicas]
+        targets = [replica.target_fingerprint() for replica in self.replicas]
+        capabilities = {replica.capability_digest for replica in self.replicas}
+        if len(replica_ids) != len(set(replica_ids)):
+            raise ValueError('Endpoint group replica identities must be unique')
+        if len(targets) != len(set(targets)):
+            raise ValueError('Endpoint group replica targets must be unique')
+        if len(capabilities) != 1:
+            raise ValueError('Endpoint group replicas must share one capability')
+
+
 class _PinnedNetworkBackend(AsyncNetworkBackend):
     def __init__(self, endpoint: RegisteredEndpoint) -> None:
         self.endpoint = endpoint
@@ -205,12 +276,16 @@ class ExecutionOutcome:
     availability_success: bool = False
     availability_failure: bool = False
     retry_after_ms: int = 0
+    request_started: bool = True
 
 
 def _transport_outcome(error: BaseException) -> ExecutionOutcome:
     if isinstance(error, httpx.PoolTimeout):
         return ExecutionOutcome(
-            category='pool_pressure', retryable=True, remote_settled=True
+            category='pool_pressure',
+            retryable=True,
+            remote_settled=True,
+            request_started=False,
         )
     current: BaseException | None = error
     for _ in range(12):
@@ -226,6 +301,7 @@ def _transport_outcome(error: BaseException) -> ExecutionOutcome:
                 retryable=True,
                 remote_settled=True,
                 availability_failure=True,
+                request_started=False,
             )
         current = current.__cause__ or current.__context__
     categories = {
@@ -238,10 +314,15 @@ def _transport_outcome(error: BaseException) -> ExecutionOutcome:
         httpx.RemoteProtocolError: 'protocol_error',
         TimeoutError: 'call_timeout',
     }
-    return ExecutionOutcome(
+    outcome = ExecutionOutcome(
         category=categories.get(type(error), 'transport_unknown'),
         availability_failure=True,
     )
+    if isinstance(error, (httpx.ConnectTimeout, httpx.ConnectError)):
+        outcome.request_started = False
+        outcome.remote_settled = True
+        outcome.retryable = True
+    return outcome
 
 
 def _clear_transport_tracebacks(error: BaseException) -> None:
@@ -389,7 +470,11 @@ class EndpointClient:
                 category='connect_unknown', availability_failure=True
             )
         except EndpointPolicyError:
-            outcome = ExecutionOutcome(category='endpoint_policy', remote_settled=True)
+            outcome = ExecutionOutcome(
+                category='endpoint_policy',
+                remote_settled=True,
+                request_started=False,
+            )
         except (ValueError, RecursionError):
             outcome = ExecutionOutcome(category='invalid_response', remote_settled=True)
         finally:

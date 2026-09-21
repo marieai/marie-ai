@@ -68,6 +68,53 @@ def test_persisted_policy_uses_existing_pool_capacity_and_immutable_limits():
     assert 'api_key' not in policy['endpoints'][0]
 
 
+def test_persisted_policy_accepts_logical_group_with_multiple_replicas():
+    from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+        persisted_dispatch_policy,
+    )
+
+    data = persisted()
+    fabric = data['metadata']['llm_dispatch']
+    fabric.pop('endpoints')
+    fabric['endpoint_groups'] = [
+        {
+            'group_id': 'document-llm',
+            'revision': 'r1',
+            'replicas': [
+                {
+                    'replica_id': 'replica-a',
+                    'base_url': 'https://a.example/v1',
+                    'capability_digest': 'a' * 64,
+                    'execution_limit': 2,
+                },
+                {
+                    'replica_id': 'replica-b',
+                    'base_url': 'https://b.example/v1',
+                    'capability_digest': 'a' * 64,
+                    'execution_limit': 2,
+                },
+            ],
+        }
+    ]
+    lane = data['lanes'][0]['metadata']['llm_dispatch']
+    lane.pop('endpoint_id')
+    lane['endpoint_group_id'] = 'document-llm'
+
+    policy = persisted_dispatch_policy(data)
+
+    assert policy['lanes'][0]['endpoint_group_id'] == 'document-llm'
+    assert [
+        replica['replica_id'] for replica in policy['endpoint_groups'][0]['replicas']
+    ] == ['replica-a', 'replica-b']
+    from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+        build_policy_generation_snapshot,
+    )
+
+    snapshot, admission = build_policy_generation_snapshot('default', 1, data)
+    assert snapshot['dispatch']['lanes'][0]['endpoint_group_id'] == 'document-llm'
+    assert admission.endpoint_binding('default').endpoint_group_id == 'document-llm'
+
+
 def test_policy_generation_snapshot_includes_admission_and_dispatch_bindings():
     from marie.serve.runtimes.gateway.marie.dispatch_policy import (
         build_policy_generation_snapshot,
@@ -99,7 +146,8 @@ def test_policy_generation_rejects_accepting_pool_without_endpoint_binding():
 
 
 @pytest.mark.parametrize(
-    'mutation', ['secret', 'unknown', 'version', 'ceiling', 'missing_capacity']
+    'mutation',
+    ['secret', 'unknown', 'version', 'ceiling', 'missing_capacity', 'duplicate'],
 )
 def test_persisted_policy_rejects_unsafe_ambiguous_metadata(mutation):
     from marie.serve.runtimes.gateway.marie.dispatch_policy import (
@@ -118,6 +166,8 @@ def test_persisted_policy_rejects_unsafe_ambiguous_metadata(mutation):
         data['lanes'][0]['max_concurrent'] = 5
     if mutation == 'missing_capacity':
         data['lanes'][0]['max_concurrent'] = None
+    if mutation == 'duplicate':
+        config['endpoints'].append(dict(config['endpoints'][0]))
     with pytest.raises(ValueError):
         persisted_dispatch_policy(data)
 
@@ -189,6 +239,88 @@ async def test_database_source_selected_at_v3_startup_without_yaml_fallback(
     with pytest.raises(RuntimeFailToStart) as caught:
         await runtime.start()
     assert 'secret' not in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_v3_startup_resolves_replica_group_credentials(monkeypatch):
+    from marie.engine.llm_queue import request_dispatcher
+    from marie.engine.llm_queue import store as store_module
+
+    data = persisted()
+    fabric = data['metadata']['llm_dispatch']
+    fabric.pop('endpoints')
+    fabric['endpoint_groups'] = [
+        {
+            'group_id': 'document-llm',
+            'revision': 'r1',
+            'replicas': [
+                {
+                    'replica_id': 'replica-a',
+                    'base_url': 'https://a.example/v1',
+                    'credential_env': 'TEST_REPLICA_KEY',
+                    'capability_digest': 'a' * 64,
+                    'execution_limit': 2,
+                },
+                {
+                    'replica_id': 'replica-b',
+                    'base_url': 'https://b.example/v1',
+                    'capability_digest': 'a' * 64,
+                    'execution_limit': 2,
+                },
+            ],
+        }
+    ]
+    lane = data['lanes'][0]['metadata']['llm_dispatch']
+    lane.pop('endpoint_id')
+    lane['endpoint_group_id'] = 'document-llm'
+    source = DatabaseSchedulerConfigSource(
+        SimpleNamespace(load_scheduler_config=lambda _: data), 'chosen'
+    )
+    runtime = GatewayLlmDispatchRuntime(
+        queue_config=LlmQueueConfig(
+            enabled=True,
+            queue_contract_version='v3',
+            fabric_group_id='chosen',
+            queue_url='redis://test',
+        ),
+        scheduler_config_source=source,
+        config={'llm_dispatch': {'policy_source': 'database'}},
+    )
+    observed = {}
+
+    class Store:
+        def __init__(self, url, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+    class Dispatcher:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+    monkeypatch.setenv('TEST_REPLICA_KEY', 'replica-credential')
+    monkeypatch.setattr(store_module, 'RequestStore', Store)
+    monkeypatch.setattr(request_dispatcher, 'RequestDispatcher', Dispatcher)
+
+    await runtime.start()
+    try:
+        group = observed['endpoint_groups'][0]
+        assert group.group_id == 'document-llm'
+        assert [replica.replica_id for replica in group.replicas] == [
+            'replica-a',
+            'replica-b',
+        ]
+        assert group.replicas[0].api_key == 'replica-credential'
+        assert observed['endpoints'] is None
+    finally:
+        await runtime.stop()
 
 
 def test_postgres_startup_does_not_disclose_connection_configuration(monkeypatch):

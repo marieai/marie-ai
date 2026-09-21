@@ -258,9 +258,10 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
                         'admission': rule['admission'],
                         'llm_dispatch': {
                             'schema_version': 1,
-                            'endpoint_id': dispatch_lanes[rule['pool_id']][
-                                'endpoint_id'
-                            ],
+                            'endpoint_id': dispatch_lanes[rule['pool_id']].get(
+                                'endpoint_group_id'
+                            )
+                            or dispatch_lanes[rule['pool_id']]['endpoint_id'],
                             'revision': dispatch_lanes[rule['pool_id']]['revision'],
                         },
                     },

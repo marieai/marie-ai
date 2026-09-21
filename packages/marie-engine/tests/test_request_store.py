@@ -154,6 +154,10 @@ def test_sent_or_possibly_sent_claim_retains_its_charge(store):
         expected_cost=3,
         claim_id='sent-charge',
     )
+    assert (
+        store.reserve_replica(store.test_owner, claim, 'endpoint').disposition
+        == 'reserved'
+    )
     started = store.authorize_start(
         store.test_owner, req.attempt_id, claim_id=claim.claim_id
     )
@@ -221,6 +225,112 @@ def test_changed_head_and_rejected_claim_have_exact_accounting(store):
     )
     assert rejected.disposition == 'finished'
     assert rejected.refund_state == 'refunded'
+    assert store.charge_totals('pool') == {'charged': 1, 'refunded': 1}
+
+
+def test_physical_replica_reservation_moves_within_logical_group(store):
+    store.configure_endpoint(
+        store.test_owner,
+        'replica-a',
+        execution_limit=1,
+        execution_bytes=100_000,
+    )
+    store.configure_endpoint(
+        store.test_owner,
+        'replica-b',
+        execution_limit=1,
+        execution_bytes=100_000,
+    )
+    store.configure_route(
+        store.test_owner,
+        'pool',
+        'document-llm',
+        revision='r1',
+        execution_limit=2,
+        execution_bytes=100_000,
+        legacy_endpoint=False,
+    )
+    req = replace(request_for(store), endpoint_id='document-llm')
+    assert store.admit(req).disposition == 'admitted'
+    claim = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=req.attempt_id,
+        expected_cost=req.estimated_cost_units,
+        claim_id='late-bound',
+    )
+
+    assert (
+        store.reserve_replica(store.test_owner, claim, 'replica-a').disposition
+        == 'reserved'
+    )
+    assert store.endpoint_status('replica-a')['reserved_items'] == '1'
+    assert (
+        store.release_replica_for_failover(
+            store.test_owner, claim, 'replica-a'
+        ).disposition
+        == 'released'
+    )
+    assert store.endpoint_status('replica-a')['reserved_items'] == '0'
+    assert store.usage()['reserved_items'] == 1
+    assert (
+        store.reserve_replica(store.test_owner, claim, 'replica-b').disposition
+        == 'reserved'
+    )
+
+    started = store.authorize_start(
+        store.test_owner, req.attempt_id, claim_id=claim.claim_id
+    )
+    store.mark_unknown(
+        store.test_owner,
+        req.attempt_id,
+        claim_id=claim.claim_id,
+        execution_seq=started.execution_seq,
+        category='read_timeout',
+    )
+    assert store.endpoint_status('replica-b')['reserved_items'] == '1'
+    assert store.charge_totals('pool') == {'charged': 1, 'refunded': 0}
+
+
+def test_all_prewrite_failures_restore_execution_sequence_and_refund(store):
+    store.configure_endpoint(
+        store.test_owner,
+        'replica-a',
+        execution_limit=1,
+        execution_bytes=100_000,
+    )
+    store.configure_route(
+        store.test_owner,
+        'pool',
+        'document-llm',
+        revision='r1',
+        execution_limit=1,
+        execution_bytes=100_000,
+        legacy_endpoint=False,
+    )
+    req = replace(request_for(store), endpoint_id='document-llm')
+    assert store.admit(req).disposition == 'admitted'
+    claim = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=req.attempt_id,
+        expected_cost=req.estimated_cost_units,
+        claim_id='prewrite',
+    )
+    store.reserve_replica(store.test_owner, claim, 'replica-a')
+    started = store.authorize_start(
+        store.test_owner, req.attempt_id, claim_id=claim.claim_id
+    )
+    assert started.execution_seq == 1
+    store.release_replica_for_failover(store.test_owner, claim, 'replica-a')
+
+    returned = store.return_untransmitted_and_refund(store.test_owner, claim)
+
+    metadata = store.metadata(req.attempt_id)
+    assert returned.disposition == 'returned'
+    assert metadata.state == 'ready'
+    assert metadata.execution_seq == 0
+    assert store.usage()['reserved_items'] == 0
     assert store.charge_totals('pool') == {'charged': 1, 'refunded': 1}
 
 
@@ -580,6 +690,10 @@ def test_lost_replies_reconcile_without_duplicate_admission_or_execution(
     assert recovered_claim.claim_id == claim_id
     assert recovered_claim.charge_sequence == 1
     assert store.charge_totals('pool') == {'charged': 1, 'refunded': 0}
+    assert (
+        store.reserve_replica(store.test_owner, recovered_claim, 'endpoint').disposition
+        == 'reserved'
+    )
     lose_reply(
         lambda: store.authorize_start(
             store.test_owner, req.attempt_id, claim_id=claim_id
@@ -935,6 +1049,70 @@ def test_closed_producer_claim_recovery_does_not_requeue(store):
     assert store.metadata(req.attempt_id) is None
     assert store.ready_head('pool') is None
     assert store.usage()['reserved_items'] == 0
+
+
+def test_route_revision_cannot_change_while_claim_is_reserved(store):
+    req = request_for(store)
+    store.admit(req)
+    store.claim(
+        store.test_owner,
+        req.attempt_id,
+        pool_id='pool',
+        claim_id='claim',
+    )
+
+    reply = store.configure_route(
+        store.test_owner,
+        'pool',
+        'endpoint',
+        revision='r2',
+        execution_limit=2,
+        execution_bytes=10_000,
+    )
+
+    assert reply.disposition == 'route_busy'
+    assert store.metadata(req.attempt_id).config_revision == 'r1'
+
+
+def test_circuit_feedback_idempotency_is_scoped_to_attempt(store):
+    for _ in range(2):
+        req = request_for(store)
+        assert store.admit(req).disposition == 'admitted'
+        assert (
+            store.claim(
+                store.test_owner,
+                req.attempt_id,
+                pool_id='pool',
+                claim_id='reused-claim',
+            ).disposition
+            == 'claimed'
+        )
+        started = store.authorize_start(
+            store.test_owner,
+            req.attempt_id,
+            claim_id='reused-claim',
+        )
+        assert (
+            store.record_endpoint_outcome(
+                store.test_owner,
+                req.attempt_id,
+                claim_id='reused-claim',
+                execution_seq=started.execution_seq,
+                outcome='unavailable',
+                category='connect_refused',
+            ).disposition
+            == 'recorded'
+        )
+        store.finish(
+            store.test_owner,
+            req.attempt_id,
+            claim_id='reused-claim',
+            execution_seq=started.execution_seq,
+            result={'error': 'connect_refused'},
+            success=False,
+        )
+
+    assert store.endpoint_status('endpoint')['failures'] == '2'
 
 
 def test_result_record_limit_and_ready_tombstones_are_bounded(store):

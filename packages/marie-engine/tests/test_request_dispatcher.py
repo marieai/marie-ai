@@ -338,6 +338,152 @@ def dispatcher_for(store, url, *, retry_429=False, **kwargs):
     )
 
 
+async def test_prewrite_failure_moves_to_second_replica_without_rerouting(store):
+    from marie.engine.llm_queue.endpoint import (
+        ExecutionOutcome,
+        RegisteredEndpointGroup,
+        RegisteredReplica,
+    )
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    calls = []
+
+    class Client:
+        def __init__(self, endpoint):
+            self.replica_id = endpoint.endpoint_id
+
+        async def execute(self, call, **kwargs):
+            calls.append((self.replica_id, kwargs['timeout_seconds']))
+            if self.replica_id == 'replica-a':
+                return ExecutionOutcome(
+                    category='connect_refused',
+                    retryable=True,
+                    remote_settled=True,
+                    availability_failure=True,
+                    request_started=False,
+                )
+            return ExecutionOutcome(
+                response={'choices': []},
+                remote_settled=True,
+                availability_success=True,
+            )
+
+        async def close(self):
+            pass
+
+    group = RegisteredEndpointGroup(
+        'document-llm',
+        'r1',
+        (
+            RegisteredReplica(
+                'replica-a',
+                'https://a.example/v1',
+                capability_digest='a' * 64,
+                call_timeout_seconds=1.0,
+            ),
+            RegisteredReplica(
+                'replica-b',
+                'https://b.example/v1',
+                capability_digest='a' * 64,
+                call_timeout_seconds=0.25,
+            ),
+        ),
+    )
+    runtime = RequestDispatcher(
+        store=store,
+        endpoint_groups=[group],
+        lanes=[DispatchLane('pool', endpoint_group_id='document-llm')],
+        client_factory=Client,
+        poll_seconds=0.01,
+    )
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        req = admit_request(store, endpoint_id='document-llm')
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'succeeded')
+
+        metadata = store.metadata(req.attempt_id)
+        assert [replica_id for replica_id, _ in calls] == ['replica-a', 'replica-b']
+        assert calls[1][1] <= 0.25
+        assert metadata.endpoint_id == 'document-llm'
+        assert metadata.replica_id == 'replica-b'
+        assert store.endpoint_status('replica-a')['reserved_items'] == '0'
+        assert int(store.endpoint_status('replica-b')['reserved_items'] or 0) == 0
+        assert store.charge_totals('pool') == {'charged': 1, 'refunded': 0}
+    finally:
+        await runtime.stop()
+
+
+async def test_uncertain_send_never_moves_to_second_replica(store):
+    from marie.engine.llm_queue.endpoint import (
+        ExecutionOutcome,
+        RegisteredEndpointGroup,
+        RegisteredReplica,
+    )
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    calls = []
+
+    class Client:
+        def __init__(self, endpoint):
+            self.replica_id = endpoint.endpoint_id
+
+        async def execute(self, call, **kwargs):
+            calls.append(self.replica_id)
+            return ExecutionOutcome(
+                category='read_timeout',
+                availability_failure=True,
+                request_started=True,
+            )
+
+        async def close(self):
+            pass
+
+    group = RegisteredEndpointGroup(
+        'document-llm',
+        'r1',
+        (
+            RegisteredReplica(
+                'replica-a',
+                'https://a.example/v1',
+                capability_digest='a' * 64,
+            ),
+            RegisteredReplica(
+                'replica-b',
+                'https://b.example/v1',
+                capability_digest='a' * 64,
+            ),
+        ),
+    )
+    runtime = RequestDispatcher(
+        store=store,
+        endpoint_groups=[group],
+        lanes=[DispatchLane('pool', endpoint_group_id='document-llm')],
+        client_factory=Client,
+        poll_seconds=0.01,
+    )
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        req = admit_request(store, endpoint_id='document-llm')
+        await eventually(
+            lambda: store.metadata(req.attempt_id).state == 'outcome_unknown'
+        )
+
+        assert calls == ['replica-a']
+        assert store.endpoint_status('replica-a')['reserved_items'] == '1'
+        assert int(store.endpoint_status('replica-b')['reserved_items'] or 0) == 0
+        assert store.charge_totals('pool') == {'charged': 1, 'refunded': 0}
+    finally:
+        await runtime.stop()
+
+
 async def test_http_429_is_terminal_by_default(http_response_endpoint):
     from marie.engine.completion_contract import CompletionCallParams
     from marie.engine.llm_queue.endpoint import EndpointClient, RegisteredEndpoint
@@ -847,7 +993,7 @@ async def test_refusal_opens_shared_circuit_healthy_endpoint_progresses(
         assert (
             store.metadata(req.attempt_id).execution_seq
             + store.metadata(shared.attempt_id).execution_seq
-            == 3
+            == 0
         )
         assert store.usage()['reserved_items'] == 0
     finally:

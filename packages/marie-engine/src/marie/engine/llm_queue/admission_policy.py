@@ -248,7 +248,7 @@ class AdmissionPolicy:
 def _parse_endpoint_binding(pool_id: str, value: object) -> PoolEndpointBinding:
     if not isinstance(value, Mapping):
         raise AdmissionPolicyError('routing_policy_endpoint_invalid')
-    endpoint_id = value.get('endpoint_id')
+    endpoint_id = value.get('endpoint_group_id') or value.get('endpoint_id')
     revision = value.get('revision')
     if (
         value.get('schema_version') != 1

@@ -50,7 +50,7 @@ local R, alive, members, ready, route, usage, owner, generation,
 local manifest = KEYS[18]
 local operations = {route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
     producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,admit_manifest=true,
-    metadata=true,result=true,claim=true,payload=true,start=true,defer=true,promote=true,
+    metadata=true,result=true,claim=true,reserve_replica=true,release_replica=true,payload=true,start=true,defer=true,promote=true,
     finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true}
 if not operations[op] then return redis.error_reply('invalid operation') end
 local function integer(value, low, high)
@@ -88,7 +88,11 @@ if op == 'claim' or op == 'payload' or op == 'start' or op == 'defer' or op == '
     if not identifier(a.claim_id) then return redis.error_reply('missing claim identity') end
 end
 if op == 'return_untransmitted' and (not identifier(a.claim_id) or
-    not integer(a.charge_sequence,1,2^53-1)) then return redis.error_reply('invalid return arguments') end
+    not integer(a.charge_sequence,1,2^53-1) or
+    not integer(a.execution_sequence,0,a.limits.max_attempts)) then return redis.error_reply('invalid return arguments') end
+if (op == 'reserve_replica' or op == 'release_replica') and
+    (not identifier(a.claim_id) or not identifier(a.replica_id) or
+    not integer(a.charge_sequence,1,2^53-1)) then return redis.error_reply('invalid replica arguments') end
 if op == 'defer' or op == 'finish' or op == 'settle' then
     if not integer(a.execution_seq,0,a.limits.max_attempts) then return redis.error_reply('invalid execution sequence') end
 end
@@ -160,6 +164,7 @@ local request_limits = {feedback_seq=a.limits.max_attempts,
     uncertainty_until=2^53-1, claim_until=2^53-1, retain_until=2^53-1,
     owner_generation=2^40, charged_owner_generation=2^40,
     charged_cost=1000000, charge_sequence=2^53-1, refunded_on=2^53-1,
+    replica_reserved=1, replica_reservation_bytes=a.limits.max_execution_bytes,
     result_allowance=a.limits.result_allowance}
 for field, maximum in pairs(request_limits) do
     if not stored_integer(h(R,field),maximum) then
@@ -201,7 +206,9 @@ if redis.call('EXISTS',R) == 1 then
         local bytes = n(R,'reservation_bytes')
         if n(usage,'reserved_items') < 1 or n(usage,'reserved_bytes') < bytes or
             n(route,'reserved_items') < 1 or n(route,'reserved_bytes') < bytes or
-            n(endpoint,'reserved_items') < 1 or n(endpoint,'reserved_bytes') < bytes then
+            (n(R,'replica_reserved') == 1 and
+                (n(endpoint,'reserved_items') < 1 or
+                 n(endpoint,'reserved_bytes') < n(R,'replica_reservation_bytes'))) then
             return redis.error_reply('inconsistent reservation accounting')
         end
     end
@@ -214,7 +221,8 @@ local function reply(disposition)
         owner_generation=n(R,'charged_owner_generation'),pool_id=h(R,'pool_id') or '',
         endpoint_group_id=h(R,'endpoint_id') or '',charged_cost=n(R,'charged_cost'),
         refunded_cost=h(R,'refund_state') == 'refunded' and n(R,'charged_cost') or 0,
-        charge_sequence=n(R,'charge_sequence'),refund_state=h(R,'refund_state') or ''})
+        charge_sequence=n(R,'charge_sequence'),refund_state=h(R,'refund_state') or '',
+        replica_id=h(R,'replica_id') or ''})
 end
 local function live() return redis.call('EXISTS', alive) == 1 end
 local function terminal()
@@ -223,23 +231,29 @@ local function terminal()
 end
 local function owner_valid() return a.owner and redis.call('GET',owner) == a.owner end
 local function route_open()
+    return h(route,'enabled') == '1' and h(route,'gate') == 'open' and
+        h(route,'endpoint_id') == h(R,'endpoint_id') and h(route,'revision') == h(R,'config_revision')
+end
+local function replica_open()
     local circuit = h(endpoint,'circuit') or 'closed'
     local probe = h(endpoint,'probe_claim')
     local eligible = (not probe or probe == h(R,'claim_id')) and
         (circuit == 'closed' or now >= n(endpoint,'next_probe'))
-    return eligible and h(route,'enabled') == '1' and h(endpoint,'gate') == 'open' and
-        h(route,'endpoint_id') == h(R,'endpoint_id') and h(route,'revision') == h(R,'config_revision')
+    return eligible and h(endpoint,'gate') == 'open'
 end
 local function release()
-    if h(endpoint,'probe_claim') == h(R,'claim_id') then redis.call('HDEL',endpoint,'probe_claim') end
     if n(R,'reserved') == 1 then
         local bytes = n(R,'reservation_bytes')
         inc('reserved_items',-1); inc('reserved_bytes',-bytes)
         redis.call('HINCRBY',route,'reserved_items',-1)
         redis.call('HINCRBY',route,'reserved_bytes',-bytes)
-        redis.call('HINCRBY',endpoint,'reserved_items',-1)
-        redis.call('HINCRBY',endpoint,'reserved_bytes',-bytes)
         redis.call('HSET',R,'reserved',0,'reservation_bytes',0)
+    end
+    if n(R,'replica_reserved') == 1 then
+        if h(endpoint,'probe_claim') == h(R,'claim_id') then redis.call('HDEL',endpoint,'probe_claim') end
+        redis.call('HINCRBY',endpoint,'reserved_items',-1)
+        redis.call('HINCRBY',endpoint,'reserved_bytes',-n(R,'replica_reservation_bytes'))
+        redis.call('HSET',R,'replica_reserved',0,'replica_reservation_bytes',0)
     end
     redis.call('ZREM',processing,a.id)
 end
@@ -284,7 +298,8 @@ local function abandon()
     if n(R,'reserved') == 1 and n(R,'execution_seq') > 0 and h(R,'state') ~= 'claimed' then
         local values = redis.call('HMGET',R,'producer_id','pool_id','endpoint_id','claim_id',
             'execution_seq','owner_generation','owner_id','reservation_bytes','uncertainty_until','feedback_seq',
-            'charged_cost','charge_sequence','charged_owner_generation','refund_state','refunded_on')
+            'charged_cost','charge_sequence','charged_owner_generation','refund_state','refunded_on',
+            'replica_id','replica_reserved','replica_reservation_bytes')
         local charge = n(R,'storage_charge')
         redis.call('DEL',R)
         redis.call('HSET',R,'state','abandoned','producer_id',values[1],'pool_id',values[2],
@@ -293,7 +308,9 @@ local function abandon()
             'uncertainty_until',values[9],'feedback_seq',values[10] or '0',
             'charged_cost',values[11] or '0','charge_sequence',values[12] or '0',
             'charged_owner_generation',values[13] or '0','refund_state',values[14] or '',
-            'refunded_on',values[15] or '0','reserved',1,'storage_charge',a.limits.metadata_bytes)
+            'refunded_on',values[15] or '0','replica_id',values[16] or '',
+            'replica_reserved',values[17] or '0','replica_reservation_bytes',values[18] or '0',
+            'reserved',1,'storage_charge',a.limits.metadata_bytes)
         inc('storage_bytes',a.limits.metadata_bytes-charge)
     else
         release()
@@ -310,7 +327,7 @@ local function finish_terminal(state, result)
         'finished_at',now,'retain_until',until_time)
     redis.call('ZADD',retention,until_time,a.id)
 end
-local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,start=true,payload=true,defer=true,return_untransmitted=true,
+local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,reserve_replica=true,release_replica=true,start=true,payload=true,defer=true,return_untransmitted=true,
     promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true}
 if dispatcher_ops[op] and not owner_valid() then return reply('stale_owner') end
 if op == 'initialize' then
@@ -382,14 +399,17 @@ elseif op == 'endpoint' then
     redis.call('HSET',endpoint,'gate',a.gate,'execution_limit',a.execution_limit,'execution_bytes',a.execution_bytes)
     return reply('configured')
 elseif op == 'route' then
-    if redis.call('SISMEMBER',endpoints,a.endpoint_id) == 0 and redis.call('SCARD',endpoints) >= a.limits.max_endpoints then return reply('backpressure') end
     if redis.call('SISMEMBER',routes,a.pool_id) == 0 and redis.call('SCARD',routes) >= a.limits.max_routes then return reply('backpressure') end
-    if n(route,'reserved_items') > 0 and h(route,'endpoint_id') ~= a.endpoint_id then
+    if n(route,'reserved_items') > 0 and
+        (h(route,'endpoint_id') ~= a.endpoint_id or h(route,'revision') ~= a.revision) then
         return reply('route_busy')
     end
     redis.call('SADD',routes,a.pool_id)
-    redis.call('SADD',endpoints,a.endpoint_id)
-    redis.call('HSET',endpoint,'gate',a.gate,'execution_limit',a.execution_limit,'execution_bytes',a.execution_bytes)
+    if a.legacy_endpoint then
+        if redis.call('SISMEMBER',endpoints,a.endpoint_id) == 0 and redis.call('SCARD',endpoints) >= a.limits.max_endpoints then return reply('backpressure') end
+        redis.call('SADD',endpoints,a.endpoint_id)
+        redis.call('HSET',endpoint,'gate',a.gate,'execution_limit',a.execution_limit,'execution_bytes',a.execution_bytes)
+    end
     redis.call('HSET',route,'endpoint_id',a.endpoint_id,'revision',a.revision,
         'enabled',a.enabled,'gate',a.gate,'execution_limit',a.execution_limit,
         'execution_bytes',a.execution_bytes)
@@ -456,7 +476,9 @@ if not exists then return reply('missing') end
 if op == 'metadata' then return reply('found') end
 if op == 'circuit_feedback' then
     if h(R,'claim_id') ~= a.claim_id or n(R,'execution_seq') ~= a.execution_seq then return reply('stale_claim') end
-    if n(R,'feedback_seq') >= a.execution_seq then return reply('existing') end
+    if not identifier(a.replica_id) or h(R,'replica_id') ~= a.replica_id then return reply('stale_replica') end
+    local feedback_token = a.id..':'..a.claim_id..':'..a.execution_seq
+    if h(endpoint,'feedback_token') == feedback_token then return reply('existing') end
     local circuit = h(endpoint,'circuit') or 'closed'
     local probe = h(endpoint,'probe_claim') == a.claim_id
     if a.outcome == 'unavailable' then
@@ -474,7 +496,7 @@ if op == 'circuit_feedback' then
     elseif probe then
         redis.call('HSET',endpoint,'circuit','open','next_probe',now+a.open_ms,'probe_successes',0)
     end
-    redis.call('HSET',R,'feedback_seq',a.execution_seq)
+    redis.call('HSET',endpoint,'feedback_token',feedback_token)
     return reply('recorded')
 end
 if op == 'mark_unknown' then
@@ -539,11 +561,13 @@ if op == 'claim' then
     if redis.call('LINDEX',ready,0) ~= a.id then return reply('head_changed') end
     if a.expected_cost ~= nil and a.expected_cost ~= cjson.null and a.expected_cost ~= n(R,'cost') then return reply('cost_changed') end
     if not route_open() then return reply('gated') end
+    if a.legacy_reserve and not replica_open() then return reply('gated') end
     local bytes = n(R,'payload_bytes')
     if n(route,'reserved_items') >= n(route,'execution_limit') or
         n(route,'reserved_bytes')+bytes > n(route,'execution_bytes') or
-        n(endpoint,'reserved_items') >= n(endpoint,'execution_limit') or
-        n(endpoint,'reserved_bytes')+bytes > n(endpoint,'execution_bytes') or
+        (a.legacy_reserve and (
+            n(endpoint,'reserved_items') >= n(endpoint,'execution_limit') or
+            n(endpoint,'reserved_bytes')+bytes > n(endpoint,'execution_bytes'))) or
         n(usage,'reserved_items') >= a.limits.max_execution_items or
         n(usage,'reserved_bytes')+bytes > a.limits.max_execution_bytes then return reply('capacity') end
     local charged = n(R,'cost')
@@ -551,9 +575,6 @@ if op == 'claim' then
         n(usage,'charged_cost')+charged > 2^53-1 or
         n(route,'charged_cost')+charged > 2^53-1 then
         return redis.error_reply('charge accounting exhausted')
-    end
-    if (h(endpoint,'circuit') or 'closed') ~= 'closed' then
-        redis.call('HSET',endpoint,'circuit','half_open','probe_claim',a.claim_id)
     end
     local charge_sequence = redis.call('HINCRBY',usage,'charge_sequence',1)
     inc('charged_cost',charged)
@@ -568,9 +589,47 @@ if op == 'claim' then
     inc('reserved_items',1); inc('reserved_bytes',bytes)
     redis.call('HINCRBY',route,'reserved_items',1)
     redis.call('HINCRBY',route,'reserved_bytes',bytes)
+    if a.legacy_reserve then
+        if (h(endpoint,'circuit') or 'closed') ~= 'closed' then
+            redis.call('HSET',endpoint,'circuit','half_open','probe_claim',a.claim_id)
+        end
+        redis.call('HSET',R,'replica_id',h(R,'endpoint_id'),'replica_reserved',1,
+            'replica_reservation_bytes',bytes)
+        redis.call('HINCRBY',endpoint,'reserved_items',1)
+        redis.call('HINCRBY',endpoint,'reserved_bytes',bytes)
+    end
+    return reply('claimed')
+elseif op == 'reserve_replica' then
+    if (state ~= 'claimed' and state ~= 'executing') or not claim_matches() or
+        n(R,'charge_sequence') ~= a.charge_sequence then return reply('stale_claim') end
+    if h(R,'replica_id') and n(R,'replica_reserved') == 1 then
+        if h(R,'replica_id') == a.replica_id and n(R,'replica_reserved') == 1 then return reply('existing') end
+        return reply('replica_reserved')
+    end
+    if redis.call('SISMEMBER',endpoints,a.replica_id) ~= 1 then return reply('replica_unavailable') end
+    if not route_open() or not replica_open() then return reply('gated') end
+    local bytes = n(R,'payload_bytes')
+    if n(endpoint,'reserved_items') >= n(endpoint,'execution_limit') or
+        n(endpoint,'reserved_bytes')+bytes > n(endpoint,'execution_bytes') then return reply('capacity') end
+    if (h(endpoint,'circuit') or 'closed') ~= 'closed' then
+        redis.call('HSET',endpoint,'circuit','half_open','probe_claim',a.claim_id)
+    end
+    redis.call('HSET',R,'replica_id',a.replica_id,'replica_reserved',1,
+        'replica_reservation_bytes',bytes)
     redis.call('HINCRBY',endpoint,'reserved_items',1)
     redis.call('HINCRBY',endpoint,'reserved_bytes',bytes)
-    return reply('claimed')
+    return reply('reserved')
+elseif op == 'release_replica' then
+    if (state ~= 'claimed' and state ~= 'executing') or not claim_matches() or
+        n(R,'charge_sequence') ~= a.charge_sequence then return reply('stale_claim') end
+    if h(R,'replica_id') ~= a.replica_id then return reply('stale_replica') end
+    if n(R,'replica_reserved') == 0 then return reply('existing') end
+    if h(endpoint,'probe_claim') == h(R,'claim_id') then redis.call('HDEL',endpoint,'probe_claim') end
+    redis.call('HINCRBY',endpoint,'reserved_items',-1)
+    redis.call('HINCRBY',endpoint,'reserved_bytes',-n(R,'replica_reservation_bytes'))
+    redis.call('HDEL',R,'replica_id')
+    redis.call('HSET',R,'replica_reserved',0,'replica_reservation_bytes',0)
+    return reply('released')
 elseif op == 'recover' then
     if state ~= 'claimed' and state ~= 'executing' and state ~= 'outcome_unknown' then return reply('invalid_state') end
     if h(R,'owner_id') == a.owner and now < n(R,'claim_until') then return reply('not_due') end
@@ -600,8 +659,13 @@ if op == 'return_untransmitted' then
         n(R,'charge_sequence') == a.charge_sequence and h(R,'refund_state') == 'refunded' then
         return reply('existing')
     end
-    if state ~= 'claimed' or h(R,'claim_id') ~= a.claim_id or
+    if (state ~= 'claimed' and state ~= 'executing') or h(R,'claim_id') ~= a.claim_id or
         n(R,'charge_sequence') ~= a.charge_sequence then return reply('stale_claim') end
+    if n(R,'replica_reserved') == 1 then return reply('replica_reserved') end
+    if state == 'executing' then
+        if n(R,'execution_seq') ~= a.execution_sequence+1 then return reply('stale_claim') end
+        redis.call('HINCRBY',R,'execution_seq',-1)
+    end
     if n(usage,'ready_ids') >= a.limits.max_ready_ids then return reply('backpressure') end
     refund(); release()
     redis.call('HSET',R,'state','ready')
@@ -621,7 +685,7 @@ if op == 'payload' or op == 'start' then
     if state ~= 'claimed' or now >= n(R,'claim_until') then return reply('stale_claim') end
     if n(R,'reserved') ~= 1 or n(R,'reservation_bytes') < 1 or
         n(R,'reservation_bytes') ~= n(R,'payload_bytes') then return reply('invalid_state') end
-    if not route_open() then return reply('gated') end
+    if not route_open() or n(R,'replica_reserved') ~= 1 or not replica_open() then return reply('gated') end
     if op == 'payload' then return cjson.encode({disposition='payload',payload=h(R,'payload')}) end
     if n(R,'execution_seq') >= a.limits.max_attempts then return reply('attempts_exhausted') end
     redis.call('HSET',R,'state','executing','uncertainty_until',now+a.limits.remote_uncertainty_ms)

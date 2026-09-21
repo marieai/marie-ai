@@ -43,8 +43,8 @@ async def test_weighted_bursts_charge_real_cost_without_payload_reads(store):
     await runtime._configure()
     sent = []
 
-    async def execute(attempt, claim, endpoint):
-        sent.append(store.metadata(attempt).pool_id)
+    async def execute(claim):
+        sent.append(claim.pool_id)
         await asyncio.Event().wait()
 
     runtime._execute = execute
@@ -240,14 +240,16 @@ async def test_head_changed_and_lost_claim_reply_preserve_credit_and_recovery(st
     await runtime._configure()
     first = admit_request(store)
     second = admit_request(store)
-    original = store.claim
+    from marie.engine.llm_queue.store import ClaimRecord
 
-    def lost(owner, attempt, **kwargs):
-        reply = original(owner, attempt, **kwargs)
-        assert reply.disposition == 'claimed'
+    original = store.claim_and_charge
+
+    def lost(owner, pool_id, **kwargs):
+        reply = original(owner, pool_id, **kwargs)
+        assert isinstance(reply, ClaimRecord)
         raise StoreUnavailable('lost response')
 
-    store.claim = lost
+    store.claim_and_charge = lost
     try:
         with pytest.raises(StoreUnavailable):
             await runtime._dispatch()
@@ -354,20 +356,31 @@ def test_binding_is_immutable_across_owner_and_capacity_edits(store):
 async def test_producer_window_bounds_preparation_and_effective_image_cost(store):
     import threading
 
-    from marie.engine.completion_contract import CompletionCallParams
+    from marie.engine.completion_contract import CompletionCallParams, RequestContext
     from marie.engine.llm_queue.config import LlmQueueConfig
     from marie.engine.llm_queue.producer import PreparedCalls, V3Producer
+    from marie.engine.llm_queue.store import RoutingManifestProjection
     from test_request_dispatcher import eventually
 
     runtime = runtime_for(store, [DispatchLane('pool', 'endpoint')])
     await runtime._configure()
+    route = RoutingManifestProjection(
+        job_id='window-job',
+        work_unit_id='window-unit',
+        fabric_group_id=store.keys.fabric_id,
+        policy_generation=1,
+        route_digest='a' * 64,
+        pool_id='pool',
+        endpoint_group_id='endpoint',
+        endpoint_revision='r1',
+    )
+    assert store.project_routing_manifest(route).disposition == 'projected'
     producer = V3Producer(
         config=LlmQueueConfig(
             enabled=True,
             queue_url=store.test_url,
             queue_contract_version='v3',
             fabric_group_id=store.keys.fabric_id,
-            pool_id='pool',
             max_buffered_requests_per_pool=2,
         )
     )
@@ -377,6 +390,7 @@ async def test_producer_window_bounds_preparation_and_effective_image_cost(store
         prepared.append(index)
         return CompletionCallParams(
             model='m',
+            context=RequestContext(job_id='window-job', work_unit_id='window-unit'),
             messages=[
                 {
                     'role': 'user',
@@ -396,7 +410,15 @@ async def test_producer_window_bounds_preparation_and_effective_image_cost(store
         asyncio.to_thread(
             producer.execute,
             calls=PreparedCalls(
-                100, prepare, CompletionCallParams(model='m', messages=[])
+                100,
+                prepare,
+                CompletionCallParams(
+                    model='m',
+                    messages=[],
+                    context=RequestContext(
+                        job_id='window-job', work_unit_id='window-unit'
+                    ),
+                ),
             ),
             batch_request_id='large',
             batch_timeout=5,
@@ -462,6 +484,52 @@ async def test_refresh_disables_without_reroute_and_preserves_reservations(store
         assert runtime._policy_paused
         assert store.usage() == before
         assert runtime._category == 'policy_refresh_unavailable'
+    finally:
+        runtime._refresh_worker.shutdown(wait=True)
+        await close_runtime(runtime)
+
+
+async def test_refresh_rejects_replica_membership_change_without_revision(store):
+    from marie.engine.llm_queue.endpoint import (
+        RegisteredEndpointGroup,
+        RegisteredReplica,
+    )
+    from test_request_dispatcher import eventually
+
+    runtime = runtime_for(store, [DispatchLane('pool', 'endpoint')])
+    await runtime._configure()
+    current = runtime.endpoint_groups['endpoint'].replicas[0]
+    replacement = RegisteredEndpointGroup(
+        group_id='endpoint',
+        revision='r1',
+        replicas=(
+            current,
+            RegisteredReplica(
+                replica_id='endpoint-b',
+                base_url='https://b.example.com/v1',
+            ),
+        ),
+    )
+    runtime.policy_loader = lambda: {
+        'limits': store.limits,
+        'endpoints': [],
+        'endpoint_groups': [replacement],
+        'lanes': list(runtime.lanes),
+        'policy': 'drr',
+        'total_concurrent_dispatch': 16,
+    }
+    try:
+        await runtime._refresh_policy()
+        await eventually(
+            lambda: runtime._refresh_future is None or runtime._refresh_future.done()
+        )
+        await runtime._refresh_policy()
+
+        assert runtime._policy_paused
+        assert tuple(
+            replica.replica_id
+            for replica in runtime.endpoint_groups['endpoint'].replicas
+        ) == ('endpoint',)
     finally:
         runtime._refresh_worker.shutdown(wait=True)
         await close_runtime(runtime)
@@ -656,8 +724,8 @@ async def test_head_mismatch_read_failure_and_selected_sibling_survive(store):
         store.ready_head = original_head
         seen = []
 
-        async def hold(*args):
-            seen.append(args[0])
+        async def hold(claim):
+            seen.append(claim.attempt_id)
             await asyncio.Event().wait()
 
         runtime._execute = hold
@@ -932,25 +1000,37 @@ async def test_prepared_cost_matches_effective_transport_images(
 async def test_producer_effective_cost_is_immutable_through_safe_retry(store):
     import threading
 
-    from marie.engine.completion_contract import CompletionCallParams
+    from marie.engine.completion_contract import CompletionCallParams, RequestContext
     from marie.engine.llm_queue.config import LlmQueueConfig
     from marie.engine.llm_queue.producer import V3Producer
+    from marie.engine.llm_queue.store import RoutingManifestProjection
     from test_request_dispatcher import eventually
 
     runtime = runtime_for(store, [DispatchLane('pool', 'endpoint')])
     await runtime._configure()
+    route = RoutingManifestProjection(
+        job_id='cost-job',
+        work_unit_id='cost-unit',
+        fabric_group_id=store.keys.fabric_id,
+        policy_generation=1,
+        route_digest='a' * 64,
+        pool_id='pool',
+        endpoint_group_id='endpoint',
+        endpoint_revision='r1',
+    )
+    assert store.project_routing_manifest(route).disposition == 'projected'
     producer = V3Producer(
         config=LlmQueueConfig(
             enabled=True,
             queue_url=store.test_url,
             queue_contract_version='v3',
             fabric_group_id=store.keys.fabric_id,
-            pool_id='pool',
         )
     )
     call = CompletionCallParams(
         model='m',
         messages=[],
+        context=RequestContext(job_id='cost-job', work_unit_id='cost-unit'),
         extra_create_kwargs={
             'extra_body': {
                 'messages': [

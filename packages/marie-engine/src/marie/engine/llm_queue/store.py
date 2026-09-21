@@ -97,6 +97,7 @@ class StoreReply:
     owner_generation: int = 0
     pool_id: str = ""
     endpoint_group_id: str = ""
+    replica_id: str = ""
     charged_cost: int = 0
     refunded_cost: int = 0
     charge_sequence: int = 0
@@ -232,6 +233,8 @@ class RequestMetadata:
     charged_owner_generation: int = 0
     refund_state: str | None = None
     refunded_on: int = 0
+    replica_id: str | None = None
+    replica_reserved: int = 0
 
 
 class RequestStore:
@@ -342,6 +345,7 @@ class RequestStore:
         **args: Any,
     ) -> dict[str, Any]:
         endpoint_id = args.get("endpoint_id")
+        selected_replica_id = None
         if attempt_id is not None and op not in {"admit", "admit_manifest"}:
             identity = self._read(
                 "hmget",
@@ -349,13 +353,18 @@ class RequestStore:
                 "producer_id",
                 "pool_id",
                 "endpoint_id",
+                "replica_id",
             )
             if identity[0]:
                 if producer_id is not None and producer_id != identity[0]:
                     raise AdmissionConflict("Request belongs to another producer")
                 if pool_id is not None and pool_id != identity[1]:
                     raise AdmissionConflict("Request belongs to another pool")
-                producer_id, pool_id, endpoint_id = identity
+                producer_id, pool_id, endpoint_id = identity[:3]
+                selected_replica_id = identity[3]
+        if op == "circuit_feedback" and args.get("replica_id") is None:
+            args["replica_id"] = selected_replica_id
+        endpoint_key_id = args.get("replica_id") or selected_replica_id or endpoint_id
         keys = [
             (
                 self.keys.request(attempt_id)
@@ -393,8 +402,8 @@ class RequestStore:
             self.keys.prefix + "limits",
             self.keys.prefix + "routes",
             (
-                self.keys.endpoint(endpoint_id)
-                if endpoint_id is not None
+                self.keys.endpoint(endpoint_key_id)
+                if endpoint_key_id is not None
                 else self.keys.prefix + "control:endpoint"
             ),
             self.keys.prefix + "endpoints",
@@ -501,6 +510,7 @@ class RequestStore:
     def endpoint_status(self, endpoint_id: str) -> dict[str, Any]:
         """Read bounded circuit metadata without credentials or addresses."""
         names = [
+            "gate",
             "circuit",
             "failures",
             "next_probe",
@@ -648,6 +658,7 @@ class RequestStore:
         *,
         claim_id: str,
         execution_seq: int,
+        replica_id: str | None = None,
         outcome: str,
         category: str = "none",
         open_ms: int = 30_000,
@@ -659,6 +670,7 @@ class RequestStore:
             attempt_id=attempt_id,
             claim_id=claim_id,
             execution_seq=execution_seq,
+            replica_id=replica_id,
             outcome=outcome,
             reason=category,
             open_ms=open_ms,
@@ -706,6 +718,7 @@ class RequestStore:
         execution_bytes: int,
         enabled: bool = True,
         gate_open: bool = True,
+        legacy_endpoint: bool = True,
     ) -> StoreReply:
         """Set the lane's registered endpoint and minimal execution gate."""
         validate_identifier(pool_id)
@@ -730,6 +743,7 @@ class RequestStore:
             execution_bytes=execution_bytes,
             enabled="1" if enabled else "0",
             gate="open" if gate_open else "closed",
+            legacy_endpoint=legacy_endpoint,
         )
 
     def configure_endpoint(
@@ -964,6 +978,7 @@ class RequestStore:
             "charge_sequence",
             "charged_owner_generation",
             "refunded_on",
+            "replica_reserved",
         ):
             data[name] = int(data[name] or 0)
         if data["admitted_at_ms"] is not None:
@@ -1002,6 +1017,7 @@ class RequestStore:
             pool_id=pool_id,
             claim_id=claim_id,
             expected_cost=expected_cost,
+            legacy_reserve=True,
         )
 
     def claim_and_charge(
@@ -1087,6 +1103,35 @@ class RequestStore:
             attempt_id=claim.attempt_id,
             claim_id=claim.claim_id,
             charge_sequence=claim.charge_sequence,
+            execution_sequence=claim.execution_sequence,
+        )
+
+    def reserve_replica(
+        self, owner: OwnerToken, claim: ClaimRecord, replica_id: str
+    ) -> StoreReply:
+        """Atomically reserve one physical replica for a durable logical claim."""
+        validate_identifier(replica_id)
+        return self._change(
+            "reserve_replica",
+            owner=owner,
+            attempt_id=claim.attempt_id,
+            claim_id=claim.claim_id,
+            charge_sequence=claim.charge_sequence,
+            replica_id=replica_id,
+        )
+
+    def release_replica_for_failover(
+        self, owner: OwnerToken, claim: ClaimRecord, replica_id: str
+    ) -> StoreReply:
+        """Release one definitely-unsent physical reservation within its group."""
+        validate_identifier(replica_id)
+        return self._change(
+            "release_replica",
+            owner=owner,
+            attempt_id=claim.attempt_id,
+            claim_id=claim.claim_id,
+            charge_sequence=claim.charge_sequence,
+            replica_id=replica_id,
         )
 
     def reconcile_charges(

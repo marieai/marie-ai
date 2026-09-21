@@ -290,6 +290,11 @@ async def test_execution_failure_counter_and_last_category_survive_success_and_i
             item = replace(item, call=replace(item.call, model=model))
             store.admit(item)
             claim = 'claim' + str(index)
+            runtime.scheduler.sync_reservations({'pool': 0}, 0, {'pool'})
+            assert (
+                runtime.scheduler.select_metadata({'pool': item.estimated_cost_units})
+                == 'pool'
+            )
             record = store.claim_and_charge(
                 store.test_owner,
                 'pool',

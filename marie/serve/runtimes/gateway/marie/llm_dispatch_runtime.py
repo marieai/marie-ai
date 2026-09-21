@@ -194,7 +194,11 @@ class GatewayLlmDispatchRuntime:
             ) from None
 
     async def _start_v3(self) -> None:
-        from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+        from marie.engine.llm_queue.endpoint import (
+            RegisteredEndpoint,
+            RegisteredEndpointGroup,
+            RegisteredReplica,
+        )
         from marie.engine.llm_queue.request_dispatcher import (
             DispatchLane,
             RequestDispatcher,
@@ -247,8 +251,26 @@ class GatewayLlmDispatchRuntime:
                 if credential_env and not credential:
                     raise ValueError('Registered endpoint credential is unavailable')
                 endpoints.append(RegisteredEndpoint(**values, api_key=credential))
+            endpoint_groups = []
+            for record in policy.get('endpoint_groups', []):
+                replicas = []
+                for raw_replica in record['replicas']:
+                    values = dict(raw_replica)
+                    credential_env = values.get('credential_env')
+                    credential = os.getenv(credential_env) if credential_env else None
+                    if credential_env and not credential:
+                        raise ValueError('Registered replica credential is unavailable')
+                    replicas.append(RegisteredReplica(**values, api_key=credential))
+                endpoint_groups.append(
+                    RegisteredEndpointGroup(
+                        group_id=record['group_id'],
+                        revision=record['revision'],
+                        replicas=tuple(replicas),
+                    )
+                )
             return dict(
                 endpoints=endpoints,
+                endpoint_groups=endpoint_groups,
                 lanes=[DispatchLane(**values) for values in policy['lanes']],
                 limits=StoreLimits(**policy['limits']),
                 policy=policy['policy'],
@@ -274,7 +296,8 @@ class GatewayLlmDispatchRuntime:
             )
             dispatcher = RequestDispatcher(
                 store=store,
-                endpoints=endpoints,
+                endpoints=endpoints or None,
+                endpoint_groups=resolved['endpoint_groups'] or None,
                 lanes=lanes,
                 policy=resolved['policy'],
                 total_concurrent_dispatch=resolved['total_concurrent_dispatch'],

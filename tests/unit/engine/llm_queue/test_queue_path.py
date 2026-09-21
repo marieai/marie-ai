@@ -30,6 +30,10 @@ from marie.engine.llm_queue.config import (
     route_behavior,
 )
 from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
+from marie.engine.llm_queue.endpoint import (
+    RegisteredEndpointGroup,
+    RegisteredReplica,
+)
 from marie.engine.llm_queue.producer import V3Producer
 from marie.engine.llm_queue.queue_io import (
     InMemoryListQueueClient,
@@ -79,6 +83,113 @@ class _Logger:
 
     def debug(self, *args, **kwargs):
         pass
+
+
+def test_endpoint_group_requires_compatible_unique_replicas() -> None:
+    first = RegisteredReplica(
+        replica_id="replica-a",
+        base_url="https://a.example/v1",
+        credential_env="REPLICA_A_TOKEN",
+        capability_digest="a" * 64,
+    )
+    second = RegisteredReplica(
+        replica_id="replica-b",
+        base_url="https://b.example/v1",
+        capability_digest="a" * 64,
+    )
+
+    group = RegisteredEndpointGroup(
+        group_id="document-llm", revision="r1", replicas=(first, second)
+    )
+
+    assert tuple(replica.replica_id for replica in group.replicas) == (
+        "replica-a",
+        "replica-b",
+    )
+    assert "REPLICA_A_TOKEN" not in repr(group)
+    with pytest.raises(ValueError, match="capability"):
+        RegisteredEndpointGroup(
+            group_id="document-llm",
+            revision="r1",
+            replicas=(
+                first,
+                replace(second, capability_digest="b" * 64),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_replica_selection_skips_unavailable_and_saturated_targets() -> None:
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    replicas = (
+        RegisteredReplica(
+            replica_id="replica-a",
+            base_url="https://a.example/v1",
+            capability_digest="a" * 64,
+            execution_limit=2,
+        ),
+        RegisteredReplica(
+            replica_id="replica-b",
+            base_url="https://b.example/v1",
+            capability_digest="a" * 64,
+            execution_limit=2,
+        ),
+    )
+    group = RegisteredEndpointGroup("document-llm", "r1", replicas)
+    statuses = {
+        "replica-a": {
+            "gate": "open",
+            "circuit": "open",
+            "next_probe": 0,
+            "probe_claim": None,
+            "reserved_items": 0,
+            "reserved_bytes": 0,
+        },
+        "replica-b": {
+            "gate": "open",
+            "circuit": "closed",
+            "next_probe": 0,
+            "probe_claim": None,
+            "reserved_items": 1,
+            "reserved_bytes": 10,
+        },
+    }
+    store = mock.Mock()
+    store.limits = StoreLimits()
+    store.metadata.return_value = mock.Mock(payload_bytes=1)
+    store.server_time_ms.return_value = 1
+    store.endpoint_status.side_effect = statuses.__getitem__
+    dispatcher = RequestDispatcher(
+        store=store,
+        endpoint_groups=[group],
+        lanes=[DispatchLane("document-small", endpoint_group_id="document-llm")],
+    )
+    claim = ClaimRecord(
+        attempt_id="attempt-1",
+        claim_id="claim-1",
+        execution_sequence=0,
+        owner_generation=1,
+        pool_id="document-small",
+        endpoint_group_id="document-llm",
+        charged_cost=1,
+        charge_sequence=1,
+        refund_state="not_refunded",
+    )
+    try:
+        selected = await dispatcher.select_replica(claim)
+        assert selected.replica_id == "replica-b"
+        assert claim.endpoint_group_id == "document-llm"
+        statuses["replica-a"]["circuit"] = "closed"
+        selected = await dispatcher.select_replica(claim)
+        assert selected.replica_id == "replica-a"
+    finally:
+        dispatcher._store_workers.shutdown()
+        dispatcher._lease_worker.shutdown()
+        dispatcher._refresh_worker.shutdown()
 
 
 def test_routing_manifest_projection_is_idempotent_and_conflict_safe() -> None:
@@ -384,6 +495,7 @@ def test_return_untransmitted_and_refund_is_bound_to_claim_record() -> None:
         "attempt_id": "attempt-1",
         "claim_id": "claim-1",
         "charge_sequence": 11,
+        "execution_sequence": 0,
     }
 
 
