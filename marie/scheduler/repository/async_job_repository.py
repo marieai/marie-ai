@@ -2930,6 +2930,138 @@ class AsyncJobRepository:
             )
         return bool(value)
 
+    async def claim_pending_routing_outbox(
+        self, *, limit: int = 100, lease_seconds: int = 30
+    ) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 1000 or not 1 <= lease_seconds <= 300:
+            raise ValueError('Invalid routing outbox claim bounds')
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    f"""
+                    WITH candidates AS (
+                        SELECT event_id
+                        FROM {DEFAULT_SCHEMA}.llm_routing_outbox
+                        WHERE published_on IS NULL AND available_on <= NOW()
+                        ORDER BY available_on, event_id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    )
+                    UPDATE {DEFAULT_SCHEMA}.llm_routing_outbox outbox
+                    SET attempt_count = outbox.attempt_count + 1,
+                        available_on = NOW() + make_interval(secs => %s),
+                        last_error_category = NULL
+                    FROM candidates
+                    WHERE outbox.event_id = candidates.event_id
+                    RETURNING outbox.event_id, outbox.work_unit_id,
+                              outbox.route_digest, outbox.payload,
+                              outbox.attempt_count
+                    """,
+                    limit,
+                    lease_seconds,
+                )
+        names = (
+            'event_id',
+            'work_unit_id',
+            'route_digest',
+            'payload',
+            'attempt_count',
+        )
+        return [dict(zip(names, row, strict=True)) for row in rows]
+
+    async def acknowledge_routing_projection(
+        self, *, event_id: str, route_digest: str
+    ) -> bool:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.llm_routing_outbox outbox
+                    SET published_on = NOW(), last_error_category = NULL
+                    FROM {DEFAULT_SCHEMA}.llm_job_route route
+                    WHERE outbox.event_id = %s::uuid
+                      AND outbox.route_digest = %s
+                      AND outbox.published_on IS NULL
+                      AND route.work_unit_id = outbox.work_unit_id
+                    RETURNING route.work_unit_id, route.job_id
+                    """,
+                    event_id,
+                    route_digest,
+                )
+                if row is None:
+                    return False
+                work_unit_id, job_id = str(row[0]), str(row[1])
+                locked_dag = await conn.fetchval(
+                    f"""
+                    SELECT id
+                    FROM {DEFAULT_SCHEMA}.dag
+                    WHERE id = %s::uuid
+                    FOR UPDATE
+                    """,
+                    job_id,
+                )
+                if locked_dag is None:
+                    raise RuntimeError('routing_projection_dag_missing')
+                await conn.execute(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.llm_job_route
+                    SET projection_state = 'projected', projected_on = NOW()
+                    WHERE work_unit_id = %s::uuid
+                    """,
+                    work_unit_id,
+                )
+                pending = await conn.fetchval(
+                    f"""
+                    SELECT EXISTS (
+                        SELECT 1 FROM {DEFAULT_SCHEMA}.llm_job_route
+                        WHERE job_id = %s::uuid AND projection_state <> 'projected'
+                    )
+                    """,
+                    job_id,
+                )
+                if not pending:
+                    await conn.execute(
+                        f"""
+                        UPDATE {DEFAULT_SCHEMA}.job job
+                        SET llm_routing_ready = true
+                        FROM {DEFAULT_SCHEMA}.llm_job_route route
+                        WHERE route.job_id = %s::uuid
+                          AND job.id = route.work_unit_id
+                        """,
+                        job_id,
+                    )
+        return True
+
+    async def record_routing_projection_failure(
+        self,
+        *,
+        event_id: str,
+        route_digest: str,
+        category: str,
+        retry_seconds: int = 5,
+    ) -> bool:
+        if not re.fullmatch(r'[a-z0-9_]{1,128}', category):
+            raise ValueError('Invalid routing projection failure category')
+        if not 1 <= retry_seconds <= 300:
+            raise ValueError('Invalid routing projection retry interval')
+        async with self._pool.acquire() as conn:
+            value = await conn.fetchval(
+                f"""
+                UPDATE {DEFAULT_SCHEMA}.llm_routing_outbox
+                SET available_on = NOW() + make_interval(secs => %s),
+                    last_error_category = %s
+                WHERE event_id = %s::uuid
+                  AND route_digest = %s
+                  AND published_on IS NULL
+                RETURNING true
+                """,
+                retry_seconds,
+                category,
+                event_id,
+                route_digest,
+            )
+        return bool(value)
+
     @staticmethod
     def _routing_records(
         dag_id: str,

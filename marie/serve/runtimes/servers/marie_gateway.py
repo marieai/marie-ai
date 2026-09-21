@@ -2048,6 +2048,13 @@ class MarieServerGateway(CompositeServer):
 
     async def _start_gateway_background_runtimes(self) -> None:
         await self.llm_dispatch_runtime.start()
+        if (
+            self.llm_dispatch_runtime.config.queue_contract_version == 'v3'
+            and self.llm_dispatch_runtime._queue_client is not None
+        ):
+            self.job_scheduler.start_llm_routing_projection(
+                self.llm_dispatch_runtime._queue_client
+            )
 
     async def _stop_control_plane_tasks(self) -> None:
         tasks = {task for task in self._control_plane_tasks if not task.done()}

@@ -2,6 +2,7 @@ import asyncio
 import threading
 import time
 from copy import deepcopy
+from dataclasses import replace
 from unittest import mock
 
 import pytest
@@ -45,6 +46,11 @@ from marie.engine.llm_queue.registry import (
     unregister_dispatcher,
 )
 from marie.engine.llm_queue.result_types import BatchResult
+from marie.engine.llm_queue.store import (
+    AdmissionConflict,
+    RequestStore,
+    RoutingManifestProjection,
+)
 from marie.engine.llm_queue.submitter import (
     QueuedBatchExecutor,
     _reply_to_batch_result,
@@ -64,6 +70,70 @@ class _Logger:
 
     def debug(self, *args, **kwargs):
         pass
+
+
+def test_routing_manifest_projection_is_idempotent_and_conflict_safe() -> None:
+    records = {}
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys('default')
+    store._client_error = RuntimeError
+
+    def script(*, keys, args):
+        import json
+
+        payload = json.loads(args[0])
+        prior = records.get(keys[0])
+        if prior is not None:
+            disposition = (
+                'existing'
+                if prior['route_digest'] == payload['route_digest']
+                else 'conflict'
+            )
+            return json.dumps({'disposition': disposition})
+        records[keys[0]] = payload
+        return json.dumps({'disposition': 'projected'})
+
+    store._script = script
+    projection = RoutingManifestProjection(
+        job_id='job-1',
+        work_unit_id='node-1',
+        fabric_group_id='default',
+        policy_generation=1,
+        route_digest='a' * 64,
+        pool_id='document-small',
+        endpoint_group_id='primary',
+        endpoint_revision='r1',
+    )
+
+    assert store.project_routing_manifest(projection).disposition == 'projected'
+    assert store.project_routing_manifest(projection).disposition == 'existing'
+    with pytest.raises(AdmissionConflict, match='routing_binding_conflict'):
+        store.project_routing_manifest(replace(projection, route_digest='b' * 64))
+
+
+def test_routing_manifest_keys_share_the_fabric_slot() -> None:
+    keys = QueueKeys('Default')
+
+    assert keys.routing_manifest('job-1', 'node-1').startswith(keys.prefix)
+    assert keys.routing_manifests.startswith(keys.prefix)
+
+
+def test_routing_manifest_rejects_unsafe_policy_generation() -> None:
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys('default')
+    projection = RoutingManifestProjection(
+        job_id='job-1',
+        work_unit_id='node-1',
+        fabric_group_id='default',
+        policy_generation=2**53,
+        route_digest='a' * 64,
+        pool_id='document-small',
+        endpoint_group_id='primary',
+        endpoint_revision='r1',
+    )
+
+    with pytest.raises(ValueError, match='policy generation'):
+        store.project_routing_manifest(projection)
 
 
 def _queue_config(**overrides) -> LlmQueueConfig:

@@ -1,6 +1,34 @@
 -- Every accessed key is supplied by the caller in the fabric slot.
 local a = cjson.decode(ARGV[1])
 local op = a.op
+if op == 'manifest_project' then
+    if #KEYS ~= 2 then return redis.error_reply('invalid manifest keys') end
+    if redis.call('TYPE',KEYS[1]).ok ~= 'none' and redis.call('TYPE',KEYS[1]).ok ~= 'hash' then return redis.error_reply('invalid manifest key type') end
+    if redis.call('TYPE',KEYS[2]).ok ~= 'none' and redis.call('TYPE',KEYS[2]).ok ~= 'set' then return redis.error_reply('invalid manifest index type') end
+    local function manifest_identifier(value)
+        return type(value) == 'string' and #value >= 1 and #value <= 128 and string.match(value,'^[%w_-]+$')
+    end
+    if not manifest_identifier(a.fabric_id) or not manifest_identifier(a.job_id) or
+       not manifest_identifier(a.work_unit_id) or not manifest_identifier(a.pool_id) or
+       not manifest_identifier(a.endpoint_group_id) or not manifest_identifier(a.endpoint_revision) or
+       type(a.policy_generation) ~= 'number' or a.policy_generation ~= math.floor(a.policy_generation) or
+       a.policy_generation < 1 or a.policy_generation > 9007199254740991 or
+       type(a.route_digest) ~= 'string' or #a.route_digest ~= 64 or string.find(a.route_digest,'[^0-9a-f]') then
+        return redis.error_reply('invalid routing manifest')
+    end
+    local prior = redis.call('HGET',KEYS[1],'route_digest')
+    if prior then
+        if prior ~= a.route_digest then return cjson.encode({disposition='conflict'}) end
+        return cjson.encode({disposition='existing'})
+    end
+    redis.call('HSET',KEYS[1],
+        'job_id',a.job_id,'work_unit_id',a.work_unit_id,'fabric_group_id',a.fabric_id,
+        'policy_generation',a.policy_generation,'route_digest',a.route_digest,
+        'pool_id',a.pool_id,'endpoint_group_id',a.endpoint_group_id,
+        'endpoint_revision',a.endpoint_revision)
+    redis.call('SADD',KEYS[2],a.job_id..':'..a.work_unit_id)
+    return cjson.encode({disposition='projected'})
+end
 if cleanup_only and op ~= 'producer_close' and op ~= 'producer_expire' and
     op ~= 'discard' and op ~= 'purge' and op ~= 'settle' and op ~= 'prune' then
     return redis.error_reply('cleanup operation required')

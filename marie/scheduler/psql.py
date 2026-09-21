@@ -48,6 +48,7 @@ from marie.scheduler.services import (
     ControlFlowExecutionService,
     DAGManagementService,
     DagSubmissionService,
+    LlmRoutingProjectionService,
     MaintenanceService,
     NotificationService,
     SchedulerDiagnostics,
@@ -351,6 +352,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         self.cycle_log_interval_seconds = 10.0
         self.submission_service = self._build_submission_service()
+        self.llm_routing_projection_service: LlmRoutingProjectionService | None = None
         self.diagnostics = self._build_diagnostics()
 
     def _build_submission_service(
@@ -387,6 +389,23 @@ class PostgreSQLJobScheduler(JobScheduler):
             sla_warning_top_n=self.sla_warning_top_n,
             frontier_batch_size=self.frontier_batch_size,
             lease_ttl_seconds=self.lease_ttl_seconds,
+        )
+
+    def start_llm_routing_projection(self, store: Any) -> None:
+        """Attach the initialized fabric store to the scheduler-owned outbox loop."""
+        if not self.running:
+            raise RuntimeError('Job scheduler must be running before route projection')
+        if self.runtime.tasks(prefix='scheduler-llm-routing-projection'):
+            return
+        service = LlmRoutingProjectionService(
+            repository=self.repository,
+            store=store,
+            logger=self.logger,
+        )
+        self.llm_routing_projection_service = service
+        self.runtime.create_task(
+            service.run_forever(),
+            name='scheduler-llm-routing-projection',
         )
 
     def _build_control_flow_service(self) -> ControlFlowExecutionService:
@@ -1908,6 +1927,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         self.submission_service = self._build_submission_service(
             initial_submission_count=submission_count
         )
+        self.llm_routing_projection_service = None
         self.diagnostics = self._build_diagnostics()
         self._resources_closed = False
 
