@@ -52,6 +52,26 @@ def test_shadow_comparison_metric_contains_only_bounded_route_labels() -> None:
     ]
 
 
+def test_admission_metrics_snapshot_uses_stable_categories_only() -> None:
+    metrics = AdmissionRoutingMetrics()
+    metrics.record_match(fabric_group_id='default', category='automatic')
+    metrics.record_rejection(
+        fabric_group_id='default', category='routing_facts_missing'
+    )
+    metrics.record_shadow_comparison(
+        fabric_group_id='default',
+        automatic_pool_id='document-small',
+        legacy_pool_id='default',
+    )
+
+    assert metrics.snapshot('default') == {
+        'available': True,
+        'matched': {'automatic': 1},
+        'rejected': {'routing_facts_missing': 1},
+        'shadow': {'match_count': 0, 'disagreement_count': 1},
+    }
+
+
 def _document(*, page_count: int | None = 20, storage_key: str = 's3://docs/a.tif'):
     return SubmissionDocument(
         id='document-1',

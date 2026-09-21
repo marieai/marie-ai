@@ -108,6 +108,58 @@ def build_repository(connection: FakeConnection) -> JobRepository:
     return JobRepository({}, pool=FakePool(connection))
 
 
+@pytest.mark.asyncio
+async def test_llm_routing_diagnostics_are_bounded_and_report_drain_references():
+    connection = FakeConnection(
+        fetchrow=[('enforce', 4, 'a' * 64), (2, 9, 1)],
+        fetch=[
+            [
+                ('document-small', 7, 4, 1, 2, 2),
+                ('document-large', 3, 1, 1, 2, 2),
+            ]
+        ],
+    )
+    repository = build_repository(connection)
+
+    result = await repository.read_llm_routing_diagnostics('default', limit=1)
+
+    assert result['policy'] == {
+        'admission_mode': 'enforce',
+        'desired_generation': 4,
+        'desired_digest': 'a' * 64,
+    }
+    assert result['routing']['projection_pending_count'] == 2
+    assert result['routing']['matched'] == {
+        'automatic': 9,
+        'operator_override': 1,
+    }
+    assert result['pools'] == [
+        {
+            'pool_id': 'document-small',
+            'accepted': 7,
+            'completed': 4,
+            'projection_pending': 1,
+            'drain_references': 2,
+        }
+    ]
+    assert result['pool_count'] == 2
+    assert result['pools_truncated'] is True
+
+
+@pytest.mark.asyncio
+async def test_llm_routing_reference_failure_is_not_reported_as_zero():
+    repository = build_repository(FakeConnection(error=RuntimeError('database down')))
+
+    with pytest.raises(RuntimeError, match='database down'):
+        await repository.routing_resource_references(
+            fabric_group_id='default',
+            resource_type='pool',
+            resource_id='document-small',
+            revision=None,
+            limit=25,
+        )
+
+
 def build_dag_job(dag_id: str, index: int) -> WorkInfo:
     now = datetime.now(timezone.utc)
     return WorkInfo(

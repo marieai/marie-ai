@@ -177,6 +177,225 @@ async def test_routing_policy_routes_require_admin_scope(monkeypatch):
         assert calls == [('preview', 'a'), ('activate', 'a', 'routing-admin')]
 
 
+@pytest.mark.asyncio
+async def test_runtime_joins_exact_fabric_database_diagnostics(monkeypatch):
+    from marie.serve.runtimes.gateway.marie import operator_routes
+
+    add_runtime_routes = operator_routes.add_runtime_routes
+    monkeypatch.setattr(
+        operator_routes.admission_routing_metrics,
+        'snapshot',
+        lambda _fabric: {'available': False},
+    )
+
+    class Repository:
+        def load_routing_diagnostics(self, fabric_group_id, limit):
+            assert (fabric_group_id, limit) == ('a', 25)
+            return {
+                'policy': {
+                    'admission_mode': 'shadow',
+                    'desired_generation': 5,
+                    'desired_digest': 'b' * 64,
+                },
+                'routing': {
+                    'projection_pending_count': 2,
+                    'shadow': {'match_count': 8, 'disagreement_count': 1},
+                    'matched': {'automatic': 9},
+                    'rejected': {'routing_facts_missing': 2},
+                },
+                'pools': [
+                    {
+                        'pool_id': 'document-small',
+                        'accepted': 11,
+                        'completed': 6,
+                        'drain_references': 5,
+                    }
+                ],
+                'pool_count': 1,
+                'pools_truncated': False,
+            }
+
+    async def snapshot(**kwargs):
+        assert kwargs == {'fabric_group_id': 'a', 'limit': 25}
+        return {
+            'fabric_group_id': 'a',
+            'policy': {
+                'observed_generation': 4,
+                'observed_digest': 'a' * 64,
+            },
+            'pools': [
+                {
+                    'pool_id': 'document-small',
+                    'state_counts': {
+                        'ready': 3,
+                        'claimed': 1,
+                        'running': 1,
+                        'unknown': 0,
+                    },
+                    'drain_references': 5,
+                }
+            ],
+        }
+
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a', lambda: Repository())
+    monkeypatch.setattr(registry, 'read_runtime_snapshot', snapshot)
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    token = 'mas_' + 'o' * 54
+    APIKeyManager.add_key(
+        {
+            'name': 'observer',
+            'api_key': token,
+            'scopes': ['runtime-observability'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.get(
+            '/api/llm-dispatch/runtime?fabric_group_id=a&limit=25',
+            headers={'Authorization': f'Bearer {token}'},
+        )
+
+    assert response.status_code == 200
+    result = response.json()['result']
+    assert result['policy']['desired_generation'] == 5
+    assert result['policy']['observed_generation'] == 4
+    assert result['policy']['synchronized'] is False
+    assert result['routing']['projection_pending_count'] == 2
+    assert result['routing']['shadow']['disagreement_count'] == 1
+    assert result['pools'][0]['accepted'] == 11
+    assert result['pools'][0]['state_counts']['running'] == 1
+    assert result['pools'][0]['drain_references'] == {
+        'postgres': 5,
+        'valkey': 5,
+        'total': 10,
+    }
+
+
+@pytest.mark.asyncio
+async def test_routing_resource_preflight_fails_closed_and_reports_references(
+    monkeypatch,
+):
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    class Repository:
+        def routing_resource_references(self, **kwargs):
+            assert kwargs == {
+                'fabric_group_id': 'a',
+                'resource_type': 'pool',
+                'resource_id': 'document-small',
+                'revision': None,
+                'limit': 25,
+            }
+            return {'postgres': 3, 'samples': ['work-1'], 'truncated': True}
+
+    monkeypatch.setattr(
+        registry,
+        'routing_resource_references',
+        lambda **kwargs: {'valkey': 2, 'ready': 1, 'active': 1},
+    )
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a', lambda: Repository())
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    observer = 'mas_' + 'o' * 54
+    admin = 'mas_' + 'a' * 54
+    APIKeyManager.add_key(
+        {
+            'name': 'observer',
+            'api_key': observer,
+            'scopes': ['runtime-observability'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    APIKeyManager.add_key(
+        {
+            'name': 'admin',
+            'api_key': admin,
+            'scopes': ['runtime-routing-admin'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.post(
+            '/api/llm-dispatch/resources/check?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {observer}'},
+            json={'resource_type': 'pool', 'resource_id': 'document-small'},
+        )
+        assert response.status_code == 403
+        response = await client.post(
+            '/api/llm-dispatch/resources/check?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {admin}'},
+            json={'resource_type': 'pool', 'resource_id': 'document-small'},
+        )
+
+    assert response.status_code == 409
+    assert response.json()['detail'] == {
+        'category': 'routing_resource_in_use',
+        'references': {
+            'postgres': 3,
+            'samples': ['work-1'],
+            'truncated': True,
+            'valkey': 2,
+            'ready': 1,
+            'active': 1,
+            'total': 5,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_routing_resource_preflight_never_treats_truncation_as_zero(monkeypatch):
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    repository = SimpleNamespace(
+        routing_resource_references=lambda **_kwargs: {
+            'postgres': 0,
+            'samples': [],
+            'truncated': False,
+        }
+    )
+    monkeypatch.setattr(
+        registry,
+        'routing_resource_references',
+        lambda **_kwargs: {
+            'valkey': 0,
+            'ready': 0,
+            'active': 0,
+            'truncated': True,
+        },
+    )
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a', lambda: repository)
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    token = 'mas_' + 'a' * 54
+    APIKeyManager.add_key(
+        {
+            'name': 'admin',
+            'api_key': token,
+            'scopes': ['runtime-routing-admin'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.post(
+            '/api/llm-dispatch/resources/check?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {token}'},
+            json={'resource_type': 'policy_generation', 'resource_id': '4'},
+        )
+
+    assert response.status_code == 503
+    assert response.json()['detail'] == 'routing_reference_state_incomplete'
+
+
 def test_runtime_fingerprint_ignores_age_but_retains_state():
     from marie.serve.runtimes.servers.marie_gateway import (
         _llm_dispatch_runtime_event_fingerprint as fingerprint,

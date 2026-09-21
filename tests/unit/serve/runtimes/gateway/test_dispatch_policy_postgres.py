@@ -46,7 +46,17 @@ class _PolicyDatabase:
                 compact = ' '.join(query.split())
                 if compact.startswith('SET LOCAL'):
                     return
-                if 'SELECT policy, total_concurrent_dispatch, enabled' in compact:
+                if 'SELECT config.active_policy_generation' in compact:
+                    if database.active_generation is None:
+                        self.result = (None, None, None)
+                    else:
+                        found = next(
+                            row
+                            for row in database.generations
+                            if row[0] == database.active_generation
+                        )
+                        self.result = (found[0], found[1], found[2])
+                elif 'SELECT policy, total_concurrent_dispatch, enabled' in compact:
                     self.result = (
                         database.data['policy'],
                         database.data['total_concurrent_dispatch'],
@@ -80,8 +90,12 @@ class _PolicyDatabase:
                         (found[0], found[3], found[4]) if found is not None else None
                     )
                 elif 'SELECT COALESCE(MAX(generation), 0)' in compact:
-                    self.result = (max((row[0] for row in database.generations), default=0),)
-                elif 'INSERT INTO marie_scheduler.llm_queue_policy_generation' in compact:
+                    self.result = (
+                        max((row[0] for row in database.generations), default=0),
+                    )
+                elif (
+                    'INSERT INTO marie_scheduler.llm_queue_policy_generation' in compact
+                ):
                     created_on = datetime(2026, 9, 21, tzinfo=timezone.utc)
                     generation, digest, snapshot, actor = params[1:]
                     database.generations.append(
@@ -158,6 +172,19 @@ def test_reactivating_same_policy_reuses_generation() -> None:
     assert second.generation == first.generation
     assert second.policy_digest == first.policy_digest
     assert len(database.generations) == 1
+
+
+def test_runtime_uses_immutable_activated_dispatch_snapshot() -> None:
+    database = _PolicyDatabase()
+    repository = _memory_repository(database)
+    activated = repository.activate_admission_policy('default', 'operator-1')
+    database.data['lanes'][0]['quantum'] = 99
+
+    runtime_policy = repository.load_runtime_dispatch_policy('default')
+
+    assert runtime_policy['policy_generation'] == activated.generation
+    assert runtime_policy['policy_digest'] == activated.policy_digest
+    assert runtime_policy['lanes'][0]['quantum'] != 99
 
 
 @pytest.mark.asyncio

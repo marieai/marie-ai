@@ -452,7 +452,8 @@ elseif op == 'admit' or op == 'admit_manifest' then
         'model',a.model,'admitted_at_ms',now,'cost',a.cost,'state','ready','execution_seq',0,'active',1,'reserved',0,
         'storage_charge',charge,'result_allowance',a.limits.result_allowance)
     if op == 'admit_manifest' then
-        redis.call('HSET',R,'job_id',a.job_id,'work_unit_id',a.work_unit_id,'route_digest',a.manifest_digest)
+        redis.call('HSET',R,'job_id',a.job_id,'work_unit_id',a.work_unit_id,'route_digest',a.manifest_digest,
+            'policy_generation',n(manifest,'policy_generation'))
     end
     redis.call('SADD',members,a.id)
     redis.call('RPUSH',ready,a.id)

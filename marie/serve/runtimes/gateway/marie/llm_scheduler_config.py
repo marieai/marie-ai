@@ -15,6 +15,7 @@ from psycopg.types.json import Jsonb
 from marie.logging_core.logger import MarieLogger
 from marie.serve.runtimes.gateway.marie.dispatch_policy import (
     build_policy_generation_snapshot,
+    persisted_dispatch_policy,
     validate_dispatch_policy,
 )
 from marie.storage.database.postgres import PostgresqlMixin
@@ -279,6 +280,229 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             self._close_cursor(cursor)
             self._close_connection(conn)
 
+    def load_runtime_dispatch_policy(self, fabric_group_id: str) -> dict[str, Any]:
+        """Load the immutable active dispatch policy used by the runtime."""
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+            cursor.execute(
+                f"""
+                SELECT config.active_policy_generation,
+                       generation.policy_digest, generation.policy_snapshot
+                FROM {self.config_schema}.llm_queue_fabric_config config
+                LEFT JOIN {self.config_schema}.llm_queue_policy_generation generation
+                  ON generation.fabric_group_id = config.fabric_group_id
+                 AND generation.generation = config.active_policy_generation
+                WHERE config.fabric_group_id = %s AND config.enabled = true
+                """,
+                (fabric_group_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise ValueError('LLM routing fabric is not configured')
+            if row[0] is None:
+                data = self._load_desired_policy(cursor, fabric_group_id, lock=False)
+                policy = persisted_dispatch_policy(data)
+                policy['policy_generation'] = None
+                policy['policy_digest'] = None
+                conn.commit()
+                return policy
+            if not isinstance(row[2], dict) or not isinstance(
+                row[2].get('dispatch'), dict
+            ):
+                raise ValueError('LLM routing policy generation is unavailable')
+            digest = str(row[1])
+            if _policy_digest(row[2]) != digest:
+                raise ValueError('LLM routing policy digest mismatch')
+            policy = validate_dispatch_policy(row[2]['dispatch'])
+            policy['policy_generation'] = int(row[0])
+            policy['policy_digest'] = digest
+            conn.commit()
+            return policy
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
+    def load_routing_diagnostics(
+        self, fabric_group_id: str, limit: int = 50
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 250:
+            raise ValueError('Invalid routing diagnostic limit')
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+            cursor.execute(
+                f"""
+                SELECT config.admission_mode, config.active_policy_generation,
+                       generation.policy_digest
+                FROM {self.config_schema}.llm_queue_fabric_config config
+                LEFT JOIN {self.config_schema}.llm_queue_policy_generation generation
+                  ON generation.fabric_group_id = config.fabric_group_id
+                 AND generation.generation = config.active_policy_generation
+                WHERE config.fabric_group_id = %s
+                """,
+                (fabric_group_id,),
+            )
+            policy = cursor.fetchone()
+            if policy is None:
+                raise ValueError('LLM routing fabric is not configured')
+            cursor.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE projection_state <> 'projected'),
+                    COUNT(*) FILTER (WHERE routing_source = 'automatic'),
+                    COUNT(*) FILTER (WHERE routing_source = 'operator-override')
+                FROM {self.config_schema}.llm_job_route
+                WHERE fabric_group_id = %s
+                """,
+                (fabric_group_id,),
+            )
+            routing = cursor.fetchone()
+            cursor.execute(
+                f"""
+                SELECT pool.pool_id,
+                       COUNT(route.work_unit_id) AS accepted,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE job.state = 'completed'
+                       ) AS completed,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE route.projection_state <> 'projected'
+                       ) AS projection_pending,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE job.state NOT IN (
+                               'completed', 'skipped', 'expired', 'cancelled', 'failed'
+                           )
+                       ) AS drain_references,
+                       COUNT(*) OVER() AS pool_count
+                FROM {self.config_schema}.llm_queue_pool pool
+                LEFT JOIN {self.config_schema}.llm_job_route route
+                  ON route.fabric_group_id = pool.fabric_group_id
+                 AND route.pool_id = pool.pool_id
+                LEFT JOIN {self.config_schema}.job job
+                  ON job.id = route.work_unit_id
+                WHERE pool.fabric_group_id = %s
+                GROUP BY pool.pool_id, pool.sort_order
+                ORDER BY pool.sort_order, pool.pool_id
+                LIMIT %s
+                """,
+                (fabric_group_id, limit + 1),
+            )
+            rows = cursor.fetchall()
+            conn.commit()
+            visible = rows[:limit]
+            return {
+                'policy': {
+                    'admission_mode': str(policy[0]),
+                    'desired_generation': (
+                        int(policy[1]) if policy[1] is not None else None
+                    ),
+                    'desired_digest': str(policy[2]) if policy[2] is not None else None,
+                },
+                'routing': {
+                    'projection_pending_count': int(routing[0]),
+                    'matched': {
+                        'automatic': int(routing[1]),
+                        'operator_override': int(routing[2]),
+                    },
+                    'rejected': {},
+                    'shadow': {
+                        'available': False,
+                        'match_count': None,
+                        'disagreement_count': None,
+                    },
+                },
+                'pools': [
+                    {
+                        'pool_id': str(row[0]),
+                        'accepted': int(row[1]),
+                        'completed': int(row[2]),
+                        'projection_pending': int(row[3]),
+                        'drain_references': int(row[4]),
+                    }
+                    for row in visible
+                ],
+                'pool_count': int(rows[0][5]) if rows else 0,
+                'pools_truncated': len(rows) > limit,
+            }
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
+    def routing_resource_references(
+        self,
+        *,
+        fabric_group_id: str,
+        resource_type: str,
+        resource_id: str,
+        revision: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        if not 1 <= limit <= 250:
+            raise ValueError('Invalid routing reference limit')
+        where, params = _routing_reference_predicate(
+            resource_type, resource_id, revision
+        )
+        cursor = None
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+            base = f"""
+                FROM {self.config_schema}.llm_job_route route
+                LEFT JOIN {self.config_schema}.llm_queue_policy_generation policy
+                  ON policy.fabric_group_id = route.fabric_group_id
+                 AND policy.generation = route.policy_generation
+                LEFT JOIN {self.config_schema}.job job
+                  ON job.id = route.work_unit_id
+                WHERE route.fabric_group_id = %s AND {where}
+                  AND (
+                    %s = 'policy_generation'
+                    OR job.state NOT IN (
+                        'completed', 'skipped', 'expired', 'cancelled', 'failed'
+                    )
+                  )
+            """
+            all_params = (fabric_group_id, *params, resource_type)
+            cursor.execute(f'SELECT COUNT(*) {base}', all_params)
+            count = int(cursor.fetchone()[0])
+            cursor.execute(
+                f"""
+                SELECT route.work_unit_id {base}
+                ORDER BY route.created_on DESC, route.work_unit_id
+                LIMIT %s
+                """,
+                (*all_params, limit),
+            )
+            samples = [str(row[0]) for row in cursor.fetchall()]
+            conn.commit()
+            return {
+                'postgres': count,
+                'samples': samples,
+                'truncated': count > len(samples),
+            }
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
     def _load_desired_policy(
         self, cursor: Any, fabric_group_id: str, *, lock: bool
     ) -> dict[str, Any]:
@@ -339,6 +563,68 @@ def _sql_identifier(value: Any, *, label: str) -> str:
     if not _SQL_IDENTIFIER_RE.fullmatch(identifier):
         raise ValueError(f"Invalid LLM queue scheduler {label}: {value!r}")
     return identifier
+
+
+def _routing_reference_predicate(
+    resource_type: str, resource_id: str, revision: str | None
+) -> tuple[str, tuple[Any, ...]]:
+    if resource_type == 'pool':
+        return 'route.pool_id = %s', (resource_id,)
+    if resource_type == 'policy_generation':
+        try:
+            generation = int(resource_id)
+        except ValueError:
+            raise ValueError('Invalid routing policy generation') from None
+        if not 1 <= generation <= 2**53 - 1:
+            raise ValueError('Invalid routing policy generation')
+        return 'route.policy_generation = %s', (generation,)
+    if resource_type == 'endpoint_group':
+        if revision is None:
+            return 'route.logical_endpoint_group_id = %s', (resource_id,)
+        return (
+            'route.logical_endpoint_group_id = %s AND route.endpoint_revision = %s',
+            (resource_id, revision),
+        )
+    if resource_type == 'replica':
+        revision_filter = (
+            "AND endpoint_group->>'revision' = %s" if revision is not None else ''
+        )
+        params: tuple[Any, ...] = (
+            (resource_id, revision) if revision is not None else (resource_id,)
+        )
+        legacy = 'FALSE'
+        if revision in {None, 'r1'}:
+            legacy = """(
+                route.logical_endpoint_group_id = %s
+                AND route.endpoint_revision = 'r1'
+                AND EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(
+                        policy.policy_snapshot->'dispatch'->'endpoints'
+                    ) endpoint
+                    WHERE endpoint->>'endpoint_id' = %s
+                )
+            )"""
+            params = (*params, resource_id, resource_id)
+        return (
+            f"""(
+                EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(
+                        policy.policy_snapshot->'dispatch'->'endpoint_groups'
+                    ) endpoint_group
+                    CROSS JOIN LATERAL jsonb_array_elements(
+                        endpoint_group->'replicas'
+                    ) replica
+                    WHERE replica->>'replica_id' = %s
+                      AND endpoint_group->>'group_id' = route.logical_endpoint_group_id
+                      AND endpoint_group->>'revision' = route.endpoint_revision
+                      {revision_filter}
+                ) OR {legacy}
+            )""",
+            params,
+        )
+    raise ValueError('Invalid routing resource type')
 
 
 def _policy_digest(snapshot: dict[str, Any]) -> str:

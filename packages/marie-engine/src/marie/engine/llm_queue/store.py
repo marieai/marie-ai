@@ -235,6 +235,7 @@ class RequestMetadata:
     refunded_on: int = 0
     replica_id: str | None = None
     replica_reserved: int = 0
+    policy_generation: int = 0
 
 
 class RequestStore:
@@ -979,6 +980,7 @@ class RequestStore:
             "charged_owner_generation",
             "refunded_on",
             "replica_reserved",
+            "policy_generation",
         ):
             data[name] = int(data[name] or 0)
         if data["admitted_at_ms"] is not None:
@@ -1444,6 +1446,8 @@ class RequestStore:
             "ready_ids",
             "reserved_items",
             "reserved_bytes",
+            "charged_cost",
+            "refunded_cost",
         ]
         return {
             key: int(value or 0)

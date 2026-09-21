@@ -100,7 +100,26 @@ class DagSubmissionService:
         for dag_work_info in dag_nodes:
             dag_work_info.dag_id = submission_id
 
-        llm_routes = await self._plan_llm_routes(work_info, plan, dag_nodes)
+        try:
+            llm_routes = await self._plan_llm_routes(work_info, plan, dag_nodes)
+        except RoutingSubmissionError as exc:
+            routing_context = getattr(work_info, 'routing_context', None)
+            fabric_group_id = getattr(
+                work_info, 'routing_fabric_group_id', None
+            ) or getattr(
+                getattr(routing_context, 'policy', None), 'fabric_group_id', None
+            )
+            if fabric_group_id:
+                admission_routing_metrics.record_rejection(
+                    fabric_group_id=fabric_group_id,
+                    category=exc.category,
+                )
+            raise
+        for route in llm_routes:
+            admission_routing_metrics.record_match(
+                fabric_group_id=route.fabric_group_id,
+                category=route.routing_source.replace('-', '_'),
+            )
 
         scheduler_trace(
             'dag_persist_start',

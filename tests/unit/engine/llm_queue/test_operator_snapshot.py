@@ -42,6 +42,60 @@ class Runtime:
         return []
 
 
+class RoutingRuntime(Runtime):
+    def health(self, *, read_budget=None):
+        self.calls += 1
+        return {
+            'fabric_group_id': self.config.fabric_group_id,
+            'contract_version': 'v3',
+            'running': True,
+            'observed_at_ms': 2_000_000,
+            'policy_generation': 4,
+            'policy_digest': 'a' * 64,
+            'lanes': [
+                {
+                    'pool_id': 'document-small',
+                    'request_queue_depth': 3,
+                    'oldest_pending_age_seconds': 12.5,
+                    'charged_cost': 9,
+                    'refunded_cost': 2,
+                    'committed_charge': 7,
+                    'state_counts': {
+                        'ready': 3,
+                        'claimed': 1,
+                        'executing': 1,
+                        'outcome_unknown': 0,
+                    },
+                    'drain_references': 5,
+                }
+            ],
+            'endpoint_groups': [
+                {
+                    'group_id': 'document-llm',
+                    'revision': 'r4',
+                    'selected_replica_id': 'replica-b',
+                    'drain_references': 2,
+                    'replicas': [
+                        {
+                            'replica_id': 'replica-b',
+                            'enabled': True,
+                            'circuit': 'closed',
+                            'reserved_items': 1,
+                            'reserved_bytes': 4096,
+                            'execution_limit': 4,
+                            'execution_bytes': 8192,
+                            'credential_env': 'SECRET_ENV',
+                            'base_url': 'https://secret',
+                            'raw_error': 'PHI',
+                        }
+                    ],
+                }
+            ],
+            'messages': [{'role': 'user', 'content': 'PHI'}],
+            'images': ['data:image/png;base64,secret'],
+        }
+
+
 @pytest.fixture(autouse=True)
 def registry_state(monkeypatch):
     monkeypatch.setattr(registry, '_DISPATCHERS', {})
@@ -152,3 +206,68 @@ def test_corrupted_numeric_metadata_does_not_become_text_content():
     clean = registry._clean({'reserved_items': 'PHI secret', 'failures': '2'})
     assert clean['reserved_items'] is None
     assert clean['failures'] == 2
+
+
+def test_runtime_snapshot_reports_bounded_routing_recovery_and_replica_state(
+    monkeypatch,
+):
+    monkeypatch.setattr(registry.time, 'time', lambda: 2_000.5)
+    registry.register_dispatcher('routing', RoutingRuntime())
+
+    snapshot = registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+    assert snapshot['policy'] == {
+        'observed_generation': 4,
+        'observed_digest': 'a' * 64,
+    }
+    assert snapshot['drr'] == {
+        'charged_cost': 9,
+        'refunded_cost': 2,
+        'committed_charge': 7,
+    }
+    assert snapshot['pools'][0]['state_counts'] == {
+        'ready': 3,
+        'claimed': 1,
+        'running': 1,
+        'unknown': 0,
+    }
+    assert snapshot['pools'][0]['oldest_ready_age_seconds'] == 12.5
+    assert snapshot['endpoint_groups'][0]['selected_replica_id'] == 'replica-b'
+    assert snapshot['endpoint_groups'][0]['replicas'][0]['available_items'] == 3
+    assert snapshot['observation']['stale'] is False
+    encoded = json.dumps(snapshot)
+    for forbidden in (
+        'messages',
+        'images',
+        'credential_env',
+        'base_url',
+        'raw_error',
+        'SECRET_ENV',
+        'PHI',
+    ):
+        assert forbidden not in encoded
+
+
+def test_runtime_snapshot_labels_old_observation_as_stale(monkeypatch):
+    monkeypatch.setattr(registry.time, 'time', lambda: 2_020.0)
+    registry.register_dispatcher('routing', RoutingRuntime())
+
+    snapshot = registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+    assert snapshot['observation'] == {
+        'observed_at_ms': 2_000_000,
+        'stale': True,
+        'stale_after_ms': registry.OBSERVATION_STALE_AFTER_MS,
+    }
+
+
+def test_policy_observation_is_unknown_when_any_dispatcher_omits_identity():
+    registry.register_dispatcher('identified', RoutingRuntime())
+    registry.register_dispatcher('unidentified', Runtime())
+
+    snapshot = registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+    assert snapshot['policy'] == {
+        'observed_generation': None,
+        'observed_digest': None,
+    }

@@ -227,11 +227,18 @@ class GatewayLlmDispatchRuntime:
                     != self.config.fabric_group_id
                 ):
                     raise ValueError('Database policy fabric identity mismatch')
-                data = await asyncio.to_thread(
-                    self._scheduler_config_source.repository.load_scheduler_config,
-                    self.config.fabric_group_id,
-                )
-                policy = persisted_dispatch_policy(data)
+                repository = self._scheduler_config_source.repository
+                if hasattr(repository, 'load_runtime_dispatch_policy'):
+                    policy = await asyncio.to_thread(
+                        repository.load_runtime_dispatch_policy,
+                        self.config.fabric_group_id,
+                    )
+                else:
+                    data = await asyncio.to_thread(
+                        repository.load_scheduler_config,
+                        self.config.fabric_group_id,
+                    )
+                    policy = persisted_dispatch_policy(data)
             elif source == 'static':
                 policy = validate_dispatch_policy(configured)
             else:
@@ -275,12 +282,17 @@ class GatewayLlmDispatchRuntime:
                 limits=StoreLimits(**policy['limits']),
                 policy=policy['policy'],
                 total_concurrent_dispatch=policy['total_concurrent_dispatch'],
+                policy_generation=policy.get('policy_generation'),
+                policy_digest=policy.get('policy_digest'),
             )
 
         def load_policy() -> dict:
-            data = self._scheduler_config_source.repository.load_scheduler_config(
-                self.config.fabric_group_id
-            )
+            repository = self._scheduler_config_source.repository
+            if hasattr(repository, 'load_runtime_dispatch_policy'):
+                return resolve_policy(
+                    repository.load_runtime_dispatch_policy(self.config.fabric_group_id)
+                )
+            data = repository.load_scheduler_config(self.config.fabric_group_id)
             return resolve_policy(persisted_dispatch_policy(data))
 
         resolved = resolve_policy(policy)
@@ -302,6 +314,8 @@ class GatewayLlmDispatchRuntime:
                 policy=resolved['policy'],
                 total_concurrent_dispatch=resolved['total_concurrent_dispatch'],
                 policy_loader=load_policy if source == 'database' else None,
+                policy_generation=resolved['policy_generation'],
+                policy_digest=resolved['policy_digest'],
             )
             await dispatcher.start()
         except (ValueError, RuntimeError):

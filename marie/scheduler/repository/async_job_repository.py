@@ -90,6 +90,68 @@ def _routing_digest(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _llm_routing_reference_predicate(
+    resource_type: str, resource_id: str, revision: str | None
+) -> tuple[str, tuple[Any, ...]]:
+    if resource_type == 'pool':
+        return 'route.pool_id = %s', (resource_id,)
+    if resource_type == 'policy_generation':
+        try:
+            generation = int(resource_id)
+        except ValueError:
+            raise ValueError('Invalid routing policy generation') from None
+        if not 1 <= generation <= 2**53 - 1:
+            raise ValueError('Invalid routing policy generation')
+        return 'route.policy_generation = %s', (generation,)
+    if resource_type == 'endpoint_group':
+        if revision is None:
+            return 'route.logical_endpoint_group_id = %s', (resource_id,)
+        return (
+            'route.logical_endpoint_group_id = %s AND route.endpoint_revision = %s',
+            (resource_id, revision),
+        )
+    if resource_type == 'replica':
+        revision_filter = (
+            "AND endpoint_group->>'revision' = %s" if revision is not None else ''
+        )
+        params: tuple[Any, ...] = (
+            (resource_id, revision) if revision is not None else (resource_id,)
+        )
+        legacy = 'FALSE'
+        if revision in {None, 'r1'}:
+            legacy = """(
+                route.logical_endpoint_group_id = %s
+                AND route.endpoint_revision = 'r1'
+                AND EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(
+                        policy.policy_snapshot->'dispatch'->'endpoints'
+                    ) endpoint
+                    WHERE endpoint->>'endpoint_id' = %s
+                )
+            )"""
+            params = (*params, resource_id, resource_id)
+        return (
+            f"""(
+                EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(
+                        policy.policy_snapshot->'dispatch'->'endpoint_groups'
+                    ) endpoint_group
+                    CROSS JOIN LATERAL jsonb_array_elements(
+                        endpoint_group->'replicas'
+                    ) replica
+                    WHERE replica->>'replica_id' = %s
+                      AND endpoint_group->>'group_id' = route.logical_endpoint_group_id
+                      AND endpoint_group->>'revision' = route.endpoint_revision
+                      {revision_filter}
+                ) OR {legacy}
+            )""",
+            params,
+        )
+    raise ValueError('Invalid routing resource type')
+
+
 class _GuardrailRouteConflict(RuntimeError):
     pass
 
@@ -2800,6 +2862,151 @@ class AsyncJobRepository:
             'created_on',
         )
         return dict(zip(names, row, strict=True))
+
+    async def read_llm_routing_diagnostics(
+        self, fabric_group_id: str, *, limit: int = 50
+    ) -> dict[str, Any]:
+        """Return bounded durable routing and drain state for one fabric."""
+        if not 1 <= limit <= 250:
+            raise ValueError('Invalid routing diagnostic limit')
+        async with self._pool.acquire() as conn:
+            policy = await conn.fetchrow(
+                f"""
+                SELECT config.admission_mode, config.active_policy_generation,
+                       generation.policy_digest
+                FROM {DEFAULT_SCHEMA}.llm_queue_fabric_config config
+                LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation generation
+                  ON generation.fabric_group_id = config.fabric_group_id
+                 AND generation.generation = config.active_policy_generation
+                WHERE config.fabric_group_id = %s
+                """,
+                fabric_group_id,
+            )
+            if policy is None:
+                raise ValueError('routing_policy_unavailable')
+            routing = await conn.fetchrow(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE projection_state <> 'projected'),
+                    COUNT(*) FILTER (WHERE routing_source = 'automatic'),
+                    COUNT(*) FILTER (WHERE routing_source = 'operator-override')
+                FROM {DEFAULT_SCHEMA}.llm_job_route
+                WHERE fabric_group_id = %s
+                """,
+                fabric_group_id,
+            )
+            rows = await conn.fetch(
+                f"""
+                SELECT pool.pool_id,
+                       COUNT(route.work_unit_id) AS accepted,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE job.state = 'completed'
+                       ) AS completed,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE route.projection_state <> 'projected'
+                       ) AS projection_pending,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE job.state NOT IN (
+                               'completed', 'skipped', 'expired', 'cancelled', 'failed'
+                           )
+                       ) AS drain_references,
+                       COUNT(*) OVER() AS pool_count
+                FROM {DEFAULT_SCHEMA}.llm_queue_pool pool
+                LEFT JOIN {DEFAULT_SCHEMA}.llm_job_route route
+                  ON route.fabric_group_id = pool.fabric_group_id
+                 AND route.pool_id = pool.pool_id
+                LEFT JOIN {DEFAULT_SCHEMA}.job job
+                  ON job.id = route.work_unit_id
+                WHERE pool.fabric_group_id = %s
+                GROUP BY pool.pool_id, pool.sort_order
+                ORDER BY pool.sort_order, pool.pool_id
+                LIMIT %s
+                """,
+                fabric_group_id,
+                limit + 1,
+            )
+        visible = rows[:limit]
+        return {
+            'policy': {
+                'admission_mode': str(policy[0]),
+                'desired_generation': int(policy[1]) if policy[1] is not None else None,
+                'desired_digest': str(policy[2]) if policy[2] is not None else None,
+            },
+            'routing': {
+                'projection_pending_count': int(routing[0]),
+                'matched': {
+                    'automatic': int(routing[1]),
+                    'operator_override': int(routing[2]),
+                },
+                'rejected': {},
+                'shadow': {
+                    'available': False,
+                    'match_count': None,
+                    'disagreement_count': None,
+                },
+            },
+            'pools': [
+                {
+                    'pool_id': str(row[0]),
+                    'accepted': int(row[1]),
+                    'completed': int(row[2]),
+                    'projection_pending': int(row[3]),
+                    'drain_references': int(row[4]),
+                }
+                for row in visible
+            ],
+            'pool_count': int(rows[0][5]) if rows else 0,
+            'pools_truncated': len(rows) > limit,
+        }
+
+    async def routing_resource_references(
+        self,
+        *,
+        fabric_group_id: str,
+        resource_type: str,
+        resource_id: str,
+        revision: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Count durable route references without treating read failure as zero."""
+        if not 1 <= limit <= 250:
+            raise ValueError('Invalid routing reference limit')
+        where, params = _llm_routing_reference_predicate(
+            resource_type, resource_id, revision
+        )
+        base = f"""
+            FROM {DEFAULT_SCHEMA}.llm_job_route route
+            LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation policy
+              ON policy.fabric_group_id = route.fabric_group_id
+             AND policy.generation = route.policy_generation
+            LEFT JOIN {DEFAULT_SCHEMA}.job job
+              ON job.id = route.work_unit_id
+            WHERE route.fabric_group_id = %s AND {where}
+              AND (
+                %s = 'policy_generation'
+                OR job.state NOT IN (
+                    'completed', 'skipped', 'expired', 'cancelled', 'failed'
+                )
+              )
+        """
+        values = (fabric_group_id, *params, resource_type)
+        async with self._pool.acquire() as conn:
+            count = int(await conn.fetchval(f'SELECT COUNT(*) {base}', *values))
+            rows = await conn.fetch(
+                f"""
+                SELECT route.work_unit_id {base}
+                ORDER BY route.created_on DESC, route.work_unit_id
+                LIMIT %s
+                """,
+                *values,
+                limit,
+            )
+        samples = [str(row[0]) for row in rows]
+        return {
+            'postgres': count,
+            'samples': samples,
+            'truncated': count > len(samples),
+        }
 
     async def load_active_admission_configuration(
         self, fabric_group_id: str

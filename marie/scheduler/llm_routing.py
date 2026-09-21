@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import threading
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from marie.engine.llm_queue.admission_policy import (
+    AdmissionMatchError,
     AdmissionPolicy,
+    AdmissionPolicyError,
     FactValue,
     PoolEndpointBinding,
 )
@@ -41,6 +46,7 @@ _PIPELINE_STAGES = frozenset({'extract', 'validate', 'enrich'})
 _REQUEST_SOURCES = frozenset(
     {'gateway-job-api', 'studio-submission', 'workflow', 'operator'}
 )
+_METRIC_CATEGORY_RE = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 
 
 class AdmissionRoutingMetrics:
@@ -50,6 +56,49 @@ class AdmissionRoutingMetrics:
             name="marie_llm_admission_shadow_comparisons",
             description="Automatic pool decisions compared with legacy admission",
         )
+        self._lock = threading.Lock()
+        self._matched: Counter[tuple[str, str]] = Counter()
+        self._rejected: Counter[tuple[str, str]] = Counter()
+        self._shadow: Counter[tuple[str, str]] = Counter()
+        self._seen_fabrics: set[str] = set()
+
+    def record_match(self, *, fabric_group_id: str, category: str) -> None:
+        category = (
+            category if _METRIC_CATEGORY_RE.fullmatch(category) else 'routing_error'
+        )
+        with self._lock:
+            self._seen_fabrics.add(fabric_group_id)
+            self._matched[(fabric_group_id, category)] += 1
+
+    def record_rejection(self, *, fabric_group_id: str, category: str) -> None:
+        category = (
+            category if _METRIC_CATEGORY_RE.fullmatch(category) else 'routing_error'
+        )
+        with self._lock:
+            self._seen_fabrics.add(fabric_group_id)
+            self._rejected[(fabric_group_id, category)] += 1
+
+    def snapshot(self, fabric_group_id: str) -> dict[str, Any]:
+        with self._lock:
+            return {
+                'available': fabric_group_id in self._seen_fabrics,
+                'matched': {
+                    category: count
+                    for (fabric, category), count in self._matched.items()
+                    if fabric == fabric_group_id
+                },
+                'rejected': {
+                    category: count
+                    for (fabric, category), count in self._rejected.items()
+                    if fabric == fabric_group_id
+                },
+                'shadow': {
+                    'match_count': self._shadow[(fabric_group_id, 'match')],
+                    'disagreement_count': self._shadow[
+                        (fabric_group_id, 'disagreement')
+                    ],
+                },
+            }
 
     def record_shadow_comparison(
         self,
@@ -58,17 +107,20 @@ class AdmissionRoutingMetrics:
         automatic_pool_id: str,
         legacy_pool_id: str,
     ) -> None:
+        result = "match" if automatic_pool_id == legacy_pool_id else "disagreement"
         self._shadow_comparisons.add(
             1,
             attributes={
                 "fabric_group_id": fabric_group_id,
-                "result": (
-                    "match" if automatic_pool_id == legacy_pool_id else "disagreement"
-                ),
+                "result": result,
                 "automatic_pool_id": automatic_pool_id,
                 "legacy_pool_id": legacy_pool_id,
             },
         )
+        if hasattr(self, '_lock'):
+            with self._lock:
+                self._seen_fabrics.add(fabric_group_id)
+                self._shadow[(fabric_group_id, result)] += 1
 
 
 admission_routing_metrics = AdmissionRoutingMetrics()
@@ -274,8 +326,11 @@ def plan_llm_routes(
         if work_info is None or work_info.id in routed_ids:
             raise RoutingSubmissionError('routing_manifest_missing')
         facts = base_facts.with_stage(normalize_pipeline_stage(node))
-        decision = policy.match(facts.values)
-        binding = policy.endpoint_binding(decision.pool_id)
+        try:
+            decision = policy.match(facts.values)
+            binding = policy.endpoint_binding(decision.pool_id)
+        except (AdmissionMatchError, AdmissionPolicyError) as exc:
+            raise RoutingSubmissionError(exc.category) from None
         routes.append(
             PlannedLlmRoute(
                 job_id=root.id,

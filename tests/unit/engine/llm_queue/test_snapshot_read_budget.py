@@ -55,11 +55,29 @@ class MetadataStore:
 
     def usage(self):
         self.record('usage', 'fabric')
-        return {'reserved_items': 0}
+        return {
+            'active_items': 0,
+            'ready_ids': 0,
+            'reserved_items': 0,
+            'charged_cost': 0,
+            'refunded_cost': 0,
+        }
+
+    def processing_ids(self, *, offset=0, limit=100):
+        self.record('processing', 'fabric')
+        return []
+
+    def charge_totals(self, pool):
+        self.record('charge', pool)
+        return {'charged': 0, 'refunded': 0}
 
     def endpoint_status(self, identity):
         self.record('endpoint', identity)
         return {'circuit': 'closed'}
+
+    def server_time_ms(self):
+        self.record('time', 'fabric')
+        return 1_000
 
     def ready_depth(self, pool):
         self.record('depth', pool)
@@ -144,12 +162,26 @@ async def test_cancel_or_timeout_stops_before_next_store_unit(
     real_health, block, timeout
 ):
     store = MetadataStore('p1', block=block)
-    runtime = Runtime(store, real_health=real_health)
-    runtime.lanes.append(
-        SimpleNamespace(
-            pool_id='p2', endpoint_id='endpoint', enabled=True, execution_limit=1
+    if real_health:
+        from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+        from marie.engine.llm_queue.request_dispatcher import DispatchLane
+
+        store.route_status = lambda _pool: {
+            'reserved_items': 0,
+            'reserved_bytes': 0,
+        }
+        runtime = RequestDispatcher(
+            store=store,
+            endpoints=[RegisteredEndpoint('endpoint', 'https://example.test')],
+            lanes=[DispatchLane('p1', 'endpoint'), DispatchLane('p2', 'endpoint')],
         )
-    )
+    else:
+        runtime = Runtime(store)
+        runtime.lanes.append(
+            SimpleNamespace(
+                pool_id='p2', endpoint_id='endpoint', enabled=True, execution_limit=1
+            )
+        )
     registry.register_dispatcher('runtime', runtime)
     task = asyncio.create_task(
         registry.read_runtime_snapshot(
@@ -170,6 +202,13 @@ async def test_cancel_or_timeout_stops_before_next_store_unit(
                 await task
     finally:
         store.release.set()
+        if real_health:
+            for worker in (
+                runtime._store_workers,
+                runtime._lease_worker,
+                runtime._refresh_worker,
+            ):
+                worker.shutdown()
     await asyncio.get_running_loop().run_in_executor(
         registry._READ_WORKER, lambda: None
     )
@@ -249,10 +288,17 @@ def test_health_reads_distinct_endpoints_once_and_uses_complete_shared_budget():
 
     store = MetadataStore('p1', malformed=False)
     store.route_status = lambda pool: {'reserved_items': 0, 'reserved_bytes': 0}
-    store.usage = lambda: store.record('usage', 'fabric') or {'reserved_items': 0}
-    store.endpoint_status = lambda identity: store.record('endpoint', identity) or {
-        'circuit': 'closed'
-    }
+    store.usage = lambda: (
+        store.record('usage', 'fabric')
+        or {
+            'active_items': 0,
+            'ready_ids': 0,
+            'reserved_items': 0,
+        }
+    )
+    store.endpoint_status = lambda identity: (
+        store.record('endpoint', identity) or {'circuit': 'closed'}
+    )
     runtime = RequestDispatcher(
         store=store,
         endpoints=[RegisteredEndpoint('endpoint', 'https://example.test')],
@@ -260,7 +306,7 @@ def test_health_reads_distinct_endpoints_once_and_uses_complete_shared_budget():
     )
     try:
         budget = registry.SnapshotReadBudget(
-            5, registry.time.monotonic() + 1, units_left=10
+            5, registry.time.monotonic() + 1, units_left=14
         )
         health = runtime.health(read_budget=budget)
         assert store.calls.count(('usage', 'fabric')) == 1
@@ -271,7 +317,7 @@ def test_health_reads_distinct_endpoints_once_and_uses_complete_shared_budget():
         with pytest.raises(registry.SnapshotUnavailable):
             runtime.health(
                 read_budget=registry.SnapshotReadBudget(
-                    5, registry.time.monotonic() + 1, units_left=9
+                    5, registry.time.monotonic() + 1, units_left=13
                 )
             )
     finally:
@@ -283,6 +329,80 @@ def test_health_reads_distinct_endpoints_once_and_uses_complete_shared_budget():
             worker.shutdown()
 
 
+def test_health_truncates_large_policy_details_without_becoming_unavailable():
+    from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import DispatchLane
+
+    store = MetadataStore('p0', malformed=False)
+    store.route_status = lambda _pool: {'reserved_items': 0, 'reserved_bytes': 0}
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[RegisteredEndpoint('endpoint', 'https://example.test')],
+        lanes=[DispatchLane(f'p{number}', 'endpoint') for number in range(200)],
+    )
+    try:
+        health = runtime.health(
+            read_budget=registry.SnapshotReadBudget(
+                50,
+                registry.time.monotonic() + 1,
+                units_left=registry.MAX_SNAPSHOT_READ_UNITS,
+            )
+        )
+        assert health['pool_count'] == 200
+        assert health['details_truncated'] is True
+        assert 0 < len(health['lanes']) < 200
+    finally:
+        for worker in (
+            runtime._store_workers,
+            runtime._lease_worker,
+            runtime._refresh_worker,
+        ):
+            worker.shutdown()
+
+
+def test_snapshot_shares_large_policy_detail_budget_across_dispatchers():
+    from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import DispatchLane
+
+    runtimes = []
+    try:
+        for dispatcher_number in range(2):
+            store = MetadataStore(f'p{dispatcher_number}-0', malformed=False)
+            store.route_status = lambda _pool: {
+                'reserved_items': 0,
+                'reserved_bytes': 0,
+            }
+            runtime = RequestDispatcher(
+                store=store,
+                endpoints=[RegisteredEndpoint('endpoint', 'https://example.test')],
+                lanes=[
+                    DispatchLane(f'p{dispatcher_number}-{lane}', 'endpoint')
+                    for lane in range(100)
+                ],
+            )
+            runtimes.append(runtime)
+            registry.register_dispatcher(f'runtime-{dispatcher_number}', runtime)
+
+        snapshot = registry.dispatch_runtime_live_state(
+            limit_per_pool=50,
+            fabric_group_id='fabric',
+        )
+
+        assert snapshot['pool_count'] == 100
+        assert snapshot['pools_truncated'] is True
+        assert len(snapshot['dispatchers']) == 2
+        assert all(row['details_truncated'] for row in snapshot['dispatchers'])
+        assert all(row.get('pool_id') is not None for row in snapshot['pools'])
+    finally:
+        for runtime in runtimes:
+            for worker in (
+                runtime._store_workers,
+                runtime._lease_worker,
+                runtime._refresh_worker,
+            ):
+                worker.shutdown()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('block', ['usage', 'endpoint'])
 @pytest.mark.parametrize('timeout', [False, True])
@@ -291,10 +411,17 @@ async def test_shared_health_cancellation_stops_before_next_unit(block, timeout)
     from marie.engine.llm_queue.request_dispatcher import DispatchLane
 
     store = MetadataStore('p1', block=block, malformed=False)
-    store.usage = lambda: store.record('usage', 'fabric') or {'reserved_items': 0}
-    store.endpoint_status = lambda identity: store.record('endpoint', identity) or {
-        'circuit': 'closed'
-    }
+    store.usage = lambda: (
+        store.record('usage', 'fabric')
+        or {
+            'active_items': 0,
+            'ready_ids': 0,
+            'reserved_items': 0,
+        }
+    )
+    store.endpoint_status = lambda identity: (
+        store.record('endpoint', identity) or {'circuit': 'closed'}
+    )
     store.route_status = lambda pool: {'reserved_items': 0, 'reserved_bytes': 0}
     runtime = RequestDispatcher(
         store=store,
