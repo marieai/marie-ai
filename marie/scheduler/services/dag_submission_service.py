@@ -4,6 +4,8 @@ import asyncio
 import os
 from collections.abc import Awaitable, Callable
 
+from marie.engine.llm_queue.config import INTERNAL_LEGACY_POOL_ID, route_behavior
+
 from marie.logging_core.logger import MarieLogger
 from marie.messaging import mark_as_failed as mark_as_failed_toast
 from marie.messaging import mark_as_scheduled as mark_as_scheduled_toast
@@ -11,6 +13,7 @@ from marie.scheduler.llm_routing import (
     PlannedLlmRoute,
     RoutingSubmissionError,
     TrustedRoutingContext,
+    admission_routing_metrics,
     normalize_routing_facts,
     plan_llm_routes,
     reject_external_routing_selectors,
@@ -168,7 +171,7 @@ class DagSubmissionService:
             mode, policy = await self.repository.load_active_admission_configuration(
                 fabric_group_id
             )
-            if mode == 'off':
+            if route_behavior(mode) == 'legacy-read-only':
                 return ()
             if policy is None:
                 raise RoutingSubmissionError('routing_policy_unavailable')
@@ -211,7 +214,13 @@ class DagSubmissionService:
             policy=context.policy,
             base_facts=context.base_facts,
         )
-        if mode == 'shadow':
+        if route_behavior(mode) == 'compare-without-binding':
+            for route in routes:
+                admission_routing_metrics.record_shadow_comparison(
+                    fabric_group_id=route.fabric_group_id,
+                    automatic_pool_id=route.pool_id,
+                    legacy_pool_id=INTERNAL_LEGACY_POOL_ID,
+                )
             self.logger.info(
                 'LLM admission shadow matched %s route(s) for %s',
                 len(routes),

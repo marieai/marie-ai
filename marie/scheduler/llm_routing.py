@@ -10,6 +10,7 @@ from marie.engine.llm_queue.admission_policy import (
     FactValue,
     PoolEndpointBinding,
 )
+from opentelemetry import metrics as otel_metrics
 from pydantic import BaseModel, ConfigDict, Field
 
 from marie.query_planner.base import Query, QueryPlan
@@ -40,6 +41,37 @@ _PIPELINE_STAGES = frozenset({'extract', 'validate', 'enrich'})
 _REQUEST_SOURCES = frozenset(
     {'gateway-job-api', 'studio-submission', 'workflow', 'operator'}
 )
+
+
+class AdmissionRoutingMetrics:
+    def __init__(self) -> None:
+        meter = otel_metrics.get_meter("marie.scheduler.llm_routing")
+        self._shadow_comparisons = meter.create_counter(
+            name="marie_llm_admission_shadow_comparisons",
+            description="Automatic pool decisions compared with legacy admission",
+        )
+
+    def record_shadow_comparison(
+        self,
+        *,
+        fabric_group_id: str,
+        automatic_pool_id: str,
+        legacy_pool_id: str,
+    ) -> None:
+        self._shadow_comparisons.add(
+            1,
+            attributes={
+                "fabric_group_id": fabric_group_id,
+                "result": (
+                    "match" if automatic_pool_id == legacy_pool_id else "disagreement"
+                ),
+                "automatic_pool_id": automatic_pool_id,
+                "legacy_pool_id": legacy_pool_id,
+            },
+        )
+
+
+admission_routing_metrics = AdmissionRoutingMetrics()
 
 
 class RoutingSubmissionError(ValueError):

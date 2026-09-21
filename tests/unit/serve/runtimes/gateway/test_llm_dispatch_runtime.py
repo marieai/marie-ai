@@ -3,8 +3,8 @@ from unittest import mock
 
 import pytest
 from marie.engine.llm_queue.config import (
-    DEFAULT_LLM_QUEUE_POOL_ID,
     DEFAULT_MAX_INLINE_PAYLOAD_BYTES,
+    INTERNAL_LEGACY_POOL_ID,
     LlmQueueConfig,
 )
 from marie.engine.llm_queue.dispatcher import DrrQueuedBatchDispatcher
@@ -364,7 +364,7 @@ def test_database_scheduler_config_source_reads_repository_mapping():
     assert [lane.pool_id for lane in config.lanes] == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
     assert config.lanes[0].min_concurrent == 10
     assert config.lanes[1].max_burst_per_visit == 1
@@ -577,12 +577,12 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
     assert queue_clients[0].depth_calls == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
     assert health["pool_ids"] == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
     assert health["pool_count"] == 3
     started_message = next(
@@ -616,7 +616,7 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
     assert [lane.pool_id for lane in dispatchers[0].scheduler_config.lanes] == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
 
 

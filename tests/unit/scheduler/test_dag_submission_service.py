@@ -105,6 +105,83 @@ async def test_llm_plan_passes_immutable_routes_to_submission_transaction() -> N
 
 
 @pytest.mark.asyncio
+async def test_shadow_admission_records_bounded_comparison_without_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = build_service()
+    policy = AdmissionPolicy.from_rows(
+        'default',
+        1,
+        [
+            {
+                'pool_id': 'document-small',
+                'enabled': True,
+                'metadata': {
+                    'admission': {
+                        'schema_version': 1,
+                        'priority': 1_000_000,
+                        'accepting': True,
+                        'match': {},
+                    },
+                    'llm_dispatch': {
+                        'schema_version': 1,
+                        'endpoint_id': 'primary',
+                        'revision': 'r1',
+                    },
+                },
+            }
+        ],
+    )
+    service.repository.load_active_admission_configuration = AsyncMock(
+        return_value=('shadow', policy)
+    )
+    service.repository.get_submission_document_for_routing = AsyncMock(
+        return_value=None
+    )
+    comparisons: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        submission_module.admission_routing_metrics,
+        'record_shadow_comparison',
+        lambda **values: comparisons.append(values),
+    )
+    root = work_item('018fa1f1-0000-7000-8000-000000000011')
+    root.routing_context = None
+    root.routing_fabric_group_id = 'default'
+    root.routing_request_source = 'workflow'
+    node_id = '018fa1f1-0000-7000-8000-000000000012'
+    plan = QueryPlan(
+        nodes=[
+            Query(
+                task_id=node_id,
+                query_str='Extract',
+                dependencies=[],
+                node_type=QueryType.COMPUTE,
+                definition=LlmQueryDefinition(
+                    model_name='mock',
+                    endpoint='annotator_llm://extract',
+                    params={'layout': 'mock'},
+                ),
+            )
+        ]
+    )
+
+    routes = await service._plan_llm_routes(
+        root,
+        plan,
+        [SimpleNamespace(id=node_id)],
+    )
+
+    assert routes == ()
+    assert comparisons == [
+        {
+            'fabric_group_id': 'default',
+            'automatic_pool_id': 'document-small',
+            'legacy_pool_id': 'default',
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_submit_waits_for_durable_persistence_before_returning() -> None:
     service = build_service()
     persistence_started = asyncio.Event()

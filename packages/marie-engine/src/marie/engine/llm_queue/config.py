@@ -5,15 +5,90 @@ import socket
 import uuid
 import warnings
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
 from urllib.parse import urlsplit
 
 DEFAULT_MAX_INLINE_PAYLOAD_BYTES = 16 * 1024 * 1024
-DEFAULT_LLM_QUEUE_POOL_ID = "default"
+INTERNAL_LEGACY_POOL_ID = "default"
+
+
+@dataclass(frozen=True, slots=True)
+class LlmQueueProducerConfig:
+    enabled: bool
+    queue_url: Optional[str] = field(repr=False)
+    fabric_group_id: Optional[str]
+    producer_ttl_seconds: int
+    producer_refresh_interval_seconds: float
+    reply_queue_ttl_seconds: int
+    max_buffered_requests: int
+
+    @property
+    def valkey_url(self) -> Optional[str]:
+        return self.queue_url
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        enabled: Optional[bool] = None,
+        queue_url: Optional[str] = None,
+        valkey_url: Optional[str] = None,
+        fabric_group_id: Optional[str] = None,
+    ) -> "LlmQueueProducerConfig":
+        alive_ttl = int(os.getenv("LLM_QUEUE_PRODUCER_TTL_SECONDS", "30"))
+        return cls(
+            enabled=(
+                _to_bool(os.getenv("LLM_QUEUE_ENABLED"), False)
+                if enabled is None
+                else enabled
+            ),
+            queue_url=_resolve_queue_url(
+                queue_url,
+                valkey_url,
+                os.getenv("LLM_QUEUE_URL"),
+                os.getenv("LLM_QUEUE_VALKEY_URL"),
+                canonical_name="queue_url",
+                legacy_name="valkey_url",
+                canonical_env_name="LLM_QUEUE_URL",
+                legacy_env_name="LLM_QUEUE_VALKEY_URL",
+            ),
+            fabric_group_id=fabric_group_id
+            or os.getenv("LLM_QUEUE_FABRIC_GROUP_ID")
+            or None,
+            producer_ttl_seconds=alive_ttl,
+            producer_refresh_interval_seconds=float(
+                os.getenv(
+                    "LLM_QUEUE_PRODUCER_REFRESH_INTERVAL_SECONDS",
+                    str(max(1, alive_ttl // 3)),
+                )
+            ),
+            reply_queue_ttl_seconds=int(
+                os.getenv("LLM_QUEUE_REPLY_QUEUE_TTL_SECONDS", "300")
+            ),
+            max_buffered_requests=int(
+                os.getenv(
+                    "LLM_QUEUE_MAX_BUFFERED_REQUESTS",
+                    os.getenv("LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL", "32"),
+                )
+            ),
+        )
+
+
+def route_behavior(
+    admission_mode: str,
+) -> Literal["legacy-read-only", "compare-without-binding", "manifest-required"]:
+    try:
+        return {
+            "off": "legacy-read-only",
+            "shadow": "compare-without-binding",
+            "enforce": "manifest-required",
+        }[admission_mode]
+    except KeyError:
+        raise ValueError("Invalid LLM admission mode") from None
 
 
 @dataclass(frozen=True, init=False)
-class LlmQueueConfig:
+class LlmQueueRuntimeConfig:
     enabled: bool
     queue_url: Optional[str] = field(repr=False)
     pool_id: str
@@ -29,13 +104,13 @@ class LlmQueueConfig:
     max_inline_payload_bytes: int
     fabric_group_id: Optional[str] = None
     gateway_id: Optional[str] = None
-    queue_contract_version: str = 'v2'
+    queue_contract_version: str = "v2"
 
     def __init__(
         self,
         enabled: bool,
         valkey_url: Optional[str] = None,
-        pool_id: str = DEFAULT_LLM_QUEUE_POOL_ID,
+        pool_id: str = INTERNAL_LEGACY_POOL_ID,
         producer_id: str = "",
         producer_ttl_seconds: int = 30,
         producer_refresh_interval_seconds: float = 10.0,
@@ -50,7 +125,7 @@ class LlmQueueConfig:
         gateway_id: Optional[str] = None,
         *,
         queue_url: Optional[str] = None,
-        queue_contract_version: str = 'v2',
+        queue_contract_version: str = "v2",
     ) -> None:
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(
@@ -94,7 +169,7 @@ class LlmQueueConfig:
         object.__setattr__(self, "gateway_id", gateway_id)
         object.__setattr__(
             self,
-            'queue_contract_version',
+            "queue_contract_version",
             resolve_queue_contract_version(queue_contract_version),
         )
 
@@ -113,7 +188,7 @@ class LlmQueueConfig:
         producer_id: Optional[str] = None,
         fabric_group_id: Optional[str] = None,
         queue_contract_version: Optional[str] = None,
-    ) -> "LlmQueueConfig":
+    ) -> "LlmQueueRuntimeConfig":
         alive_ttl = int(os.getenv("LLM_QUEUE_PRODUCER_TTL_SECONDS", "30"))
         refresh_interval = float(
             os.getenv(
@@ -123,13 +198,13 @@ class LlmQueueConfig:
         )
         pool_id_value = pool_id or os.getenv(
             "LLM_QUEUE_POOL_ID",
-            DEFAULT_LLM_QUEUE_POOL_ID,
+            INTERNAL_LEGACY_POOL_ID,
         )
         max_batch_items = int(os.getenv("LLM_QUEUE_MAX_BATCH_ITEMS", "8"))
 
         return cls(
             queue_contract_version=resolve_queue_contract_version(
-                queue_contract_version, os.getenv('LLM_QUEUE_CONTRACT_VERSION')
+                queue_contract_version, os.getenv("LLM_QUEUE_CONTRACT_VERSION")
             ),
             enabled=(
                 _to_bool(os.getenv("LLM_QUEUE_ENABLED"), False)
@@ -179,6 +254,10 @@ class LlmQueueConfig:
         )
 
 
+# Compatibility name for trusted runtime and legacy-drain call sites.
+LlmQueueConfig = LlmQueueRuntimeConfig
+
+
 def _default_producer_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
 
@@ -186,9 +265,9 @@ def _default_producer_id() -> str:
 def resolve_queue_contract_version(
     explicit: Optional[str] = None, environment: Optional[str] = None
 ) -> str:
-    value = _nonempty(explicit) or _nonempty(environment) or 'v2'
-    if value not in {'v2', 'v3'}:
-        raise ValueError('queue_contract_version must be v2 or v3')
+    value = _nonempty(explicit) or _nonempty(environment) or "v2"
+    if value not in {"v2", "v3"}:
+        raise ValueError("queue_contract_version must be v2 or v3")
     return value
 
 
@@ -201,7 +280,7 @@ def resolve_fabric_id(*values: Optional[str]) -> str:
         if value and value.strip()
     }
     if len(identities) != 1:
-        raise ValueError('V3 requires one nonempty, consistent fabric identity')
+        raise ValueError("V3 requires one nonempty, consistent fabric identity")
     return identities.pop()
 
 

@@ -14,6 +14,7 @@ def test_route_llm_engine_cache_includes_queue_configuration():
             "OPENAI_API_BASE": "http://llm-backend/v1",
             "LLM_QUEUE_ENABLED": "false",
             "LLM_QUEUE_VALKEY_URL": "redis://localhost:6379/0",
+            "LLM_QUEUE_FABRIC_GROUP_ID": "default",
             "LLM_QUEUE_POOL_ID": "default",
         },
     ):
@@ -29,6 +30,7 @@ def test_route_llm_engine_cache_includes_queue_configuration():
                 {
                     "LLM_QUEUE_ENABLED": "true",
                     "LLM_QUEUE_VALKEY_URL": "redis://localhost:6379/0",
+                    "LLM_QUEUE_FABRIC_GROUP_ID": "default",
                     "LLM_QUEUE_POOL_ID": "default",
                 },
             ):
@@ -39,13 +41,16 @@ def test_route_llm_engine_cache_includes_queue_configuration():
     assert engine_cls.call_count == 2
     assert engine_cls.call_args_list[0].kwargs["queue_enabled"] is False
     assert engine_cls.call_args_list[1].kwargs["queue_enabled"] is True
-    assert engine_cls.call_args_list[1].kwargs["queue_url"] == "redis://localhost:6379/0"
-    assert engine_cls.call_args_list[1].kwargs["queue_pool_id"] == "default"
+    assert (
+        engine_cls.call_args_list[1].kwargs["queue_url"] == "redis://localhost:6379/0"
+    )
+    assert "queue_pool_id" not in engine_cls.call_args_list[1].kwargs
+    assert "queue_contract_version" not in engine_cls.call_args_list[1].kwargs
 
     annotator_util.clear_engine_cache()
 
 
-def test_route_llm_engine_treats_unresolved_pool_env_as_default():
+def test_route_llm_engine_ignores_legacy_pool_environment():
     annotator_util.clear_engine_cache()
 
     with mock.patch.dict(
@@ -55,13 +60,15 @@ def test_route_llm_engine_treats_unresolved_pool_env_as_default():
             "OPENAI_API_BASE": "http://llm-backend/v1",
             "LLM_QUEUE_ENABLED": "true",
             "LLM_QUEUE_VALKEY_URL": "redis://localhost:6379/0",
+            "LLM_QUEUE_FABRIC_GROUP_ID": "default",
             "LLM_QUEUE_POOL_ID": "$LLM_QUEUE_POOL_ID",
         },
     ):
         with mock.patch.object(annotator_util, "OpenAIEngine") as engine_cls:
             annotator_util.route_llm_engine("model-a", True)
 
-    assert engine_cls.call_args.kwargs["queue_pool_id"] == "default"
+    assert "queue_pool_id" not in engine_cls.call_args.kwargs
+    assert "queue_contract_version" not in engine_cls.call_args.kwargs
 
     annotator_util.clear_engine_cache()
 
@@ -77,6 +84,7 @@ def test_route_llm_engine_reuses_cache_for_equivalent_queue_url_aliases():
             "OPENAI_API_BASE": "http://llm-backend/v1",
             "LLM_QUEUE_ENABLED": "true",
             "LLM_QUEUE_URL": " redis://queue:6379/0 ",
+            "LLM_QUEUE_FABRIC_GROUP_ID": "default",
         },
         clear=True,
     ):
@@ -94,6 +102,7 @@ def test_route_llm_engine_reuses_cache_for_equivalent_queue_url_aliases():
                     "OPENAI_API_BASE": "http://llm-backend/v1",
                     "LLM_QUEUE_ENABLED": "true",
                     "LLM_QUEUE_VALKEY_URL": "redis://queue:6379/0",
+                    "LLM_QUEUE_FABRIC_GROUP_ID": "default",
                 },
                 clear=True,
             ):

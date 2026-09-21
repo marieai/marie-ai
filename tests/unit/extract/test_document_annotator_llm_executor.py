@@ -35,12 +35,12 @@ async def test_annotator_llm_returns_process_annotation_result():
 
 @pytest.mark.asyncio
 async def test_annotation_error_reports_batch_root_cause(monkeypatch, tmp_path):
+    captured_annotator_kwargs = {}
+
     class ContextWindowExceededError(Exception):
         pass
 
-    root_error = ContextWindowExceededError(
-        "maximum context length is 42768 tokens"
-    )
+    root_error = ContextWindowExceededError("maximum context length is 42768 tokens")
     batch_error = BatchExecutionError(
         request_id="request-1",
         failed_results=[BatchResult("request-1_task_4", None, root_error)],
@@ -48,8 +48,8 @@ async def test_annotation_error_reports_batch_root_cause(monkeypatch, tmp_path):
     )
 
     class FailingAnnotator:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            captured_annotator_kwargs.update(kwargs)
 
         async def aannotate(self, _document, _frames):
             raise batch_error
@@ -83,9 +83,7 @@ async def test_annotation_error_reports_batch_root_cause(monkeypatch, tmp_path):
             str(tmp_path / "metadata.json"),
         ),
     )
-    monkeypatch.setattr(
-        annotator_module, "load_json_file", lambda _path: {"ocr": {}}
-    )
+    monkeypatch.setattr(annotator_module, "load_json_file", lambda _path: {"ocr": {}})
     monkeypatch.setattr(
         annotator_module.MetaReader,
         "from_data",
@@ -103,11 +101,15 @@ async def test_annotation_error_reports_batch_root_cause(monkeypatch, tmp_path):
             "job_id": "job-1",
             "ref_id": "document",
             "ref_type": "lbxid",
-            "payload": {"op_params": {"key": "claims", "layout": "122418"}},
+            "payload": {
+                "pool_id": "document-small",
+                "op_params": {"key": "claims", "layout": "122418"},
+            },
         },
         FailingAnnotator,
     )
 
+    assert "pool_id" not in captured_annotator_kwargs
     assert response["status"] == "error"
     assert response["error"] == (str(batch_error),)
     assert response["error_details"] == {

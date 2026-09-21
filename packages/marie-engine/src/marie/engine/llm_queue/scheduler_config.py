@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
-from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
+from marie.engine.llm_queue.config import INTERNAL_LEGACY_POOL_ID
 from marie.engine.llm_queue.scheduler import DrrLaneConfig
 
 
@@ -79,17 +79,17 @@ def scheduler_config_from_mapping(
 def ensure_default_pool(
     config: LlmQueueSchedulerConfig,
     *,
-    default_pool_id: str = DEFAULT_LLM_QUEUE_POOL_ID,
+    default_pool_id: str = INTERNAL_LEGACY_POOL_ID,
 ) -> LlmQueueSchedulerConfig:
     ids = [lane.pool_id for lane in config.lanes]
     if len(ids) != len(set(ids)):
-        raise ValueError('Duplicate lane identity')
+        raise ValueError("Duplicate lane identity")
     if not config.is_drr:
         return config
     if any(
         lane.pool_id == default_pool_id and not lane.enabled for lane in config.lanes
     ):
-        raise ValueError('Disabled default lane requires an explicit routing policy')
+        raise ValueError("Disabled default lane requires an explicit routing policy")
     if any(lane.pool_id == default_pool_id and lane.enabled for lane in config.lanes):
         return config
     return LlmQueueSchedulerConfig(

@@ -2048,8 +2048,9 @@ class MarieServerGateway(CompositeServer):
 
     async def _start_gateway_background_runtimes(self) -> None:
         await self.llm_dispatch_runtime.start()
+        runtime_config = getattr(self.llm_dispatch_runtime, "config", None)
         if (
-            self.llm_dispatch_runtime.config.queue_contract_version == 'v3'
+            getattr(runtime_config, "queue_contract_version", None) == 'v3'
             and self.llm_dispatch_runtime._queue_client is not None
         ):
             self.job_scheduler.start_llm_routing_projection(

@@ -25,7 +25,10 @@ from marie.engine.exceptions import (
     MaxTokensExceededError,
     RepetitionError,
 )
-from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.config import (
+    LlmQueueProducerConfig,
+    LlmQueueRuntimeConfig,
+)
 from marie.engine.llm_queue.queue_io import ListQueueClient, StoreListQueueClient
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.openai_compat import execute_completion_call
@@ -83,16 +86,6 @@ def _is_pool_timeout(exc: BaseException) -> bool:
         return False
 
 
-def _resolve_effective_queue_pool_id(
-    fallback_pool_id: str, metadata: Optional[Dict[str, Any]]
-) -> str:
-    if isinstance(metadata, dict):
-        value = metadata.get("pool_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return fallback_pool_id
-
-
 def _should_retry(exc: BaseException) -> bool:
     """Return True if the exception is retryable.
 
@@ -146,11 +139,8 @@ class BatchProcessor:
         backend_address: Optional[str] = None,
         queue_enabled: Optional[bool] = None,
         queue_client: Optional[ListQueueClient] = None,
-        queue_pool_id: Optional[str] = None,
-        queue_producer_id: Optional[str] = None,
         queue_url: Optional[str] = None,
         queue_valkey_url: Optional[str] = None,
-        queue_contract_version: Optional[str] = None,
         queue_fabric_group_id: Optional[str] = None,
     ):
         self.client = client
@@ -196,22 +186,19 @@ class BatchProcessor:
         self._queued_executor = None
         self._queued_executor_lock = threading.Lock()
         self._queue_pid = os.getpid()
-        self._queue_config = LlmQueueConfig.from_env(
+        self._queue_config = LlmQueueProducerConfig.from_env(
             enabled=queue_enabled,
             queue_url=queue_url,
             valkey_url=queue_valkey_url,
-            pool_id=queue_pool_id,
-            producer_id=queue_producer_id,
-            queue_contract_version=queue_contract_version,
             fabric_group_id=queue_fabric_group_id,
         )
         self._queue_mode_logged = False
 
     @property
     def uses_v3_queue(self) -> bool:
-        return (
-            self._queue_config.enabled
-            and self._queue_config.queue_contract_version == 'v3'
+        return self._queue_config.enabled and not (
+            isinstance(self._queue_config, LlmQueueRuntimeConfig)
+            and self._queue_config.queue_contract_version == "v2"
         )
 
     def _log_queue_mode_once(self) -> None:
@@ -220,17 +207,14 @@ class BatchProcessor:
         self._queue_mode_logged = True
         if self._queue_config.enabled:
             self.logger.info(
-                "LLM dispatch queue enabled: pool=%s queue_configured=%s max_inline_payload_bytes=%s",
-                self._queue_config.pool_id,
+                "LLM dispatch queue enabled: queue_configured=%s",
                 bool(self._queue_config.queue_url),
-                self._queue_config.max_inline_payload_bytes,
             )
         else:
             env_enabled = os.getenv("LLM_QUEUE_ENABLED")
             self.logger.info(
-                "LLM dispatch queue disabled: env LLM_QUEUE_ENABLED=%r pool=%s",
+                "LLM dispatch queue disabled: env LLM_QUEUE_ENABLED=%r",
                 env_enabled,
-                self._queue_config.pool_id,
             )
 
     def _get_queue_client(self) -> ListQueueClient:
@@ -245,7 +229,10 @@ class BatchProcessor:
         return self._queue_client
 
     def _get_queued_executor(self):
-        if self._queue_config.queue_contract_version != 'v3':
+        if (
+            isinstance(self._queue_config, LlmQueueRuntimeConfig)
+            and self._queue_config.queue_contract_version == "v2"
+        ):
             if self._queued_executor is None:
                 from marie.engine.llm_queue.submitter import QueuedBatchExecutor
 
@@ -267,6 +254,8 @@ class BatchProcessor:
             return self._queued_executor
 
     def build_queue_dispatcher(self):
+        if not isinstance(self._queue_config, LlmQueueRuntimeConfig):
+            raise RuntimeError("LLM queue dispatchers are gateway-owned")
         from marie.engine.llm_queue.adapters.openai_compatible import (
             OpenAICompatibleExecutionAdapter,
         )
@@ -629,7 +618,7 @@ class BatchProcessor:
                 or were rejected by the circuit breaker.
             asyncio.TimeoutError: When the batch exceeds the configured timeout.
         """
-        queue_deadline = kwargs.get('queue_deadline')
+        queue_deadline = kwargs.get("queue_deadline")
         if self.uses_v3_queue:
             queue_deadline = queue_deadline or time.monotonic() + self.batch_timeout
         request_id = str(uuid.uuid4())
@@ -713,7 +702,7 @@ class BatchProcessor:
             on_result=on_result,
             metadata=metadata,
             queue_deadline=queue_deadline,
-            cancellation=kwargs.get('cancellation'),
+            cancellation=kwargs.get("cancellation"),
         )
 
     def batch_generate_calls(
@@ -762,18 +751,13 @@ class BatchProcessor:
         try:
             self._log_queue_mode_once()
             if self._queue_config.enabled:
-                effective_pool_id = _resolve_effective_queue_pool_id(
-                    self._queue_config.pool_id,
-                    metadata,
-                )
                 self.logger.info(
-                    "Submitting batch %s to LLM dispatch queue: pool=%s items=%s",
+                    "Submitting batch %s to LLM dispatch queue: items=%s",
                     request_id,
-                    effective_pool_id,
                     len(calls),
                 )
-                controls = {}
-                if self._queue_config.queue_contract_version == 'v3':
+                controls: dict[str, Any] = {}
+                if self.uses_v3_queue:
                     controls = dict(
                         queue_deadline=queue_deadline, cancellation=cancellation
                     )

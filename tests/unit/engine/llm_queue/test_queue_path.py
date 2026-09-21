@@ -26,6 +26,8 @@ from marie.engine.llm_queue.adapters.openai_compatible import (
 from marie.engine.llm_queue.config import (
     DEFAULT_MAX_INLINE_PAYLOAD_BYTES,
     LlmQueueConfig,
+    LlmQueueProducerConfig,
+    route_behavior,
 )
 from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
 from marie.engine.llm_queue.producer import V3Producer
@@ -59,8 +61,8 @@ from marie.engine.llm_queue.store import (
 from marie.engine.llm_queue.submitter import (
     QueuedBatchExecutor,
     _reply_to_batch_result,
-    _resolve_queue_pool_id,
 )
+from marie.engine.openai_engine import OpenAIEngine
 
 
 class _Logger:
@@ -549,7 +551,7 @@ def test_queued_batch_executor_demultiplexes_replies_from_same_producer():
     ]
 
 
-def test_queued_batch_executor_routes_request_to_metadata_pool():
+def test_legacy_executor_does_not_accept_metadata_pool_override():
     queue_client = InMemoryListQueueClient()
     executor = QueuedBatchExecutor(
         queue_client=queue_client,
@@ -558,17 +560,16 @@ def test_queued_batch_executor_routes_request_to_metadata_pool():
     )
 
     def worker():
-        request = queue_client.pop_request("document-small", timeout=1.0)
+        request = queue_client.pop_request("default", timeout=1.0)
         assert request is not None
-        assert request.pool_id == "document-small"
-        assert request.metadata == {"pool_id": "document-small"}
+        assert request.pool_id == "default"
         queue_client.push_reply(
             CompletionReplyEnvelope(
                 request_id=request.request_id,
                 producer_id=request.producer_id,
                 pool_id=request.pool_id,
                 status="ok",
-                completion=_completion_payload("resp:document-small"),
+                completion=_completion_payload("response"),
                 completed_at=time.time(),
             ),
             ttl_seconds=60,
@@ -576,24 +577,53 @@ def test_queued_batch_executor_routes_request_to_metadata_pool():
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-
     results = executor.execute(
-        calls=[_call([{"role": "user", "content": "small document"}])],
-        batch_request_id="batch-document-small",
+        calls=[_call([{"role": "user", "content": "document"}])],
+        batch_request_id="legacy-no-override",
         batch_timeout=2.0,
-        metadata={"pool_id": "document-small"},
+        metadata={"pool_id": "document-medium"},
     )
 
-    assert [result.response for result in results] == ["resp:document-small"]
-    assert queue_client.try_pop_request("default") is None
+    assert [result.response for result in results] == ["response"]
+    assert queue_client.try_pop_request("document-medium") is None
 
 
-def test_resolve_queue_pool_id_accepts_metadata_pool_id():
-    assert (
-        _resolve_queue_pool_id("default", {"pool_id": "document-medium"})
-        == "document-medium"
-    )
-    assert _resolve_queue_pool_id("default", {"pool_id": " "}) == "default"
+def test_producer_config_ignores_removed_pool_and_version_environment(monkeypatch):
+    monkeypatch.setenv("LLM_QUEUE_POOL_ID", "document-small")
+    monkeypatch.setenv("LLM_QUEUE_CONTRACT_VERSION", "v2")
+
+    config = LlmQueueProducerConfig.from_env(enabled=True)
+
+    assert not hasattr(config, "pool_id")
+    assert not hasattr(config, "queue_contract_version")
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("off", "legacy-read-only"),
+        ("shadow", "compare-without-binding"),
+        ("enforce", "manifest-required"),
+    ],
+)
+def test_admission_mode_has_explicit_behavior(mode, expected):
+    assert route_behavior(mode) == expected
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "pool_id",
+        "queue_pool_id",
+        "llm_queue_pool_id",
+        "queue_contract_version",
+        "llm_queue_contract_version",
+        "queue_producer_id",
+    ],
+)
+def test_openai_engine_rejects_legacy_caller_queue_selectors(selector):
+    with pytest.raises(ValueError, match="caller_pool_forbidden"):
+        OpenAIEngine(model_name="mock", **{selector: "caller-value"})
 
 
 def test_queued_batch_executor_skips_malformed_reply_and_keeps_waiting():

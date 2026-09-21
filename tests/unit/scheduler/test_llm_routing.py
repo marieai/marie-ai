@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 from marie.engine.llm_queue.admission_policy import AdmissionPolicy
@@ -11,6 +12,7 @@ from marie.query_planner.base import (
     QueryType,
 )
 from marie.scheduler.llm_routing import (
+    AdmissionRoutingMetrics,
     RoutingSubmissionError,
     TrustedRoutingContext,
     normalize_routing_facts,
@@ -22,6 +24,32 @@ from marie.scheduler.llm_routing import (
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.state import WorkState
 from marie.storage.submission.types import SubmissionDocument
+
+
+def test_shadow_comparison_metric_contains_only_bounded_route_labels() -> None:
+    recorded: list[tuple[int, dict[str, str]]] = []
+    metrics = object.__new__(AdmissionRoutingMetrics)
+    metrics._shadow_comparisons = SimpleNamespace(
+        add=lambda value, *, attributes: recorded.append((value, attributes))
+    )
+
+    metrics.record_shadow_comparison(
+        fabric_group_id="default",
+        automatic_pool_id="document-small",
+        legacy_pool_id="default",
+    )
+
+    assert recorded == [
+        (
+            1,
+            {
+                "fabric_group_id": "default",
+                "result": "disagreement",
+                "automatic_pool_id": "document-small",
+                "legacy_pool_id": "default",
+            },
+        )
+    ]
 
 
 def _document(*, page_count: int | None = 20, storage_key: str = 's3://docs/a.tif'):

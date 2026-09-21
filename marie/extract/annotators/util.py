@@ -24,8 +24,7 @@ from marie.engine.completion_contract import CompletionCallParams, RequestContex
 from marie.engine.engine_utils import check_image_preparation_budget, smart_resize
 from marie.engine.llm_ops import LLMCall
 from marie.engine.llm_queue.config import (
-    DEFAULT_LLM_QUEUE_POOL_ID,
-    LlmQueueConfig,
+    LlmQueueProducerConfig,
     resolve_fabric_id,
 )
 from marie.engine.multimodal_ops import MultimodalLLMCall
@@ -150,17 +149,6 @@ _engine_cache_pid = os.getpid()
 _engine_lock = Lock()
 
 
-def _resolve_queue_pool_id_env() -> str:
-    pool_id = os.environ.get("LLM_QUEUE_POOL_ID")
-    if not pool_id:
-        return DEFAULT_LLM_QUEUE_POOL_ID
-
-    pool_id = pool_id.strip()
-    if not pool_id or pool_id.startswith("$"):
-        return DEFAULT_LLM_QUEUE_POOL_ID
-    return pool_id
-
-
 def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
     """
     Route the LLM call to the appropriate engine based on the model name.
@@ -176,21 +164,19 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
         _engine_cache = {}
         _engine_lock = Lock()
     queue_enabled = to_bool(os.environ.get("LLM_QUEUE_ENABLED"), False)
-    queue_pool_id = _resolve_queue_pool_id_env()
-    queue_config = LlmQueueConfig.from_env(
+    queue_config = LlmQueueProducerConfig.from_env(
         enabled=queue_enabled,
-        pool_id=queue_pool_id,
     )
     queue_url = queue_config.queue_url
     recovery_identity = ()
     fabric = queue_config.fabric_group_id
-    if queue_enabled and queue_config.queue_contract_version == 'v3':
+    if queue_enabled:
         fabric = resolve_fabric_id(fabric)
         recovery_identity = (
             fabric,
             queue_config.producer_ttl_seconds,
             queue_config.producer_refresh_interval_seconds,
-            queue_config.max_inline_payload_bytes,
+            queue_config.max_buffered_requests,
             float(os.getenv('LLM_BATCH_TIMEOUT_S', '900')),
         )
     cache_key = (
@@ -198,20 +184,17 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
         is_multimodal,
         queue_enabled,
         queue_url,
-        queue_pool_id,
-        queue_config.queue_contract_version,
         recovery_identity,
     )
 
     with _engine_lock:
         if cache_key in _engine_cache:
             logger.info(
-                "Reusing engine model=%s multimodal=%s queue_enabled=%s queue_pool=%s "
+                "Reusing engine model=%s multimodal=%s queue_enabled=%s "
                 "queue_configured=%s",
                 model_name,
                 is_multimodal,
                 queue_enabled,
-                queue_pool_id,
                 bool(queue_url),
             )
             return _engine_cache[cache_key]
@@ -230,18 +213,15 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
             cache=False,
             queue_enabled=queue_enabled,
             queue_url=queue_url,
-            queue_pool_id=queue_pool_id,
-            queue_contract_version=queue_config.queue_contract_version,
             queue_fabric_group_id=fabric,
         )
 
         _engine_cache[cache_key] = engine
         logger.info(
-            "Engine created model=%s multimodal=%s queue_enabled=%s queue_pool=%s queue_configured=%s",
+            "Engine created model=%s multimodal=%s queue_enabled=%s queue_configured=%s",
             model_name,
             is_multimodal,
             queue_enabled,
-            queue_pool_id,
             bool(queue_url),
         )
         return engine

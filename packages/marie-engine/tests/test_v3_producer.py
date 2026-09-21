@@ -20,8 +20,6 @@ def processor_for(store, **kwargs):
         logger=logging.getLogger('producer-test'),
         queue_enabled=True,
         queue_url=store.test_url,
-        queue_pool_id='pool',
-        queue_contract_version='v3',
         queue_fabric_group_id=store.keys.fabric_id,
         batch_timeout=kwargs.pop('batch_timeout', 5),
         **kwargs,
@@ -227,8 +225,6 @@ def engine_for(store, monkeypatch, *, multimodal=False, timeout=5):
         base_url='http://127.0.0.1:1/v1',
         queue_enabled=True,
         queue_url=store.test_url,
-        queue_pool_id='pool',
-        queue_contract_version='v3',
         queue_fabric_group_id=store.keys.fabric_id,
         batch_timeout=timeout,
     )

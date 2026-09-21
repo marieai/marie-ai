@@ -90,6 +90,18 @@ class OpenAIEngine(EngineLM):
         batch_timeout: Optional[float] = None,
         **kwargs,
     ):
+        if any(
+            kwargs.get(name) is not None
+            for name in (
+                "pool_id",
+                "queue_pool_id",
+                "llm_queue_pool_id",
+                "queue_contract_version",
+                "llm_queue_contract_version",
+                "queue_producer_id",
+            )
+        ):
+            raise ValueError("caller_pool_forbidden")
         self.validate()
         super().__init__(
             model_string=model_name,
@@ -117,11 +129,8 @@ class OpenAIEngine(EngineLM):
             backend_address=backend_address,
             queue_enabled=kwargs.get("queue_enabled"),
             queue_client=kwargs.get("queue_client"),
-            queue_pool_id=kwargs.get("queue_pool_id"),
-            queue_producer_id=kwargs.get("queue_producer_id"),
             queue_url=kwargs.get("queue_url"),
             queue_valkey_url=kwargs.get("queue_valkey_url"),
-            queue_contract_version=kwargs.get("queue_contract_version"),
             queue_fabric_group_id=kwargs.get("queue_fabric_group_id"),
         )
 
@@ -223,7 +232,7 @@ class OpenAIEngine(EngineLM):
     ):
         if self.batch_processor.uses_v3_queue:
             kwargs.setdefault(
-                'queue_deadline', time.monotonic() + self.batch_processor.batch_timeout
+                "queue_deadline", time.monotonic() + self.batch_processor.batch_timeout
             )
         return self.generate(
             content,
@@ -295,19 +304,19 @@ class OpenAIEngine(EngineLM):
 
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
-        queue_deadline = kwargs.pop('queue_deadline', None)
-        cancellation = kwargs.pop('cancellation', None)
+        queue_deadline = kwargs.pop("queue_deadline", None)
+        cancellation = kwargs.pop("cancellation", None)
         if self.batch_processor.uses_v3_queue:
             from marie.engine.llm_queue.producer import PreparedCalls
 
             queue_deadline = (
                 queue_deadline or time.monotonic() + self.batch_processor.batch_timeout
             )
-            contexts = kwargs.get('request_contexts')
+            contexts = kwargs.get("request_contexts")
             if contexts is not None and len(contexts) != len(batch_content):
                 contexts = None
             item_kwargs = {
-                key: value for key, value in kwargs.items() if key != 'request_contexts'
+                key: value for key, value in kwargs.items() if key != "request_contexts"
             }
 
             if self.is_multimodal:
@@ -334,7 +343,7 @@ class OpenAIEngine(EngineLM):
                     model=self.model_string,
                     messages=[],
                     default_completion_params=self.batch_processor.default_completion_params,
-                    completion_params=kwargs.get('completion_params'),
+                    completion_params=kwargs.get("completion_params"),
                     guided_json=guided_json,
                     stream=False,
                 ),

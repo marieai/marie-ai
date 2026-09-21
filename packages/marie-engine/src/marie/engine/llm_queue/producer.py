@@ -19,7 +19,11 @@ from marie.engine.completion_contract import (
     require_terminal_completion,
 )
 from marie.engine.exceptions import MaxTokensExceededError
-from marie.engine.llm_queue.config import LlmQueueConfig, resolve_fabric_id
+from marie.engine.llm_queue.config import (
+    LlmQueueProducerConfig,
+    LlmQueueRuntimeConfig,
+    resolve_fabric_id,
+)
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.llm_queue.scheduler import prepared_cost_units
 from marie.engine.llm_queue.store import (
@@ -73,7 +77,9 @@ class PreparedCalls:
 
 
 class V3Producer:
-    def __init__(self, *, config: LlmQueueConfig) -> None:
+    def __init__(
+        self, *, config: LlmQueueProducerConfig | LlmQueueRuntimeConfig
+    ) -> None:
         self.config = config
         self.fabric_id = resolve_fabric_id(config.fabric_group_id)
         if not config.queue_url:
@@ -88,11 +94,14 @@ class V3Producer:
         self.producer_id: str | None = None
         self._pending: dict[str, _Pending] = {}
         self._preparing = 0
-        if (
-            type(config.max_buffered_requests_per_pool) is not int
-            or config.max_buffered_requests_per_pool < 1
-        ):
+        max_buffered_requests = getattr(
+            config,
+            "max_buffered_requests",
+            getattr(config, "max_buffered_requests_per_pool", None),
+        )
+        if type(max_buffered_requests) is not int or max_buffered_requests < 1:
             raise ValueError("Producer admission window must be positive")
+        self._max_buffered_requests = max_buffered_requests
         self._poll_ids: deque[str] = deque()
         self._threads: list[threading.Thread] = []
         self._lease_ms = int(config.producer_ttl_seconds * 1000)
@@ -331,7 +340,7 @@ class V3Producer:
                             with self._condition:
                                 if (
                                     len(self._pending) + self._preparing
-                                    >= self.config.max_buffered_requests_per_pool
+                                    >= self._max_buffered_requests
                                 ):
                                     self._condition.wait(timeout=min(0.02, remaining))
                                     continue

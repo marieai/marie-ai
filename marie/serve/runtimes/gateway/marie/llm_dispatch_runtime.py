@@ -6,7 +6,7 @@ from dataclasses import replace
 from functools import partial
 from typing import Any, Callable, Optional
 
-from marie.engine.llm_queue.config import LlmQueueConfig, resolve_fabric_id
+from marie.engine.llm_queue.config import LlmQueueRuntimeConfig, resolve_fabric_id
 from marie.engine.llm_queue.queue_io import StoreListQueueClient
 from marie.engine.llm_queue.scheduler import DrrLaneConfig
 from marie.engine.llm_queue.scheduler_config import (
@@ -36,7 +36,7 @@ class GatewayLlmDispatchRuntime:
         *,
         logger: Optional[MarieLogger] = None,
         config: Optional[dict[str, Any]] = None,
-        queue_config: Optional[LlmQueueConfig] = None,
+        queue_config: Optional[LlmQueueRuntimeConfig] = None,
         queue_client_factory: Optional[Callable[[str], Any]] = None,
         openai_client_factory: Optional[Callable[[str, Optional[str]], Any]] = None,
         dispatcher_factory: Optional[Callable[..., Any]] = None,
@@ -45,7 +45,7 @@ class GatewayLlmDispatchRuntime:
     ) -> None:
         self.logger = logger or MarieLogger("GatewayLlmDispatchRuntime")
         self.runtime_config = config or {}
-        self.config = queue_config or LlmQueueConfig.from_env(
+        self.config = queue_config or LlmQueueRuntimeConfig.from_env(
             queue_contract_version=self.runtime_config.get('queue_contract_version')
         )
         if self.config.queue_contract_version == 'v3':
@@ -487,7 +487,7 @@ def _format_lane_route(lane: DrrLaneConfig) -> str:
 
 
 def _scheduler_fabric_group_id(
-    queue_config: LlmQueueConfig, runtime_config: dict[str, Any]
+    queue_config: LlmQueueRuntimeConfig, runtime_config: dict[str, Any]
 ) -> str:
     scheduler_config = runtime_config.get("scheduler")
     if isinstance(scheduler_config, dict) and scheduler_config.get("fabric_group_id"):

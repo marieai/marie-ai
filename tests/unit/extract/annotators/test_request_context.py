@@ -71,7 +71,6 @@ def test_llm_annotator_separates_span_metadata_from_request_context():
     annotator.job_id = "job-runtime"
     annotator.dag_id = "dag-1"
     annotator.node_task_id = "node-1"
-    annotator.llm_pool_id = "document-small"
     annotator.ref_id = "PID_2_10832_0_255720425.tif"
     annotator.ref_type = "stress"
     annotator.requested_pages = [0]

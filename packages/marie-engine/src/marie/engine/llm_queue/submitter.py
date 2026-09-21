@@ -14,7 +14,7 @@ from marie.engine.completion_contract import (
     require_terminal_completion,
 )
 from marie.engine.exceptions import MaxTokensExceededError
-from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
 from marie.engine.llm_queue.queue_io import ListQueueClient
 from marie.engine.llm_queue.replies import ProducerSession, ReplyWaiter
 from marie.engine.llm_queue.result_types import BatchResult
@@ -26,7 +26,7 @@ class QueuedBatchExecutor:
         self,
         *,
         queue_client: ListQueueClient,
-        config: LlmQueueConfig,
+        config: LlmQueueRuntimeConfig,
         logger,
     ):
         self.queue_client = queue_client
@@ -58,7 +58,7 @@ class QueuedBatchExecutor:
         ordered_ids: List[str] = []
         positions: Dict[str, int] = {}
         requests: List[QueuedCompletionEnvelope] = []
-        pool_id = _resolve_queue_pool_id(self.config.pool_id, metadata)
+        pool_id = self.config.pool_id
 
         try:
             for index, call in enumerate(calls):
@@ -167,23 +167,6 @@ def _current_trace_headers() -> Tuple[Optional[str], Optional[str]]:
     if span_context.trace_state:
         trace_state = str(span_context.trace_state)
     return traceparent, trace_state
-
-
-def _resolve_queue_pool_id(
-    fallback_pool_id: str,
-    metadata: Optional[Dict[str, Any]],
-) -> str:
-    if not isinstance(metadata, dict):
-        return fallback_pool_id
-
-    return _non_empty_str(metadata.get("pool_id")) or fallback_pool_id
-
-
-def _non_empty_str(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
 
 
 def _reply_to_batch_result(reply: CompletionReplyEnvelope) -> BatchResult:

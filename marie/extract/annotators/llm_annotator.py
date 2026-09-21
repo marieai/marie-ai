@@ -51,13 +51,6 @@ def sanitize_path(path: str) -> Optional[str]:
     return os.path.basename(path) if path else None
 
 
-def _non_empty_str(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
-
-
 def _requested_pages_tuple(value: Any) -> tuple[int, ...] | None:
     if value is None:
         return None
@@ -213,9 +206,6 @@ class LLMAnnotator(DocumentAnnotator):
         self.job_id = kwargs.get("job_id")
         self.dag_id = kwargs.get("dag_id")
         self.node_task_id = kwargs.get("node_task_id")
-        self.llm_pool_id = _non_empty_str(kwargs.get("pool_id")) or _non_empty_str(
-            self.model_config.get("pool_id")
-        )
         self.ref_id = kwargs.get("ref_id")
         self.ref_type = kwargs.get("ref_type")
         self.requested_pages = kwargs.get("requested_pages")

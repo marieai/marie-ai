@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
+from marie.engine.llm_queue.config import INTERNAL_LEGACY_POOL_ID
 from marie.engine.llm_queue.scheduler_config import (
     scheduler_config_from_mapping,
 )
@@ -49,7 +49,7 @@ def test_drr_scheduler_config_adds_default_catch_all_lane():
 
     assert [lane.pool_id for lane in config.lanes] == [
         "interactive",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
     assert config.lanes[-1].display_name == "Default"
     assert config.lanes[-1].enabled is True
