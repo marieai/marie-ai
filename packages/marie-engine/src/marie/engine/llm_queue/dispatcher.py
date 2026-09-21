@@ -172,7 +172,7 @@ class QueuedBatchDispatcher:
         queue_depth_error = None
         try:
             queue_depth = self.queue_client.request_queue_depth(self.config.pool_id)
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception:  # pragma: no cover - defensive
             queue_depth_error = 'store_unavailable'
 
         with self._state_lock:

@@ -31,11 +31,12 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
@@ -618,7 +619,6 @@ class JobRun:
     fault_profile: str
     stress_run_id: Optional[str] = None
     required_executors: List[str] = field(default_factory=list)
-    llm_pool_id: Optional[str] = None
     mock_process_time: Optional[float] = None
     mock_failure_rate: Optional[float] = None
     mock_failure_mode: Optional[str] = None
@@ -905,6 +905,153 @@ def _build_debug_snapshot(
     )
 
 
+def _routing_qualification(
+    samples: Sequence[DebugSnapshot],
+    *,
+    job_ids: set[str],
+    requested_source: str,
+) -> Dict[str, Any]:
+    snapshots = [
+        sample.llm_dispatch
+        for sample in samples
+        if sample.ok and isinstance(sample.llm_dispatch, dict)
+    ]
+    if not snapshots:
+        return {
+            "available": False,
+            "source": requested_source,
+            "policy": None,
+            "projection": None,
+            "routes": [],
+            "drr": None,
+            "charges": [],
+            "endpoint_groups": [],
+        }
+
+    first, last = snapshots[0], snapshots[-1]
+    routes_by_work_unit: Dict[str, Dict[str, Any]] = {}
+    charges_by_attempt: Dict[str, Dict[str, Any]] = {}
+    max_projection_pending = 0
+    for snapshot in snapshots:
+        routing = snapshot.get("routing")
+        if isinstance(routing, dict):
+            pending = routing.get("projection_pending_count")
+            if type(pending) is int:
+                max_projection_pending = max(max_projection_pending, pending)
+        for route in snapshot.get("recent_routes") or []:
+            if not isinstance(route, dict) or route.get("job_id") not in job_ids:
+                continue
+            work_unit_id = route.get("work_unit_id")
+            if isinstance(work_unit_id, str):
+                routes_by_work_unit[work_unit_id] = {
+                    "job_id": route.get("job_id"),
+                    "work_unit_id": work_unit_id,
+                    "routing_source": route.get("routing_source"),
+                    "routing_actor": route.get("routing_actor"),
+                    "routing_reason": route.get("routing_reason"),
+                    "policy_generation": route.get("policy_generation"),
+                    "policy_digest": route.get("policy_digest"),
+                    "rule_digest": route.get("rule_digest"),
+                    "effective_page_count": route.get("effective_page_count"),
+                    "observed_pool_id": route.get("pool_id"),
+                    "endpoint_group_id": route.get("endpoint_group_id"),
+                    "endpoint_revision": route.get("endpoint_revision"),
+                    "projection_state": route.get("projection_state"),
+                }
+        for request in snapshot.get("live_requests") or []:
+            if not isinstance(request, dict):
+                continue
+            attempt_id = request.get("attempt_id") or request.get("request_id")
+            if not isinstance(attempt_id, str):
+                continue
+            if not any(
+                request.get(field) not in (None, "", 0)
+                for field in (
+                    "charge_sequence",
+                    "charged_cost",
+                    "refund_state",
+                    "replica_id",
+                )
+            ):
+                continue
+            charges_by_attempt[attempt_id] = {
+                "attempt_id": attempt_id,
+                "pool_id": request.get("pool_id"),
+                "charge_sequence": request.get("charge_sequence"),
+                "charged_cost": request.get("charged_cost"),
+                "refund_state": request.get("refund_state"),
+                "endpoint_group_id": request.get("endpoint_group_id"),
+                "replica_id": request.get("replica_id"),
+            }
+
+    def pool_totals(snapshot: Dict[str, Any]) -> Dict[str, Dict[str, int]]:
+        result: Dict[str, Dict[str, int]] = {}
+        for pool in snapshot.get("pools") or []:
+            if not isinstance(pool, dict) or not isinstance(pool.get("pool_id"), str):
+                continue
+            result[pool["pool_id"]] = {
+                field: int(pool.get(field) or 0)
+                for field in (
+                    "accepted",
+                    "completed",
+                    "charged_cost",
+                    "refunded_cost",
+                    "committed_charge",
+                )
+            }
+        return result
+
+    before = pool_totals(first)
+    after = pool_totals(last)
+    pool_ids = sorted(before.keys() | after.keys())
+    policy = last.get("policy") if isinstance(last.get("policy"), dict) else {}
+    routing = last.get("routing") if isinstance(last.get("routing"), dict) else {}
+    projection_at_end = routing.get("projection_pending_count")
+    routes = sorted(
+        routes_by_work_unit.values(), key=lambda route: route["work_unit_id"]
+    )
+    return {
+        "available": True,
+        "source": requested_source,
+        "policy": {
+            "admission_mode": policy.get("admission_mode"),
+            "desired_generation": policy.get("desired_generation"),
+            "desired_digest": policy.get("desired_digest"),
+            "observed_generation": policy.get("observed_generation"),
+            "observed_digest": policy.get("observed_digest"),
+            "synchronized": policy.get("synchronized"),
+        },
+        "projection": {
+            "pending_at_end": projection_at_end,
+            "max_pending_observed": max_projection_pending,
+            "current_run_projected": bool(routes)
+            and all(route["projection_state"] == "projected" for route in routes),
+        },
+        "routes": routes,
+        "routes_complete": bool(routes)
+        and {route["job_id"] for route in routes} == job_ids
+        and not bool(last.get("recent_routes_truncated")),
+        "matched": routing.get("matched"),
+        "drr": {
+            pool_id: {
+                "before": before.get(pool_id, {}),
+                "after": after.get(pool_id, {}),
+                "delta": {
+                    field: after.get(pool_id, {}).get(field, 0)
+                    - before.get(pool_id, {}).get(field, 0)
+                    for field in after.get(pool_id, {}).keys()
+                    | before.get(pool_id, {}).keys()
+                },
+            }
+            for pool_id in pool_ids
+        },
+        "charges": sorted(
+            charges_by_attempt.values(), key=lambda charge: charge["attempt_id"]
+        ),
+        "endpoint_groups": last.get("endpoint_groups") or [],
+    }
+
+
 class SchedulerEventConsumer:
     def __init__(
         self,
@@ -1053,6 +1200,7 @@ class GatewayE2EStresser:
         metadata_template: Optional[Dict[str, Any]],
         template_job_name: Optional[str],
         fault_profile: str,
+        fabric_group_id: str = "default",
         aimock_admin_url: Optional[str] = None,
         soft_sla_seconds: Optional[float] = None,
         hard_sla_seconds: Optional[float] = None,
@@ -1065,8 +1213,9 @@ class GatewayE2EStresser:
         ref_type: Optional[str] = None,
         policy: str = "allow_all",
         project_id: Optional[str] = None,
-        llm_pool_id: Optional[str] = None,
-        llm_pool_cycle: Optional[List[str]] = None,
+        routing_override_pool_id: Optional[str] = None,
+        routing_override_reason: Optional[str] = None,
+        routing_admin_token: Optional[str] = None,
         purge_annotators: Optional[List[str]] = None,
         mock_process_time: Optional[float] = None,
         mock_failure_rate: Optional[float] = None,
@@ -1130,6 +1279,7 @@ class GatewayE2EStresser:
         self.queue_config = queue_config
         self.metadata_template = metadata_template or {}
         self.fault_profile = fault_profile
+        self.fabric_group_id = fabric_group_id.strip() or "default"
         self.aimock_admin_url = (
             aimock_admin_url.rstrip("/") if aimock_admin_url else None
         )
@@ -1144,10 +1294,13 @@ class GatewayE2EStresser:
         self.ref_type = ref_type or self.queue_name
         self.policy = policy
         self.project_id = project_id or api_key
-        self.llm_pool_id = llm_pool_id.strip() if llm_pool_id else None
-        self.llm_pool_cycle = [
-            item.strip() for item in llm_pool_cycle or [] if item.strip()
-        ]
+        self.routing_override_pool_id = (
+            routing_override_pool_id.strip() if routing_override_pool_id else None
+        )
+        self.routing_override_reason = (
+            routing_override_reason.strip() if routing_override_reason else None
+        )
+        self.routing_admin_token = routing_admin_token
         self.purge_annotators = []
         seen_purge_annotators: set[str] = set()
         for item in purge_annotators or []:
@@ -1244,12 +1397,17 @@ class GatewayE2EStresser:
             )
         if self.force_failure_every is not None and self.force_failure_every <= 0:
             raise ValueError("--force-failure-every must be greater than zero")
-        if self.llm_pool_id and self.llm_pool_cycle:
+        override_values = (
+            self.routing_override_pool_id,
+            self.routing_override_reason,
+            self.routing_admin_token,
+        )
+        if any(override_values) and not all(override_values):
             raise ValueError(
-                "--llm-pool-id and --llm-pool-cycle are mutually exclusive"
+                "Routing override requires a pool ID, reason, and routing-admin token"
             )
-        if llm_pool_cycle is not None and not self.llm_pool_cycle:
-            raise ValueError("--llm-pool-cycle must contain at least one pool ID")
+        if self.routing_override_pool_id and self.protocol != "http":
+            raise ValueError("Routing override requires the HTTP protocol")
         if self.preflight_deadline <= 0:
             raise ValueError("--preflight-deadline must be greater than zero")
         if self.preflight_interval <= 0:
@@ -1537,7 +1695,7 @@ class GatewayE2EStresser:
                 "enabled": self.debug_sample_interval > 0,
                 "interval_seconds": self.debug_sample_interval,
                 "endpoint": (
-                    f"http://{self.gateway_host}:{self.http_port}/api/debug"
+                    f"http://{self.gateway_host}:{self.http_port}{self._debug_path()}"
                     if self.http_port is not None
                     else None
                 ),
@@ -1688,6 +1846,29 @@ class GatewayE2EStresser:
             },
         }
 
+    def _operator_override_request(
+        self, payload: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], str, str]:
+        if not (
+            self.routing_override_pool_id
+            and self.routing_override_reason
+            and self.routing_admin_token
+        ):
+            raise ValueError("Incomplete routing override configuration")
+        invoke_action = payload.get("parameters", {}).get("invoke_action")
+        if not isinstance(invoke_action, dict):
+            raise ValueError("Routing override requires an invoke_action submission")
+        return (
+            {
+                "pool_id": self.routing_override_pool_id,
+                "reason": self.routing_override_reason,
+                "submission": invoke_action,
+            },
+            "/api/llm-dispatch/routing/override?"
+            + urlencode({"fabric_group_id": self.fabric_group_id}),
+            self.routing_admin_token,
+        )
+
     def build_dry_run_plan(self) -> Dict[str, Any]:
         self._prepare_storage_env()
         generated_at = _now()
@@ -1706,13 +1887,19 @@ class GatewayE2EStresser:
                 "endpoint": self.endpoint,
             }
             if self.protocol == "http":
+                submit_path = self.endpoint
+                bearer_token = self.api_key
+                if self.routing_override_pool_id:
+                    request_payload, submit_path, bearer_token = (
+                        self._operator_override_request(request_payload)
+                    )
                 transport["url"] = (
-                    f"http://{self.gateway_host}:{self.http_port}{self.endpoint}"
+                    f"http://{self.gateway_host}:{self.http_port}{submit_path}"
                 )
                 transport["headers"] = {
                     "Content-Type": "application/json",
                     "Accept": "application/json",
-                    "Authorization": f"Bearer {self.api_key}",
+                    "Authorization": f"Bearer {bearer_token}",
                 }
             else:
                 transport["gateway_host"] = self.gateway_host
@@ -1740,7 +1927,11 @@ class GatewayE2EStresser:
                     "planner": run.planner,
                     "job_name": run.job_name,
                     "fault_profile": run.fault_profile,
-                    "llm_pool_id": run.llm_pool_id,
+                    "routing_source": (
+                        "operator-override"
+                        if self.routing_override_pool_id
+                        else "automatic"
+                    ),
                     "mock_process_time": run.mock_process_time,
                     "mock_failure_rate": run.mock_failure_rate,
                     "mock_failure_mode": run.mock_failure_mode,
@@ -1750,9 +1941,15 @@ class GatewayE2EStresser:
                     "hard_sla_offset_seconds": run.hard_sla_offset_seconds,
                     "metadata": _redact_secret_value(metadata, self.api_key),
                     "request_payload": _redact_secret_value(
-                        request_payload, self.api_key
+                        _redact_secret_value(
+                            request_payload, self.routing_admin_token or ""
+                        ),
+                        self.api_key,
                     ),
-                    "transport": _redact_secret_value(transport, self.api_key),
+                    "transport": _redact_secret_value(
+                        _redact_secret_value(transport, self.routing_admin_token or ""),
+                        self.api_key,
+                    ),
                 }
             )
 
@@ -1777,8 +1974,15 @@ class GatewayE2EStresser:
             "required_executors": list(self.required_executors),
             "preflight_enabled": self.preflight_enabled,
             "fault_profile": self.fault_profile,
-            "llm_pool_id": self.llm_pool_id,
-            "llm_pool_cycle": list(self.llm_pool_cycle),
+            "routing": {
+                "source": (
+                    "operator-override"
+                    if self.routing_override_pool_id
+                    else "automatic"
+                ),
+                "override_pool_id": self.routing_override_pool_id,
+                "override_reason": self.routing_override_reason,
+            },
             "mock_failure_rate": self.mock_failure_rate,
             "mock_failure_mode": self.mock_failure_mode,
             "force_failure_every": self.force_failure_every,
@@ -1810,6 +2014,9 @@ class GatewayE2EStresser:
         with self._state_lock:
             self._debug_samples.append(snapshot)
 
+    def _debug_path(self) -> str:
+        return f"/api/debug?{urlencode({'fabric_group_id': self.fabric_group_id})}"
+
     async def _capture_debug_snapshot(self, stage: str) -> None:
         if self.http_port is None:
             self._append_debug_snapshot(
@@ -1827,7 +2034,7 @@ class GatewayE2EStresser:
             owns_session = True
 
         try:
-            url = f"http://{self.gateway_host}:{self.http_port}/api/debug"
+            url = f"http://{self.gateway_host}:{self.http_port}{self._debug_path()}"
             async with session.get(
                 url,
                 headers={
@@ -1991,7 +2198,7 @@ class GatewayE2EStresser:
             }
             try:
                 debug_status, debug_payload = await self._fetch_gateway_json(
-                    "/api/debug"
+                    self._debug_path()
                 )
                 attempt["debug"] = {
                     "status_code": debug_status,
@@ -2373,14 +2580,8 @@ class GatewayE2EStresser:
             fault_profile=self.fault_profile,
             stress_run_id=self.run_id,
             required_executors=list(self.required_executors),
-            llm_pool_id=self._resolve_llm_pool_id(job_index),
             mock_process_time=self.mock_process_time,
         )
-
-    def _resolve_llm_pool_id(self, job_index: int) -> Optional[str]:
-        if self.llm_pool_cycle:
-            return self.llm_pool_cycle[job_index % len(self.llm_pool_cycle)]
-        return self.llm_pool_id
 
     def _resolve_sla_offsets(
         self, run: JobRun
@@ -2464,9 +2665,6 @@ class GatewayE2EStresser:
         if not isinstance(metadata, dict):
             raise ValueError("Rendered metadata template must be a JSON object")
 
-        if run.llm_pool_id:
-            metadata["pool_id"] = run.llm_pool_id
-
         _inject_purge_annotators_feature(metadata, self.purge_annotators)
         metadata["planner"] = self.planner
         metadata["project_id"] = self.project_id
@@ -2544,13 +2742,19 @@ class GatewayE2EStresser:
     async def _submit_http(self, run: JobRun, metadata: Dict[str, Any]) -> SubmitResult:
         start_time = _now()
         payload = self._build_submit_request(run, metadata)
+        submit_path = self.endpoint
+        bearer_token = self.api_key
+        if self.routing_override_pool_id:
+            payload, submit_path, bearer_token = self._operator_override_request(
+                payload
+            )
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {bearer_token}",
         }
         timeout = aiohttp.ClientTimeout(total=self.timeout)
-        url = f"http://{self.gateway_host}:{self.http_port}{self.endpoint}"
+        url = f"http://{self.gateway_host}:{self.http_port}{submit_path}"
 
         try:
             assert self._http_session is not None
@@ -2576,11 +2780,11 @@ class GatewayE2EStresser:
                         error_message=response_text[:200],
                     )
 
-                parameters = (
-                    response_json.get("parameters")
-                    if isinstance(response_json, dict)
-                    else None
-                )
+                parameters = None
+                if isinstance(response_json, dict):
+                    parameters = response_json.get(
+                        "result" if self.routing_override_pool_id else "parameters"
+                    )
                 if not isinstance(parameters, dict):
                     return SubmitResult(
                         request_id=run.request_id,
@@ -3255,10 +3459,10 @@ class GatewayE2EStresser:
                 f"mode={self.mock_failure_mode} "
                 f"force_every={self.force_failure_every if self.force_failure_every is not None else 'none'}"
             )
-        if self.llm_pool_id:
-            print(f"LLM dispatch pool: {self.llm_pool_id}")
-        if self.llm_pool_cycle:
-            print(f"LLM dispatch pool cycle: {', '.join(self.llm_pool_cycle)}")
+        print(
+            "LLM routing source: "
+            + ("operator override" if self.routing_override_pool_id else "automatic")
+        )
         print(f"Jobs submitted: {m.submitted_jobs}")
         print(f"Completed: {m.completed_jobs}")
         print(f"Failed: {m.failed_jobs}")
@@ -3408,6 +3612,13 @@ class GatewayE2EStresser:
         )
         open_jobs = sum(run.terminal_status is None for run in runs)
         reliability_errors = self._evaluate_reliability_verification_errors(runs)
+        routing_qualification = _routing_qualification(
+            debug_samples,
+            job_ids={run.job_id for run in runs if run.job_id is not None},
+            requested_source=(
+                "operator-override" if self.routing_override_pool_id else "automatic"
+            ),
+        )
 
         return {
             "run_identity": {
@@ -3564,6 +3775,7 @@ class GatewayE2EStresser:
                 "truncated": self.metrics.total_jobs > len(runs),
             },
             "post_drain_capacity": self._post_drain_capacity,
+            "routing_qualification": routing_qualification,
             "sla": self._build_sla_payload(runs, now=report_now),
             "debug_sampling": {
                 "enabled": self.debug_sample_interval > 0,
@@ -3640,7 +3852,11 @@ class GatewayE2EStresser:
         self.write_report(output_path, "json")
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(
+    argv: Sequence[str] | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Gateway end-to-end stress tester for scheduler + LLM pipelines",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -3740,6 +3956,11 @@ Examples:
         "--run-id",
         default=None,
         help="Stress run identifier; generated automatically when omitted",
+    )
+    parser.add_argument(
+        "--fabric-group-id",
+        default="default",
+        help="Runtime Fabric group used for gateway observability reads",
     )
     parser.add_argument(
         "--seed",
@@ -3900,18 +4121,29 @@ Examples:
         default=None,
         help="project_id metadata override (default: api_key)",
     )
-    llm_pool_group = parser.add_mutually_exclusive_group(required=False)
-    llm_pool_group.add_argument(
-        "--llm-pool-id",
+    parser.add_argument(
+        "--routing-override-pool-id",
         type=str,
         default=None,
-        help="Fixed LLM dispatch pool ID to place in metadata.pool_id, for example document-small",
+        help=(
+            "Operator-only diagnostic route override. Requires a reason and a "
+            "separate runtime-routing-admin token."
+        ),
     )
-    llm_pool_group.add_argument(
-        "--llm-pool-cycle",
+    parser.add_argument(
+        "--routing-override-reason",
         type=str,
         default=None,
-        help="Comma-separated LLM dispatch pool IDs to cycle through metadata.pool_id by generated job index",
+        help="Audit reason for an operator-only diagnostic route override",
+    )
+    parser.add_argument(
+        "--routing-admin-token-env",
+        type=str,
+        default=None,
+        help=(
+            "Environment variable containing the dedicated runtime-routing-admin "
+            "token; the token is never written to reports"
+        ),
     )
     parser.add_argument(
         "--purge-annotators",
@@ -4143,7 +4375,7 @@ Examples:
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Enable debug logging"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if not any(
         (
             args.input_dir,
@@ -4235,12 +4467,34 @@ Examples:
         parser.error("--soft-sla-step-seconds requires --soft-sla-seconds")
     if args.hard_sla_step_seconds is not None and args.hard_sla_seconds is None:
         parser.error("--hard-sla-step-seconds requires --hard-sla-seconds")
-    llm_pool_cycle = _parse_csv_values(args.llm_pool_cycle)
     purge_annotators = _parse_csv_values(args.purge_annotators)
-    if args.llm_pool_cycle is not None and not llm_pool_cycle:
-        parser.error("--llm-pool-cycle must contain at least one pool ID")
-    if args.llm_pool_id is not None and not args.llm_pool_id.strip():
-        parser.error("--llm-pool-id cannot be empty")
+    override_values = (
+        args.routing_override_pool_id,
+        args.routing_override_reason,
+        args.routing_admin_token_env,
+    )
+    if any(override_values) and not all(override_values):
+        parser.error(
+            "--routing-override-pool-id requires --routing-override-reason and "
+            "--routing-admin-token-env"
+        )
+    if args.routing_override_pool_id is not None:
+        args.routing_override_pool_id = args.routing_override_pool_id.strip()
+        args.routing_override_reason = args.routing_override_reason.strip()
+        if not args.routing_override_pool_id:
+            parser.error("--routing-override-pool-id cannot be empty")
+        if not args.routing_override_reason:
+            parser.error("--routing-override-reason cannot be empty")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.routing_admin_token_env):
+            parser.error("--routing-admin-token-env must name an environment variable")
+        environment = os.environ if environ is None else environ
+        args.routing_admin_token = environment.get(args.routing_admin_token_env)
+        if not args.routing_admin_token:
+            parser.error(
+                f"Environment variable {args.routing_admin_token_env} is not set"
+            )
+    else:
+        args.routing_admin_token = None
     if args.purge_annotators is not None and not purge_annotators:
         parser.error("--purge-annotators must contain at least one annotator name")
     if args.min_soft_sla_compliance_pct is not None and not (
@@ -4257,9 +4511,6 @@ Examples:
         )
     args.live_report = args.live_report or args.live_json_compat
     args.report = args.report or args.report_json_compat
-    args.llm_pool_cycle_values = (
-        llm_pool_cycle if args.llm_pool_cycle is not None else None
-    )
     args.purge_annotators_values = (
         purge_annotators if args.purge_annotators is not None else None
     )
@@ -4441,6 +4692,7 @@ async def main() -> None:
         metadata_template=template_metadata,
         template_job_name=template_job_name,
         fault_profile=args.fault_profile,
+        fabric_group_id=args.fabric_group_id,
         aimock_admin_url=args.aimock_admin_url,
         soft_sla_seconds=args.soft_sla_seconds,
         hard_sla_seconds=args.hard_sla_seconds,
@@ -4453,8 +4705,9 @@ async def main() -> None:
         ref_type=args.ref_type,
         policy=args.policy,
         project_id=args.project_id,
-        llm_pool_id=args.llm_pool_id,
-        llm_pool_cycle=args.llm_pool_cycle_values,
+        routing_override_pool_id=args.routing_override_pool_id,
+        routing_override_reason=args.routing_override_reason,
+        routing_admin_token=args.routing_admin_token,
         purge_annotators=args.purge_annotators_values,
         mock_process_time=args.mock_process_time,
         mock_failure_rate=args.mock_failure_rate,

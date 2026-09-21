@@ -55,6 +55,7 @@ from marie.sandbox.blueprints.gateway_routes import register_blueprint_routes
 from marie.scheduler import PostgreSQLJobScheduler
 from marie.scheduler.llm_routing import (
     RoutingSubmissionError,
+    TrustedRoutingOverride,
     reject_external_routing_selectors,
 )
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
@@ -639,6 +640,7 @@ class MarieServerGateway(CompositeServer):
                     'repository',
                     None,
                 ),
+                getattr(self, '_submit_operator_routing_override', None),
             )
 
             @app.api_route(
@@ -1740,7 +1742,12 @@ class MarieServerGateway(CompositeServer):
         else:
             yield self.error_response(f"Action not recognized : {action}")
 
-    async def handle_job_submit_command(self, message: Dict[str, Any]) -> Request:
+    async def handle_job_submit_command(
+        self,
+        message: Dict[str, Any],
+        *,
+        routing_override: TrustedRoutingOverride | None = None,
+    ) -> Request:
         """
         Handle job submission command.
 
@@ -1823,7 +1830,10 @@ class MarieServerGateway(CompositeServer):
             soft_sla=soft_sla,
             hard_sla=hard_sla,
             routing_fabric_group_id=self.llm_dispatch_runtime.config.fabric_group_id,
-            routing_request_source='gateway-job-api',
+            routing_request_source=(
+                'operator' if routing_override is not None else 'gateway-job-api'
+            ),
+            routing_override=routing_override,
         )
 
         try:
@@ -1909,6 +1919,7 @@ class MarieServerGateway(CompositeServer):
             )
             if scheduler_owns_failure_notification:
                 return response
+
             try:
                 exc_msg = response.parameters.get("exception", "Unknown error")
                 job_key = f"failed/{ref_type}/{ref_id}"
@@ -1929,6 +1940,26 @@ class MarieServerGateway(CompositeServer):
         finally:
             elapsed_time = time.time() - start_time
             self.logger.debug(f"Job submission completed in {elapsed_time:.2f} seconds")
+
+    async def _submit_operator_routing_override(
+        self,
+        submission: dict[str, Any],
+        fabric_group_id: str,
+        pool_id: str,
+        actor: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        if fabric_group_id != self.llm_dispatch_runtime.config.fabric_group_id:
+            raise RoutingSubmissionError('routing_override_fabric_invalid')
+        response = await self.handle_job_submit_command(
+            submission,
+            routing_override=TrustedRoutingOverride(
+                pool_id=pool_id,
+                actor=actor,
+                reason=reason,
+            ),
+        )
+        return dict(response.parameters)
 
     @staticmethod
     def _parse_priority(raw: Any) -> int:

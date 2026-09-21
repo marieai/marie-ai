@@ -740,6 +740,12 @@ class RequestDispatcher:
                     last_error=record.last_error,
                     model=record.model,
                     admitted_at_ms=record.admitted_at_ms,
+                    endpoint_group_id=record.endpoint_id,
+                    replica_id=getattr(record, "replica_id", None),
+                    policy_generation=getattr(record, "policy_generation", 0),
+                    charged_cost=getattr(record, "charged_cost", 0),
+                    charge_sequence=getattr(record, "charge_sequence", 0),
+                    refund_state=getattr(record, "refund_state", None),
                 )
                 for record in records
             )

@@ -411,7 +411,6 @@ python tools/stress/gateway_e2e_stresser.py \
     --job-count 1 \
     --job-name gen5_extract \
     --planner mock_annotator_llm \
-    --llm-pool-id document-small \
     --ref-type stress \
     --project-id mock-annotator-llm-stress \
     --request-template tools/stress/mock_annotator_llm.invoke.json \
@@ -1041,7 +1040,7 @@ python tools/stress/gateway_e2e_stresser.py \
   --report /tmp/gateway-upload-report.html
 ```
 
-Cycle work across document-size LLM pools:
+Exercise automatic admission across documents with different page counts:
 
 ```bash
 python tools/stress/gateway_e2e_stresser.py \
@@ -1051,9 +1050,12 @@ python tools/stress/gateway_e2e_stresser.py \
   --job-name gen5_extract \
   --planner extract \
   --required-executor extract_executor \
-  --llm-pool-cycle document-small,document-medium,document-large \
   --debug-sample-interval 5
 ```
+
+The gateway derives the authoritative page count and the active admission policy
+selects the internal pool. Normal stress submissions never contain a pool ID or
+queue contract version.
 
 #### Important options
 
@@ -1074,8 +1076,9 @@ python tools/stress/gateway_e2e_stresser.py \
 | `--required-executor` | Capacity slot to record and include in run metadata; repeat for every executor used by the plan |
 | `--skip-preflight` | Disable the default gateway check and capacity snapshot |
 | `--preflight-deadline` / `--preflight-interval` | Bound gateway preflight retry duration and cadence |
-| `--llm-pool-id` | Fixed LLM dispatch pool ID to place in `metadata.pool_id`, for example `document-small` |
-| `--llm-pool-cycle` | Comma-separated LLM dispatch pool IDs to cycle through `metadata.pool_id` by generated job index |
+| `--routing-override-pool-id` | Operator-only diagnostic override; requires a reason and separate routing-admin token |
+| `--routing-override-reason` | Audit reason stored with every durable overridden route |
+| `--routing-admin-token-env` | Environment variable containing a token scoped to `runtime-routing-admin` |
 | `--purge-annotators` | Comma-separated annotator names to purge before annotation, for example `mock-llm` |
 | `--mock-process-time` | Fixed per-node mock executor processing time override in seconds |
 | `--submit-rate` | Target submit rate in jobs per second |

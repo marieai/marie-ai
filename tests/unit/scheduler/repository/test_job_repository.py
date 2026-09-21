@@ -116,7 +116,41 @@ async def test_llm_routing_diagnostics_are_bounded_and_report_drain_references()
             [
                 ('document-small', 7, 4, 1, 2, 2),
                 ('document-large', 3, 1, 1, 2, 2),
-            ]
+            ],
+            [
+                (
+                    'job-1',
+                    'work-1',
+                    4,
+                    'a' * 64,
+                    'b' * 64,
+                    4,
+                    'document-small',
+                    'primary',
+                    'r1',
+                    'page-count-v1',
+                    'automatic',
+                    None,
+                    None,
+                    'projected',
+                ),
+                (
+                    'job-2',
+                    'work-2',
+                    4,
+                    'a' * 64,
+                    'c' * 64,
+                    20,
+                    'document-large',
+                    'primary',
+                    'r1',
+                    'page-count-v1',
+                    'operator-override',
+                    'routing-admin',
+                    'qualification',
+                    'pending',
+                ),
+            ],
         ],
     )
     repository = build_repository(connection)
@@ -144,6 +178,8 @@ async def test_llm_routing_diagnostics_are_bounded_and_report_drain_references()
     ]
     assert result['pool_count'] == 2
     assert result['pools_truncated'] is True
+    assert result['recent_routes'][0]['rule_digest'] == 'b' * 64
+    assert result['recent_routes_truncated'] is True
 
 
 @pytest.mark.asyncio

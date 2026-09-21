@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import time
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Optional
@@ -368,7 +367,6 @@ class DrrLaneScheduler:
         self, *, before_read: Callable[[], None] | None = None
     ) -> list[DrrLaneSnapshot]:
         snapshots: list[DrrLaneSnapshot] = []
-        now = time.time()
         for pool_id, state in sorted(self._states.items()):
             if before_read:
                 before_read()

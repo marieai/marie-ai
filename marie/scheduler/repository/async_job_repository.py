@@ -2834,7 +2834,8 @@ class AsyncJobRepository:
                        policy_digest, rule_digest, normalized_fact_digest,
                        effective_page_count, pool_id,
                        logical_endpoint_group_id, endpoint_revision,
-                       estimator_version, routing_source, projection_state,
+                       estimator_version, routing_source, routing_actor,
+                       routing_reason, projection_state,
                        projected_on, created_on
                 FROM {DEFAULT_SCHEMA}.llm_job_route
                 WHERE work_unit_id = %s::uuid
@@ -2857,6 +2858,8 @@ class AsyncJobRepository:
             'endpoint_revision',
             'estimator_version',
             'routing_source',
+            'routing_actor',
+            'routing_reason',
             'projection_state',
             'projected_on',
             'created_on',
@@ -2925,7 +2928,23 @@ class AsyncJobRepository:
                 fabric_group_id,
                 limit + 1,
             )
+            route_rows = await conn.fetch(
+                f"""
+                SELECT job_id, work_unit_id, policy_generation, policy_digest,
+                       rule_digest, effective_page_count, pool_id,
+                       logical_endpoint_group_id, endpoint_revision,
+                       estimator_version, routing_source, routing_actor,
+                       routing_reason, projection_state
+                FROM {DEFAULT_SCHEMA}.llm_job_route
+                WHERE fabric_group_id = %s
+                ORDER BY created_on DESC, work_unit_id
+                LIMIT %s
+                """,
+                fabric_group_id,
+                limit + 1,
+            )
         visible = rows[:limit]
+        visible_routes = route_rows[:limit]
         return {
             'policy': {
                 'admission_mode': str(policy[0]),
@@ -2957,6 +2976,28 @@ class AsyncJobRepository:
             ],
             'pool_count': int(rows[0][5]) if rows else 0,
             'pools_truncated': len(rows) > limit,
+            'recent_routes': [
+                {
+                    'job_id': str(row[0]),
+                    'work_unit_id': str(row[1]),
+                    'policy_generation': int(row[2]),
+                    'policy_digest': str(row[3]),
+                    'rule_digest': str(row[4]),
+                    'effective_page_count': (
+                        int(row[5]) if row[5] is not None else None
+                    ),
+                    'pool_id': str(row[6]),
+                    'endpoint_group_id': str(row[7]),
+                    'endpoint_revision': str(row[8]),
+                    'estimator_version': str(row[9]),
+                    'routing_source': str(row[10]),
+                    'routing_actor': str(row[11]) if row[11] is not None else None,
+                    'routing_reason': str(row[12]) if row[12] is not None else None,
+                    'projection_state': str(row[13]),
+                }
+                for row in visible_routes
+            ],
+            'recent_routes_truncated': len(route_rows) > limit,
         }
 
     async def routing_resource_references(

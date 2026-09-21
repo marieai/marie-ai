@@ -16,7 +16,7 @@ from marie.engine.llm_queue.admission_policy import (
     PoolEndpointBinding,
 )
 from opentelemetry import metrics as otel_metrics
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from marie.query_planner.base import Query, QueryPlan
 from marie.storage.submission.types import SubmissionDocument
@@ -156,6 +156,22 @@ class TrustedRoutingContext(BaseModel):
     policy: AdmissionPolicy = Field(exclude=True)
 
 
+class TrustedRoutingOverride(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    pool_id: str = Field(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_.-]+$')
+    actor: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=512)
+
+    @field_validator('reason')
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError('routing override reason cannot be blank')
+        return reason
+
+
 class PlannedLlmRoute(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -172,6 +188,8 @@ class PlannedLlmRoute(BaseModel):
     endpoint_revision: str
     estimator_version: Literal['page-count-v1'] = 'page-count-v1'
     routing_source: Literal['automatic', 'operator-override'] = 'automatic'
+    routing_actor: str | None = None
+    routing_reason: str | None = None
 
 
 def reject_external_routing_selectors(value: object) -> None:
@@ -313,6 +331,7 @@ def plan_llm_routes(
     nodes: Sequence[WorkInfo],
     policy: AdmissionPolicy,
     base_facts: TrustedRoutingFacts,
+    override: TrustedRoutingOverride | None = None,
 ) -> tuple[PlannedLlmRoute, ...]:
     work_by_id = {work.id: work for work in nodes}
     if len(work_by_id) != len(nodes):
@@ -327,25 +346,34 @@ def plan_llm_routes(
             raise RoutingSubmissionError('routing_manifest_missing')
         facts = base_facts.with_stage(normalize_pipeline_stage(node))
         try:
-            decision = policy.match(facts.values)
-            binding = policy.endpoint_binding(decision.pool_id)
+            decision = policy.match(facts.values) if override is None else None
+            pool_id = decision.pool_id if decision is not None else override.pool_id
+            binding = policy.endpoint_binding(pool_id)
+            rule = next(rule for rule in policy.rules if rule.pool_id == pool_id)
         except (AdmissionMatchError, AdmissionPolicyError) as exc:
             raise RoutingSubmissionError(exc.category) from None
+        except StopIteration:
+            raise RoutingSubmissionError('routing_override_pool_invalid') from None
         routes.append(
             PlannedLlmRoute(
                 job_id=root.id,
                 work_unit_id=work_info.id,
                 fabric_group_id=policy.fabric_group_id,
-                policy_generation=decision.policy_generation,
-                policy_digest=decision.policy_digest,
-                rule_digest=decision.rule_digest,
-                normalized_fact_digest=decision.normalized_fact_digest,
+                policy_generation=policy.generation,
+                policy_digest=policy.policy_digest,
+                rule_digest=rule.rule_digest,
+                normalized_fact_digest=facts.digest,
                 effective_page_count=_optional_int(
                     facts.values.get('document.effective_page_count')
                 ),
-                pool_id=decision.pool_id,
+                pool_id=pool_id,
                 logical_endpoint_group_id=binding.endpoint_group_id,
                 endpoint_revision=binding.revision,
+                routing_source=(
+                    'operator-override' if override is not None else 'automatic'
+                ),
+                routing_actor=override.actor if override is not None else None,
+                routing_reason=override.reason if override is not None else None,
             )
         )
         routed_ids.add(work_info.id)

@@ -78,7 +78,7 @@ reserved_items reserved_bytes failures circuit next_probe probe_successes catego
 execution_bytes protected_slots borrowed_slots config_generation waiting_reason last_error last_error_at_ms request_queue_depth_error transport_failures
 observed_at_ms policy_generation policy_digest endpoint_group_id revision replica_id group_id selected_replica_id
 charged_cost refunded_cost committed_charge drain_references oldest_pending_age_seconds gate processing_truncated""".split()
-    + """ endpoint_count endpoint_group_count details_truncated""".split()
+    + """ charge_sequence refund_state endpoint_count endpoint_group_count details_truncated""".split()
 )
 _ERRORS = frozenset(
     """connect_refused connect_timeout timeout outcome_unknown
@@ -94,7 +94,7 @@ processed_batches processed_items last_processed_at last_batch_size execution_fa
 malformed_requests_dropped offline_producer_requests_dropped offline_producer_replies_dropped
 inflight_request_count pool_count total_concurrent_dispatch metadata_unavailable reserved_items
 reserved_bytes protected_slots borrowed_slots config_generation failures next_probe probe_successes open_until execution_limit execution_bytes last_error_at_ms""".split()
-    + """ observed_at_ms policy_generation charged_cost refunded_cost committed_charge drain_references oldest_pending_age_seconds""".split()
+    + """ observed_at_ms policy_generation charged_cost refunded_cost committed_charge charge_sequence drain_references oldest_pending_age_seconds""".split()
     + """ endpoint_count endpoint_group_count""".split()
 )
 

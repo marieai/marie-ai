@@ -232,6 +232,7 @@ class DagSubmissionService:
             nodes=dag_nodes,
             policy=context.policy,
             base_facts=context.base_facts,
+            override=work_info.routing_override,
         )
         if route_behavior(mode) == 'compare-without-binding':
             for route in routes:

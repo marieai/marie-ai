@@ -174,7 +174,137 @@ async def test_routing_policy_routes_require_admin_scope(monkeypatch):
         )
         assert response.status_code == 200
         assert response.json()['result']['generation'] == 4
-        assert calls == [('preview', 'a'), ('activate', 'a', 'routing-admin')]
+    assert calls == [('preview', 'a'), ('activate', 'a', 'routing-admin')]
+
+
+@pytest.mark.asyncio
+async def test_routing_override_uses_admin_scope_and_records_audit_fields(monkeypatch):
+    from marie.engine.llm_queue.admission_policy import AdmissionPolicy
+
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    policy = AdmissionPolicy.from_rows(
+        'a',
+        3,
+        [
+            {
+                'pool_id': 'document-small',
+                'enabled': True,
+                'metadata': {
+                    'admission': {
+                        'schema_version': 1,
+                        'priority': 1_000_000,
+                        'accepting': True,
+                        'match': {},
+                    },
+                    'llm_dispatch': {
+                        'schema_version': 1,
+                        'endpoint_group_id': 'primary',
+                        'revision': 'r1',
+                    },
+                },
+            }
+        ],
+    )
+    calls = []
+
+    class Repository:
+        def load_active_admission_policy(self, fabric_group_id):
+            assert fabric_group_id == 'a'
+            return policy
+
+    async def submitter(submission, fabric, pool, actor, reason):
+        calls.append((submission, fabric, pool, actor, reason))
+        return {'status': 'ok', 'job_id': 'job-1'}
+
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a', lambda: Repository(), submitter)
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    observer = 'mas_' + 'o' * 54
+    admin = 'mas_' + 'a' * 54
+    APIKeyManager.add_key(
+        {
+            'name': 'observer',
+            'api_key': observer,
+            'scopes': ['runtime-observability'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    APIKeyManager.add_key(
+        {
+            'name': 'routing-admin',
+            'api_key': admin,
+            'scopes': ['runtime-routing-admin'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    body = {
+        'pool_id': 'document-small',
+        'reason': 'qualification replay',
+        'submission': {'action': 'submit'},
+    }
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.post(
+            '/api/llm-dispatch/routing/override?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {observer}'},
+            json=body,
+        )
+        assert response.status_code == 403
+        assert calls == []
+
+        response = await client.post(
+            '/api/llm-dispatch/routing/override?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {admin}'},
+            json=body,
+        )
+
+    assert response.status_code == 200
+    assert response.json()['result']['job_id'] == 'job-1'
+    assert calls == [
+        (
+            {'action': 'submit'},
+            'a',
+            'document-small',
+            'routing-admin',
+            'qualification replay',
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_routing_override_rejects_blank_reason(monkeypatch):
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    app = FastAPI()
+    admin = 'mas_' + 'a' * 54
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    APIKeyManager.add_key(
+        {
+            'name': 'routing-admin',
+            'api_key': admin,
+            'scopes': ['runtime-routing-admin'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    add_runtime_routes(app, lambda: 'a', lambda: SimpleNamespace())
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.post(
+            '/api/llm-dispatch/routing/override?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {admin}'},
+            json={
+                'pool_id': 'document-small',
+                'reason': '   ',
+                'submission': {'action': 'submit'},
+            },
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -213,6 +343,23 @@ async def test_runtime_joins_exact_fabric_database_diagnostics(monkeypatch):
                 ],
                 'pool_count': 1,
                 'pools_truncated': False,
+                'recent_routes': [
+                    {
+                        'job_id': 'job-1',
+                        'work_unit_id': 'work-1',
+                        'policy_generation': 5,
+                        'policy_digest': 'b' * 64,
+                        'rule_digest': 'c' * 64,
+                        'effective_page_count': 4,
+                        'pool_id': 'document-small',
+                        'endpoint_group_id': 'primary',
+                        'endpoint_revision': 'r1',
+                        'estimator_version': 'page-count-v1',
+                        'routing_source': 'automatic',
+                        'projection_state': 'projected',
+                    }
+                ],
+                'recent_routes_truncated': False,
             }
 
     async def snapshot(**kwargs):
@@ -273,6 +420,8 @@ async def test_runtime_joins_exact_fabric_database_diagnostics(monkeypatch):
         'valkey': 5,
         'total': 10,
     }
+    assert result['recent_routes'][0]['rule_digest'] == 'c' * 64
+    assert result['recent_routes_truncated'] is False
 
 
 @pytest.mark.asyncio

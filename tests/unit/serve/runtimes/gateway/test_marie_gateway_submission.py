@@ -6,6 +6,7 @@ from uuid import UUID
 
 import pytest
 
+from marie.scheduler.llm_routing import TrustedRoutingOverride
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (  # noqa: F401
     GatewayLlmDispatchRuntime,
 )
@@ -23,6 +24,9 @@ def build_gateway() -> tuple[MarieServerGateway, list[Any]]:
         return work_info.id
 
     gateway.job_scheduler = SimpleNamespace(submit_job=submit)
+    gateway.llm_dispatch_runtime = SimpleNamespace(
+        config=SimpleNamespace(fabric_group_id='default')
+    )
     gateway.gateway_instance_id = 'gateway-1'
     gateway.logger = MagicMock()
     return gateway, submitted
@@ -42,6 +46,28 @@ def submission_message() -> dict[str, object]:
             'planner': 'extract',
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_gateway_marks_operator_override_as_trusted_scheduler_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, submitted = build_gateway()
+    monkeypatch.delenv('MARIE_GATEWAY_PUBLISH_ACCEPTED_EVENT', raising=False)
+    override = TrustedRoutingOverride(
+        pool_id='document-small',
+        actor='routing-admin',
+        reason='qualification replay',
+    )
+
+    response = await gateway.handle_job_submit_command(
+        submission_message(), routing_override=override
+    )
+
+    assert response.parameters['status'] == 'ok'
+    assert submitted[0].routing_request_source == 'operator'
+    assert submitted[0].routing_override == override
+    assert submitted[0].data['metadata'].get('pool_id') is None
 
 
 @pytest.mark.asyncio

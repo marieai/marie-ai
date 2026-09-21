@@ -1,6 +1,7 @@
 """Fabric-scoped LLM dispatch operator routes."""
 
 import asyncio
+from collections.abc import Awaitable
 from typing import Any, Callable, Literal
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from marie.engine.llm_queue.admission_policy import (
     AdmissionMatchError,
     AdmissionPolicyError,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
@@ -34,10 +35,30 @@ class RoutingResourceRequest(BaseModel):
     )
 
 
+class RoutingOverrideRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    pool_id: str = Field(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9_.-]+$')
+    reason: str = Field(min_length=1, max_length=512)
+    submission: dict[str, Any]
+
+    @field_validator('reason')
+    @classmethod
+    def validate_reason(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError('routing override reason cannot be blank')
+        return reason
+
+
 def add_runtime_routes(
     app: FastAPI,
     effective_fabric: Callable[[], str],
     policy_repository: Callable[[], Any | None] | None = None,
+    routing_override_submitter: Callable[
+        [dict[str, Any], str, str, str, str], Awaitable[dict[str, Any]]
+    ]
+    | None = None,
 ) -> None:
     async def authorize(
         fabric_group_id: str = Query(min_length=1, max_length=128),
@@ -126,6 +147,10 @@ def add_runtime_routes(
             )
             snapshot['policy'] = policy
             snapshot['routing'] = diagnostics.get('routing', {})
+            snapshot['recent_routes'] = diagnostics.get('recent_routes', [])
+            snapshot['recent_routes_truncated'] = bool(
+                diagnostics.get('recent_routes_truncated')
+            )
             local_routing = admission_routing_metrics.snapshot(fabric_group_id)
             if local_routing['available']:
                 snapshot['routing']['rejected'] = local_routing['rejected']
@@ -245,6 +270,38 @@ def add_runtime_routes(
                 'activated_by': activated.activated_by,
             },
         }
+
+    @app.post('/api/llm-dispatch/routing/override')
+    async def submit_routing_override(
+        request: RoutingOverrideRequest,
+        authorization: tuple[str, str] = Depends(authorize_routing_admin),
+    ) -> dict[str, object]:
+        fabric_group_id, actor = authorization
+        if routing_override_submitter is None:
+            raise HTTPException(status_code=503, detail='routing_override_unavailable')
+        try:
+            policy = await asyncio.to_thread(
+                repository().load_active_admission_policy, fabric_group_id
+            )
+            policy.endpoint_binding(request.pool_id)
+            if not any(rule.pool_id == request.pool_id for rule in policy.rules):
+                raise AdmissionMatchError('routing_override_pool_invalid')
+            result = await routing_override_submitter(
+                request.submission,
+                fabric_group_id,
+                request.pool_id,
+                actor,
+                request.reason,
+            )
+        except AdmissionMatchError as exc:
+            raise HTTPException(status_code=400, detail=exc.category) from None
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=503, detail='routing_override_submission_failed'
+            ) from None
+        return {'status': 'OK', 'result': result}
 
     @app.post('/api/llm-dispatch/resources/check')
     async def check_routing_resource(

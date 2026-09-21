@@ -28,7 +28,9 @@ from tools.stress.gateway_e2e_stresser import (
     _resolve_inputs,
     _resolve_runtime_config,
     _resolve_s3_inputs,
+    _routing_qualification,
     _sanitize_report_value,
+    parse_args,
 )
 
 VALID_FAKE_API_KEY = "mau_" + ("A" * 54)
@@ -923,7 +925,7 @@ def test_build_metadata_injects_mock_failure_controls() -> None:
     assert second_run.force_fail is True
 
 
-def test_build_metadata_injects_fixed_llm_pool_controls() -> None:
+def test_normal_stress_request_contains_no_routing_selector() -> None:
     stresser = GatewayE2EStresser(
         gateway_host="localhost",
         gateway_port=51000,
@@ -951,17 +953,65 @@ def test_build_metadata_injects_fixed_llm_pool_controls() -> None:
         metadata_template={"source": "unit-test"},
         template_job_name=None,
         fault_profile="normal",
-        llm_pool_id="document-small",
     )
     run = stresser._build_run(stresser.input_assets[0], 0)
 
     metadata = stresser._build_metadata(run, sla_anchor_at=1000.0)
+    request = stresser._build_submit_request(run, metadata)
+    encoded = json.dumps(request)
 
-    assert run.llm_pool_id == "document-small"
-    assert metadata["pool_id"] == "document-small"
+    assert "pool_id" not in encoded
+    assert "LLM_QUEUE_CONTRACT_VERSION" not in encoded
 
 
-def test_build_metadata_cycles_llm_pool_controls() -> None:
+def test_removed_pool_selection_options_are_rejected() -> None:
+    common = [
+        "--s3-uri",
+        "s3://marie/sample.tif",
+        "--job-count",
+        "1",
+        "--planner",
+        "extract",
+    ]
+    for option in ("--llm-pool-id", "--llm-pool-cycle"):
+        with pytest.raises(SystemExit):
+            parse_args([*common, option, "document-small"])
+
+
+def test_operator_override_requires_admin_token_and_reason() -> None:
+    common = [
+        "--s3-uri",
+        "s3://marie/sample.tif",
+        "--job-count",
+        "1",
+        "--planner",
+        "extract",
+        "--routing-override-pool-id",
+        "document-small",
+    ]
+    with pytest.raises(SystemExit):
+        parse_args(common)
+    with pytest.raises(SystemExit):
+        parse_args([*common, "--routing-override-reason", "qualification"])
+
+    args = parse_args(
+        [
+            *common,
+            "--routing-override-reason",
+            "qualification",
+            "--routing-admin-token-env",
+            "TEST_ROUTING_ADMIN_TOKEN",
+        ],
+        environ={"TEST_ROUTING_ADMIN_TOKEN": VALID_FAKE_API_KEY},
+    )
+
+    assert args.routing_override_pool_id == "document-small"
+    assert args.routing_override_reason == "qualification"
+    assert args.routing_admin_token == VALID_FAKE_API_KEY
+
+
+def test_operator_override_uses_separate_admin_request_path() -> None:
+    admin_token = "mas_" + ("R" * 54)
     stresser = GatewayE2EStresser(
         gateway_host="localhost",
         gateway_port=51000,
@@ -978,7 +1028,7 @@ def test_build_metadata_cycles_llm_pool_controls() -> None:
                 existing_s3_uri="s3://marie/sample.tif",
             )
         ],
-        job_count=3,
+        job_count=1,
         run_time_seconds=None,
         submit_concurrency=1,
         submit_rate=1.0,
@@ -989,22 +1039,125 @@ def test_build_metadata_cycles_llm_pool_controls() -> None:
         metadata_template=None,
         template_job_name=None,
         fault_profile="normal",
-        llm_pool_cycle=["document-small", "document-medium"],
+        routing_override_pool_id="document-small",
+        routing_override_reason="qualification replay",
+        routing_admin_token=admin_token,
     )
-    runs = [stresser._build_run(stresser.input_assets[0], index) for index in range(3)]
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    payload = stresser._build_submit_request(
+        run, stresser._build_metadata(run, sla_anchor_at=1000.0)
+    )
 
-    metadata = [stresser._build_metadata(run, sla_anchor_at=1000.0) for run in runs]
+    request, path, token = stresser._operator_override_request(payload)
 
-    assert [run.llm_pool_id for run in runs] == [
-        "document-small",
-        "document-medium",
-        "document-small",
-    ]
-    assert [item["pool_id"] for item in metadata] == [
-        "document-small",
-        "document-medium",
-        "document-small",
-    ]
+    assert path == "/api/llm-dispatch/routing/override?fabric_group_id=default"
+    assert token == admin_token
+    assert request["pool_id"] == "document-small"
+    assert request["reason"] == "qualification replay"
+    assert request["submission"]["metadata"].get("pool_id") is None
+
+
+def test_routing_qualification_captures_route_policy_charge_and_replica() -> None:
+    first = _build_debug_snapshot(
+        stage="start",
+        payload={
+            "llm_dispatch": {
+                "policy": {
+                    "desired_generation": 7,
+                    "desired_digest": "a" * 64,
+                    "observed_generation": 7,
+                    "observed_digest": "a" * 64,
+                    "synchronized": True,
+                },
+                "routing": {"projection_pending_count": 0},
+                "pools": [
+                    {
+                        "pool_id": "document-small",
+                        "accepted": 10,
+                        "completed": 9,
+                        "charged_cost": 40,
+                        "refunded_cost": 2,
+                        "committed_charge": 0,
+                    }
+                ],
+            }
+        },
+    )
+    last = _build_debug_snapshot(
+        stage="end",
+        payload={
+            "llm_dispatch": {
+                "policy": {
+                    "admission_mode": "enforce",
+                    "desired_generation": 7,
+                    "desired_digest": "a" * 64,
+                    "observed_generation": 7,
+                    "observed_digest": "a" * 64,
+                    "synchronized": True,
+                },
+                "routing": {
+                    "projection_pending_count": 0,
+                    "matched": {"automatic": 11, "operator_override": 0},
+                },
+                "recent_routes": [
+                    {
+                        "job_id": "job-1",
+                        "work_unit_id": "work-1",
+                        "policy_generation": 7,
+                        "policy_digest": "a" * 64,
+                        "rule_digest": "b" * 64,
+                        "effective_page_count": 4,
+                        "pool_id": "document-small",
+                        "endpoint_group_id": "primary",
+                        "endpoint_revision": "r1",
+                        "routing_source": "automatic",
+                        "projection_state": "projected",
+                    }
+                ],
+                "pools": [
+                    {
+                        "pool_id": "document-small",
+                        "accepted": 11,
+                        "completed": 10,
+                        "charged_cost": 44,
+                        "refunded_cost": 2,
+                        "committed_charge": 0,
+                    }
+                ],
+                "live_requests": [
+                    {
+                        "attempt_id": "attempt-1",
+                        "pool_id": "document-small",
+                        "charge_sequence": 12,
+                        "charged_cost": 4,
+                        "refund_state": "not_refunded",
+                        "endpoint_group_id": "primary",
+                        "replica_id": "primary-a",
+                    }
+                ],
+                "endpoint_groups": [{"group_id": "primary", "revision": "r1"}],
+            }
+        },
+    )
+
+    result = _routing_qualification(
+        [first, last], job_ids={"job-1"}, requested_source="automatic"
+    )
+
+    assert result["available"] is True
+    assert result["policy"]["desired_generation"] == 7
+    assert result["routes"][0]["rule_digest"] == "b" * 64
+    assert result["routes"][0]["observed_pool_id"] == "document-small"
+    assert result["projection"]["current_run_projected"] is True
+    assert result["drr"]["document-small"]["delta"] == {
+        "accepted": 1,
+        "completed": 1,
+        "charged_cost": 4,
+        "refunded_cost": 0,
+        "committed_charge": 0,
+    }
+    assert result["charges"][0]["charge_sequence"] == 12
+    assert result["charges"][0]["replica_id"] == "primary-a"
 
 
 def test_build_metadata_injects_purge_annotators_feature_for_mock_llm() -> None:
@@ -1265,7 +1418,10 @@ async def test_capture_debug_snapshot_records_gateway_debug_state() -> None:
     assert snapshot.event_queue_size == 0
     assert snapshot.llm_dispatch_registered_dispatchers == 1
     assert snapshot.llm_dispatch_running_dispatchers == 1
-    assert stresser._http_session.last_url == "http://localhost:51000/api/debug"
+    assert (
+        stresser._http_session.last_url
+        == "http://localhost:51000/api/debug?fabric_group_id=default"
+    )
 
 
 def test_write_json_report_includes_debug_samples(tmp_path: Path) -> None:
@@ -1544,7 +1700,7 @@ async def test_preflight_allows_queue_created_during_submission(
     )
 
     async def fetch(path: str) -> tuple[int, dict[str, Any]]:
-        if path == "/api/debug":
+        if path == "/api/debug?fabric_group_id=default":
             return 200, {"scheduler_info": {"known_queues": []}}
         return 200, {
             "api_key": VALID_FAKE_API_KEY,
@@ -1579,7 +1735,7 @@ async def test_preflight_proceeds_when_executor_has_no_available_capacity(
     )
 
     async def fetch(path: str) -> tuple[int, dict[str, Any]]:
-        if path == "/api/debug":
+        if path == "/api/debug?fabric_group_id=default":
             return 200, {"scheduler_info": {"known_queues": []}}
         return 200, {
             "slots": [
@@ -1615,7 +1771,7 @@ async def test_preflight_proceeds_when_capacity_endpoint_is_unavailable(
     )
 
     async def fetch(path: str) -> tuple[int, dict[str, Any]]:
-        if path == "/api/debug":
+        if path == "/api/debug?fabric_group_id=default":
             return 200, {"scheduler_info": {"known_queues": []}}
         raise OSError("capacity endpoint unavailable")
 

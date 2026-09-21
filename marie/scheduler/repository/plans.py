@@ -138,6 +138,8 @@ def insert_llm_routes(schema: str) -> str:
                 endpoint_revision text,
                 estimator_version text,
                 routing_source text,
+                routing_actor text,
+                routing_reason text,
                 route_digest text,
                 payload jsonb
             )
@@ -146,13 +148,15 @@ def insert_llm_routes(schema: str) -> str:
                 work_unit_id, job_id, fabric_group_id, policy_generation,
                 policy_digest, rule_digest, normalized_fact_digest,
                 effective_page_count, pool_id, logical_endpoint_group_id,
-                endpoint_revision, estimator_version, routing_source
+                endpoint_revision, estimator_version, routing_source,
+                routing_actor, routing_reason
             )
             SELECT
                 work_unit_id, job_id, fabric_group_id, policy_generation,
                 policy_digest, rule_digest, normalized_fact_digest,
                 effective_page_count, pool_id, logical_endpoint_group_id,
-                endpoint_revision, estimator_version, routing_source
+                endpoint_revision, estimator_version, routing_source,
+                routing_actor, routing_reason
             FROM routes
             RETURNING work_unit_id
         )

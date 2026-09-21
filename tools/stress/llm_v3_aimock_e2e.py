@@ -246,6 +246,12 @@ def observe_transition(
     pool_id: str | None = None,
     payload_bytes: int = 0,
     result_bytes: int = 0,
+    charge_sequence: int = 0,
+    charged_cost: int = 0,
+    refunded_cost: int = 0,
+    refund_state: str | None = None,
+    endpoint_group_id: str | None = None,
+    replica_id: str | None = None,
     family: str | None = None,
     scenario: str | None = None,
 ) -> None:
@@ -269,6 +275,29 @@ def observe_transition(
         row.update(finished=observed_at, result_bytes=result_bytes)
     elif op == 'result' and disposition == 'result':
         row.setdefault('delivered', observed_at)
+    if charge_sequence:
+        row['charge_sequence'] = charge_sequence
+        event = {
+            'op': op,
+            'disposition': disposition,
+            'charge_sequence': charge_sequence,
+            'charged_cost': charged_cost,
+            'refunded_cost': refunded_cost,
+            'refund_state': refund_state,
+        }
+        history = row.setdefault('charge_history', [])
+        if not history or history[-1] != event:
+            history.append(event)
+    if charged_cost:
+        row['charged_cost'] = charged_cost
+    if refunded_cost:
+        row['refunded_cost'] = refunded_cost
+    if refund_state:
+        row['refund_state'] = refund_state
+    if endpoint_group_id:
+        row['endpoint_group_id'] = endpoint_group_id
+    if replica_id:
+        row['replica_id'] = replica_id
 
 
 LATENCY_FIELDS = {
@@ -1320,6 +1349,12 @@ async def _run_qualification(
                     result_bytes=(
                         len(kwargs['result'].encode()) if op == 'finish' else 0
                     ),
+                    charge_sequence=int(result.get('charge_sequence') or 0),
+                    charged_cost=int(result.get('charged_cost') or 0),
+                    refunded_cost=int(result.get('refunded_cost') or 0),
+                    refund_state=result.get('refund_state'),
+                    endpoint_group_id=result.get('endpoint_group_id'),
+                    replica_id=result.get('replica_id'),
                 )
                 if attempt and op == 'start' and result['disposition'] == 'started':
                     sends.append((now, self.keys.fabric_id + ':' + attempt))
@@ -1916,6 +1951,15 @@ async def _run_qualification(
                     == recovery_sends,
                     'recovery_feedback_acceptances',
                 )
+                charge_recovery = [
+                    {
+                        'attempt_id': attempt,
+                        'charge_history': records[
+                            store.keys.fabric_id + ':' + attempt
+                        ].get('charge_history', []),
+                    }
+                    for attempt in original_attempts
+                ]
                 report['scenarios'].append(
                     {
                         'provider_sends': recovery_sends,
@@ -1928,6 +1972,7 @@ async def _run_qualification(
                         'deadline_seconds': 15,
                         'same_batch': True,
                         'circuit_evidence': evidence,
+                        'charge_recovery': charge_recovery,
                         'fixture_lifecycle': lifecycle,
                     }
                 )

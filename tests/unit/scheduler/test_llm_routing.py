@@ -15,6 +15,7 @@ from marie.scheduler.llm_routing import (
     AdmissionRoutingMetrics,
     RoutingSubmissionError,
     TrustedRoutingContext,
+    TrustedRoutingOverride,
     normalize_routing_facts,
     plan_llm_routes,
     reject_external_routing_selectors,
@@ -295,6 +296,56 @@ def test_plan_routes_only_llm_nodes_using_node_stage_and_stable_id() -> None:
     assert route.endpoint_revision == 'r3'
     assert route.effective_page_count == 3
     assert root.data['metadata'] == {}
+
+
+def test_operator_override_binds_registered_pool_and_records_audit_fields() -> None:
+    root = _work()
+    facts = normalize_routing_facts(
+        document=_document(page_count=3),
+        requested_pages=None,
+        workload_kind='document',
+        workload_mode='batch',
+        pipeline_stage=None,
+        request_source='operator',
+    )
+    plan = QueryPlan(
+        nodes=[
+            Query(
+                task_id='node-1',
+                query_str='Extract',
+                dependencies=[],
+                node_type=QueryType.COMPUTE,
+                definition=LlmQueryDefinition(
+                    model_name='mock',
+                    endpoint='annotator_llm://extract',
+                    params={'layout': 'mock'},
+                ),
+            )
+        ]
+    )
+
+    route = plan_llm_routes(
+        root=root,
+        plan=plan,
+        nodes=[_work('node-1')],
+        policy=_policy(),
+        base_facts=facts,
+        override=TrustedRoutingOverride(
+            pool_id='default', actor='routing-admin', reason='qualification replay'
+        ),
+    )[0]
+
+    assert route.pool_id == 'default'
+    assert route.routing_source == 'operator-override'
+    assert route.routing_actor == 'routing-admin'
+    assert route.routing_reason == 'qualification replay'
+
+
+def test_operator_override_rejects_blank_audit_reason() -> None:
+    with pytest.raises(ValueError):
+        TrustedRoutingOverride(
+            pool_id='default', actor='routing-admin', reason='   '
+        )
 
 
 def test_refinement_inherits_parent_route_and_unplanned_node_is_rejected() -> None:
