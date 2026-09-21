@@ -11,6 +11,7 @@ from marie.engine.completion_contract import (
     QueuedCompletionEnvelope,
 )
 from marie.engine.llm_queue.queue_io import ListQueueClient, MalformedQueueRequest
+from marie.engine.llm_queue.store import ClaimRecord
 
 MIN_REQUEST_COST_UNITS = 1
 MAX_REQUEST_COST_UNITS = 16
@@ -92,6 +93,7 @@ class _LaneState:
     visit_dispatches: int = 0
     skip_counts: Counter[str] = field(default_factory=Counter)
     malformed_requests_dropped: int = 0
+    committed_charge: int = 0
 
 
 class DrrLaneScheduler:
@@ -122,6 +124,7 @@ class DrrLaneScheduler:
         self._active: set[str] = set()
         self._global_inflight = 0
         self._backlogs: set[str] | None = None
+        self._active_charges: dict[int, tuple[str, int]] = {}
 
     @property
     def inflight_count(self) -> int:
@@ -271,14 +274,69 @@ class DrrLaneScheduler:
                     return pool
         return None
 
-    def claimed(self, pool_id: str, cost: int) -> None:
+    def claimed(
+        self, pool_id: str, cost: int, *, charge_sequence: int | None = None
+    ) -> bool:
         """Charge only the cost returned by a successful atomic claim; perform no I/O."""
+        if charge_sequence is not None and charge_sequence in self._active_charges:
+            return False
         state = self._states[pool_id]
         state.deficit -= cost
         state.inflight += 1
         state.visit_dispatches += 1
+        state.committed_charge += cost
         self._global_inflight += 1
+        if charge_sequence is not None:
+            self._active_charges[charge_sequence] = (pool_id, cost)
         self._advance_after_dispatch(state, read_backlog=False)
+        return True
+
+    def refunded(self, pool_id: str, cost: int, *, charge_sequence: int) -> bool:
+        """Restore volatile credit once for a definitely-unsent durable charge."""
+        charge = self._active_charges.get(charge_sequence)
+        if charge is None:
+            return False
+        if charge != (pool_id, cost):
+            raise ValueError("refund does not match the durable charge")
+        del self._active_charges[charge_sequence]
+        state = self._states[pool_id]
+        state.deficit = min(1_000_000, state.deficit + cost)
+        state.committed_charge = max(0, state.committed_charge - cost)
+        if state.inflight > 0:
+            state.inflight -= 1
+            self._global_inflight -= 1
+        return True
+
+    def retire_charge(self, charge_sequence: int) -> None:
+        """Stop tracking a charge once its local execution task has settled."""
+        self._active_charges.pop(charge_sequence, None)
+
+    def reconcile_charges(self, claims: list[ClaimRecord]) -> None:
+        """Restore durable capacity and restart volatile DRR credit at zero."""
+        self._rotation.clear()
+        self._active.clear()
+        self._backlogs = None
+        self._global_inflight = 0
+        self._active_charges.clear()
+        for state in self._states.values():
+            state.deficit = 0
+            state.inflight = 0
+            state.visit_started = False
+            state.visit_dispatches = 0
+            state.committed_charge = 0
+        for claim in claims:
+            state = self._states.get(claim.pool_id)
+            if state is None:
+                continue
+            if claim.refund_state == "refunded":
+                continue
+            self._active_charges[claim.charge_sequence] = (
+                claim.pool_id,
+                claim.charged_cost,
+            )
+            state.inflight += 1
+            state.committed_charge += claim.charged_cost
+            self._global_inflight += 1
 
     def rejected(self, pool_id: str, reason: str) -> None:
         state = self._states[pool_id]
@@ -295,6 +353,7 @@ class DrrLaneScheduler:
             inflight=state.inflight,
             min_concurrent=state.config.min_concurrent,
             max_burst_per_visit=state.config.max_burst_per_visit,
+            committed_charge=state.committed_charge,
             skip_counts=dict(state.skip_counts),
         )
 

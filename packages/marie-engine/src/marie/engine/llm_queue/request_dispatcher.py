@@ -30,6 +30,7 @@ from marie.engine.llm_queue.registry import (
 )
 from marie.engine.llm_queue.scheduler import DrrLaneConfig, DrrLaneScheduler
 from marie.engine.llm_queue.store import (
+    ClaimRecord,
     OwnerToken,
     RequestStore,
     StaleOwner,
@@ -639,6 +640,20 @@ class RequestDispatcher:
                             if not ids:
                                 break
                             previous.extend(ids)
+                        charges: list[ClaimRecord] = []
+                        page = self.store.limits.cleanup_page_size
+                        for offset in range(0, len(previous), page):
+                            charges.extend(
+                                await self._maintenance_io(
+                                    'reconcile_charges',
+                                    self.owner,
+                                    attempt_ids=previous[offset : offset + page],
+                                )
+                            )
+                        self.scheduler.reconcile_charges(charges)
+                        charges_by_attempt = {
+                            claim.attempt_id: claim for claim in charges
+                        }
                         for attempt in previous:
                             if self._stop.is_set():
                                 break
@@ -647,6 +662,13 @@ class RequestDispatcher:
                             )
                             if recovered.disposition == 'requeued':
                                 self._counts['live_claims_recovered'] += 1
+                                claim = charges_by_attempt.get(attempt)
+                                if claim is not None:
+                                    self.scheduler.refunded(
+                                        claim.pool_id,
+                                        claim.charged_cost,
+                                        charge_sequence=claim.charge_sequence,
+                                    )
                         self._owner_ready = True
                     if time.monotonic() >= self._owner_until:
                         raise StaleOwner('owner expired locally')
@@ -812,23 +834,25 @@ class RequestDispatcher:
             head = heads[pool]
             claim_id = uuid4().hex
             reply = await self._maintenance_io(
-                'claim',
+                'claim_and_charge',
                 self.owner,
-                head.attempt_id,
-                pool_id=pool,
+                pool,
+                expected_attempt=head.attempt_id,
                 claim_id=claim_id,
                 expected_cost=head.cost,
             )
-            if reply.disposition != 'claimed':
+            if not isinstance(reply, ClaimRecord):
                 self.scheduler.rejected(pool, reply.disposition)
                 heads.pop(pool)
                 continue
-            self.scheduler.claimed(pool, reply.cost)
+            self.scheduler.claimed(
+                pool,
+                reply.charged_cost,
+                charge_sequence=reply.charge_sequence,
+            )
             self._counts['claims'] += 1
             # Track the selected claim before any subsequent fallible store inspection.
-            task = asyncio.create_task(
-                self._execute(reply.attempt_id, claim_id, head.endpoint_id)
-            )
+            task = asyncio.create_task(self._execute(reply))
             self._tasks[reply.attempt_id] = task
             task.add_done_callback(partial(self._completed_task, reply.attempt_id))
             attempt = await self._maintenance_io('ready_head', pool)
@@ -944,18 +968,27 @@ class RequestDispatcher:
                 raise StaleOwner('owner uncertain')
             await asyncio.sleep(random.uniform(0.1, 0.5))
 
-    async def _execute(self, attempt: str, claim_id: str, endpoint_id: str) -> None:
+    async def _execute(self, claim: ClaimRecord) -> None:
+        attempt = claim.attempt_id
+        claim_id = claim.claim_id
+        endpoint_id = claim.endpoint_group_id
         outcome = None
         try:
             try:
                 sequence, outcome = await self._provider(attempt, claim_id, endpoint_id)
             except UnsupportedQueueStreaming:
-                await self._commit(
+                reply = await self._commit(
                     'reject_claim',
                     attempt,
                     claim_id=claim_id,
                     category='unsupported_streaming',
                 )
+                if reply.refund_state == 'refunded':
+                    self.scheduler.refunded(
+                        claim.pool_id,
+                        claim.charged_cost,
+                        charge_sequence=claim.charge_sequence,
+                    )
                 return
             except (StoreUnavailable, TransitionRejected):
                 self._category = 'start_unconfirmed'
@@ -1043,6 +1076,7 @@ class RequestDispatcher:
             self._owner_until = 0
         finally:
             outcome = None
+            self.scheduler.retire_charge(claim.charge_sequence)
 
 
 def _emit_execution_history(

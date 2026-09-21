@@ -93,6 +93,27 @@ class StoreReply:
     cost: int = 0
     payload_bytes: int = 0
     attempt_id: str = ""
+    claim_id: str = ""
+    owner_generation: int = 0
+    pool_id: str = ""
+    endpoint_group_id: str = ""
+    charged_cost: int = 0
+    refunded_cost: int = 0
+    charge_sequence: int = 0
+    refund_state: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimRecord:
+    attempt_id: str
+    claim_id: str
+    execution_sequence: int
+    owner_generation: int
+    pool_id: str
+    endpoint_group_id: str
+    charged_cost: int
+    charge_sequence: int
+    refund_state: Literal["not_refunded", "refunded"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,6 +227,11 @@ class RequestMetadata:
     last_error: str | None = None
     model: str | None = None
     admitted_at_ms: int | None = None
+    charged_cost: int = 0
+    charge_sequence: int = 0
+    charged_owner_generation: int = 0
+    refund_state: str | None = None
+    refunded_on: int = 0
 
 
 class RequestStore:
@@ -934,6 +960,10 @@ class RequestStore:
             "next_eligible",
             "uncertainty_until",
             "retain_until",
+            "charged_cost",
+            "charge_sequence",
+            "charged_owner_generation",
+            "refunded_on",
         ):
             data[name] = int(data[name] or 0)
         if data["admitted_at_ms"] is not None:
@@ -958,7 +988,7 @@ class RequestStore:
         claim_id: str,
         expected_cost: int | None = None,
     ) -> StoreReply:
-        """Claim the expected ready head once, reserving execution capacity."""
+        """Claim through the durable transition while preserving legacy replies."""
         validate_identifier(pool_id)
         validate_identifier(claim_id)
         if expected_cost is not None and (
@@ -973,6 +1003,125 @@ class RequestStore:
             claim_id=claim_id,
             expected_cost=expected_cost,
         )
+
+    def claim_and_charge(
+        self,
+        owner: OwnerToken,
+        pool_id: str,
+        *,
+        expected_attempt: str,
+        expected_cost: int | None,
+        claim_id: str | None = None,
+    ) -> ClaimRecord | StoreReply:
+        """Atomically claim the selected head and persist its DRR charge."""
+        validate_identifier(pool_id)
+        validate_identifier(expected_attempt)
+        if expected_cost is not None and (
+            type(expected_cost) is not int or not 1 <= expected_cost <= 1_000_000
+        ):
+            raise ValueError("Invalid expected cost")
+        if claim_id is None:
+            existing = self.metadata(expected_attempt)
+            if (
+                existing is not None
+                and existing.state == "claimed"
+                and existing.owner_id == owner.value
+                and existing.pool_id == pool_id
+                and (expected_cost is None or existing.cost == expected_cost)
+                and existing.claim_id
+                and existing.refund_state == "not_refunded"
+            ):
+                return self._claim_record(existing)
+            claim_id = uuid4().hex
+        validate_identifier(claim_id)
+        result = self._invoke(
+            "claim",
+            owner=owner,
+            attempt_id=expected_attempt,
+            pool_id=pool_id,
+            claim_id=claim_id,
+            expected_cost=expected_cost,
+        )
+        if result["disposition"] not in {"claimed", "existing"}:
+            return StoreReply(**result)
+        return ClaimRecord(
+            attempt_id=result["attempt_id"],
+            claim_id=result["claim_id"],
+            execution_sequence=int(result["execution_seq"]),
+            owner_generation=int(result["owner_generation"]),
+            pool_id=result["pool_id"],
+            endpoint_group_id=result["endpoint_group_id"],
+            charged_cost=int(result["charged_cost"]),
+            charge_sequence=int(result["charge_sequence"]),
+            refund_state=result["refund_state"],
+        )
+
+    @staticmethod
+    def _claim_record(metadata: RequestMetadata) -> ClaimRecord:
+        if (
+            not metadata.claim_id
+            or metadata.charged_cost < 1
+            or metadata.charge_sequence < 1
+            or metadata.refund_state not in {"not_refunded", "refunded"}
+        ):
+            raise TransitionRejected("invalid_charge_record")
+        return ClaimRecord(
+            attempt_id=metadata.attempt_id,
+            claim_id=metadata.claim_id,
+            execution_sequence=metadata.execution_seq,
+            owner_generation=metadata.charged_owner_generation,
+            pool_id=metadata.pool_id,
+            endpoint_group_id=metadata.endpoint_id,
+            charged_cost=metadata.charged_cost,
+            charge_sequence=metadata.charge_sequence,
+            refund_state=metadata.refund_state,
+        )
+
+    def return_untransmitted_and_refund(
+        self, owner: OwnerToken, claim: ClaimRecord
+    ) -> StoreReply:
+        """Requeue one definitely-unsent claim and refund its charge once."""
+        return self._change(
+            "return_untransmitted",
+            owner=owner,
+            attempt_id=claim.attempt_id,
+            claim_id=claim.claim_id,
+            charge_sequence=claim.charge_sequence,
+        )
+
+    def reconcile_charges(
+        self,
+        owner: OwnerToken,
+        *,
+        attempt_ids: list[str] | None = None,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> list[ClaimRecord]:
+        """Read a bounded page of active durable charges for owner startup."""
+        if self._read("get", self.keys.owner) != owner.value:
+            raise StaleOwner("Dispatcher owner lease is no longer current")
+        if attempt_ids is not None:
+            if not 1 <= len(attempt_ids) <= self.limits.cleanup_page_size:
+                raise ValueError("attempt_ids exceeds the bounded cleanup page")
+            for attempt_id in attempt_ids:
+                validate_identifier(attempt_id)
+        else:
+            attempt_ids = self.processing_ids(offset=offset, limit=limit)
+        records: list[ClaimRecord] = []
+        for attempt_id in attempt_ids:
+            metadata = self.metadata(attempt_id)
+            if metadata is None or metadata.charged_cost < 1:
+                continue
+            records.append(self._claim_record(metadata))
+        return records
+
+    def charge_totals(self, pool_id: str) -> dict[str, int]:
+        """Return bounded cumulative charge/refund totals for one lane."""
+        validate_identifier(pool_id)
+        charged, refunded = self._read(
+            "hmget", self.keys.route(pool_id), "charged_cost", "refunded_cost"
+        )
+        return {"charged": int(charged or 0), "refunded": int(refunded or 0)}
 
     def fetch_payload(
         self, owner: OwnerToken, attempt_id: str, *, claim_id: str

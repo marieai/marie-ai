@@ -24,6 +24,7 @@ from marie.engine.llm_queue.scheduler import (
     DrrLaneScheduler,
     request_cost_units,
 )
+from marie.engine.llm_queue.store import ClaimRecord
 
 
 class _Logger:
@@ -287,6 +288,53 @@ def test_high_cost_request_dispatches_after_credit_accumulates():
     assert dispatch.request.request_id == "large-chunk"
     assert dispatch.cost_units == 9
     assert dispatch.deficit_after_dispatch == 3
+
+
+def test_reconcile_claims_restores_capacity_and_resets_volatile_round() -> None:
+    scheduler = DrrLaneScheduler(
+        queue_client=None,
+        total_concurrent_dispatch=2,
+        lanes=[DrrLaneConfig(pool_id="document-small", quantum=4)],
+    )
+    scheduler.select_metadata({"document-small": 1})
+    claim = ClaimRecord(
+        attempt_id="attempt-1",
+        claim_id="claim-1",
+        execution_sequence=0,
+        owner_generation=7,
+        pool_id="document-small",
+        endpoint_group_id="primary",
+        charged_cost=4,
+        charge_sequence=11,
+        refund_state="not_refunded",
+    )
+
+    scheduler.reconcile_charges([claim])
+
+    lane = scheduler.lane_metadata("document-small")
+    assert scheduler.inflight_count == 1
+    assert lane["inflight"] == 1
+    assert lane["deficit"] == 0
+    assert lane["committed_charge"] == 4
+
+
+def test_charge_and_refund_sequences_are_applied_once() -> None:
+    scheduler = DrrLaneScheduler(
+        queue_client=None,
+        total_concurrent_dispatch=2,
+        lanes=[DrrLaneConfig(pool_id="document-small", quantum=4)],
+    )
+    assert scheduler.select_metadata({"document-small": 4}) == "document-small"
+
+    assert scheduler.claimed("document-small", 4, charge_sequence=11)
+    assert not scheduler.claimed("document-small", 4, charge_sequence=11)
+    assert scheduler.refunded("document-small", 4, charge_sequence=11)
+    assert not scheduler.refunded("document-small", 4, charge_sequence=11)
+
+    lane = scheduler.lane_metadata("document-small")
+    assert lane["deficit"] == 4
+    assert lane["committed_charge"] == 0
+    assert scheduler._active_charges == {}
 
 
 def test_malformed_head_request_is_dropped_without_wedging_lane():

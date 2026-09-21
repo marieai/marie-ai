@@ -51,7 +51,7 @@ local manifest = KEYS[18]
 local operations = {route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
     producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,admit_manifest=true,
     metadata=true,result=true,claim=true,payload=true,start=true,defer=true,promote=true,
-    finish=true,cancel=true,recover=true,discard=true,purge=true,settle=true,prune=true}
+    finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true}
 if not operations[op] then return redis.error_reply('invalid operation') end
 local function integer(value, low, high)
     return type(value) == 'number' and value == math.floor(value) and value >= low and value <= high
@@ -87,6 +87,8 @@ end
 if op == 'claim' or op == 'payload' or op == 'start' or op == 'defer' or op == 'finish' or op == 'settle' then
     if not identifier(a.claim_id) then return redis.error_reply('missing claim identity') end
 end
+if op == 'return_untransmitted' and (not identifier(a.claim_id) or
+    not integer(a.charge_sequence,1,2^53-1)) then return redis.error_reply('invalid return arguments') end
 if op == 'defer' or op == 'finish' or op == 'settle' then
     if not integer(a.execution_seq,0,a.limits.max_attempts) then return redis.error_reply('invalid execution sequence') end
 end
@@ -140,7 +142,8 @@ local counter_limits = {
     active_items=a.limits.max_active_items, payload_bytes=a.limits.max_payload_bytes,
     records=a.limits.max_records, storage_bytes=a.limits.max_storage_bytes,
     ready_ids=a.limits.max_ready_ids, reserved_items=a.limits.max_execution_items,
-    reserved_bytes=a.limits.max_execution_bytes}
+    reserved_bytes=a.limits.max_execution_bytes, charge_sequence=2^53-1,
+    charged_cost=2^53-1, refunded_cost=2^53-1}
 for field, maximum in pairs(counter_limits) do
     if not stored_integer(h(usage,field),maximum) then
         return redis.error_reply('invalid store counter')
@@ -155,7 +158,9 @@ local request_limits = {feedback_seq=a.limits.max_attempts,
     storage_charge=a.limits.metadata_bytes+a.limits.result_allowance,
     reserved=1, active=1, reservation_bytes=a.limits.max_execution_bytes,
     uncertainty_until=2^53-1, claim_until=2^53-1, retain_until=2^53-1,
-    owner_generation=2^40, result_allowance=a.limits.result_allowance}
+    owner_generation=2^40, charged_owner_generation=2^40,
+    charged_cost=1000000, charge_sequence=2^53-1, refunded_on=2^53-1,
+    result_allowance=a.limits.result_allowance}
 for field, maximum in pairs(request_limits) do
     if not stored_integer(h(R,field),maximum) then
         return redis.error_reply('invalid request metadata')
@@ -163,7 +168,8 @@ for field, maximum in pairs(request_limits) do
 end
 local execution_limits = {execution_limit=a.limits.max_execution_items,
     execution_bytes=a.limits.max_execution_bytes, reserved_items=a.limits.max_execution_items,
-    reserved_bytes=a.limits.max_execution_bytes}
+    reserved_bytes=a.limits.max_execution_bytes, charged_cost=2^53-1,
+    refunded_cost=2^53-1}
 for field, maximum in pairs(execution_limits) do
     for _, key in ipairs({route, endpoint}) do
         if not stored_integer(h(key,field),maximum) then
@@ -204,7 +210,11 @@ local function inc(field, delta) redis.call('HINCRBY', usage, field, delta) end
 local function reply(disposition)
     return cjson.encode({disposition=disposition,attempt_id=a.id or '',state=h(R,'state') or '',
         execution_seq=n(R,'execution_seq'),expires_at_ms=n(R,'expires_at_ms'),
-        cost=n(R,'cost'),payload_bytes=n(R,'payload_bytes')})
+        cost=n(R,'cost'),payload_bytes=n(R,'payload_bytes'),claim_id=h(R,'claim_id') or '',
+        owner_generation=n(R,'charged_owner_generation'),pool_id=h(R,'pool_id') or '',
+        endpoint_group_id=h(R,'endpoint_id') or '',charged_cost=n(R,'charged_cost'),
+        refunded_cost=h(R,'refund_state') == 'refunded' and n(R,'charged_cost') or 0,
+        charge_sequence=n(R,'charge_sequence'),refund_state=h(R,'refund_state') or ''})
 end
 local function live() return redis.call('EXISTS', alive) == 1 end
 local function terminal()
@@ -233,6 +243,18 @@ local function release()
     end
     redis.call('ZREM',processing,a.id)
 end
+local function refund()
+    local charged = n(R,'charged_cost')
+    if charged < 1 or h(R,'refund_state') == 'refunded' then return false end
+    if n(usage,'refunded_cost')+charged > 2^53-1 or
+        n(route,'refunded_cost')+charged > 2^53-1 then
+        error('charge accounting exhausted')
+    end
+    inc('refunded_cost',charged)
+    redis.call('HINCRBY',route,'refunded_cost',charged)
+    redis.call('HSET',R,'refund_state','refunded','refunded_on',now)
+    return true
+end
 local function drop_input()
     if h(R,'active') == '1' then
         inc('active_items',-1)
@@ -255,18 +277,23 @@ local function erase()
     redis.call('DEL',R)
 end
 local function abandon()
+    if h(R,'state') == 'claimed' then refund() end
     drop_input()
     unlink_indexes()
     redis.call('SREM',members,a.id)
     if n(R,'reserved') == 1 and n(R,'execution_seq') > 0 and h(R,'state') ~= 'claimed' then
         local values = redis.call('HMGET',R,'producer_id','pool_id','endpoint_id','claim_id',
-            'execution_seq','owner_generation','owner_id','reservation_bytes','uncertainty_until','feedback_seq')
+            'execution_seq','owner_generation','owner_id','reservation_bytes','uncertainty_until','feedback_seq',
+            'charged_cost','charge_sequence','charged_owner_generation','refund_state','refunded_on')
         local charge = n(R,'storage_charge')
         redis.call('DEL',R)
         redis.call('HSET',R,'state','abandoned','producer_id',values[1],'pool_id',values[2],
             'endpoint_id',values[3],'claim_id',values[4],'execution_seq',values[5],
             'owner_generation',values[6],'owner_id',values[7],'reservation_bytes',values[8],
-            'uncertainty_until',values[9],'feedback_seq',values[10] or '0','reserved',1,'storage_charge',a.limits.metadata_bytes)
+            'uncertainty_until',values[9],'feedback_seq',values[10] or '0',
+            'charged_cost',values[11] or '0','charge_sequence',values[12] or '0',
+            'charged_owner_generation',values[13] or '0','refund_state',values[14] or '',
+            'refunded_on',values[15] or '0','reserved',1,'storage_charge',a.limits.metadata_bytes)
         inc('storage_bytes',a.limits.metadata_bytes-charge)
     else
         release()
@@ -283,7 +310,7 @@ local function finish_terminal(state, result)
         'finished_at',now,'retain_until',until_time)
     redis.call('ZADD',retention,until_time,a.id)
 end
-local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,start=true,payload=true,defer=true,
+local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,start=true,payload=true,defer=true,return_untransmitted=true,
     promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true}
 if dispatcher_ops[op] and not owner_valid() then return reply('stale_owner') end
 if op == 'initialize' then
@@ -491,7 +518,7 @@ end
 if op == 'cancel' then
     if terminal() then return reply('existing') end
     if a.expire and now < n(R,'expires_at_ms') then return reply('not_due') end
-    if h(R,'state') == 'claimed' then release() end
+    if h(R,'state') == 'claimed' then refund(); release() end
     local result = {error=a.expire and 'expired' or 'cancelled'}
     if h(R,'last_error') then result.category = h(R,'last_error') end
     finish_terminal(a.expire and 'expired' or 'cancelled',cjson.encode(result))
@@ -519,13 +546,24 @@ if op == 'claim' then
         n(endpoint,'reserved_bytes')+bytes > n(endpoint,'execution_bytes') or
         n(usage,'reserved_items') >= a.limits.max_execution_items or
         n(usage,'reserved_bytes')+bytes > a.limits.max_execution_bytes then return reply('capacity') end
+    local charged = n(R,'cost')
+    if n(usage,'charge_sequence') >= 2^53-1 or
+        n(usage,'charged_cost')+charged > 2^53-1 or
+        n(route,'charged_cost')+charged > 2^53-1 then
+        return redis.error_reply('charge accounting exhausted')
+    end
     if (h(endpoint,'circuit') or 'closed') ~= 'closed' then
         redis.call('HSET',endpoint,'circuit','half_open','probe_claim',a.claim_id)
     end
+    local charge_sequence = redis.call('HINCRBY',usage,'charge_sequence',1)
+    inc('charged_cost',charged)
+    redis.call('HINCRBY',route,'charged_cost',charged)
     redis.call('LPOP',ready); inc('ready_ids',-1)
     redis.call('HSET',R,'state','claimed','claim_id',a.claim_id,'owner_id',a.owner,
         'owner_generation',a.generation,'claim_until',now+a.limits.claim_lease_ms,
-        'reserved',1,'reservation_bytes',bytes)
+        'reserved',1,'reservation_bytes',bytes,'charged_cost',charged,
+        'charge_sequence',charge_sequence,'charged_owner_generation',a.generation,
+        'refund_state','not_refunded','refunded_on',0)
     redis.call('ZADD',processing,now+a.limits.claim_lease_ms,a.id)
     inc('reserved_items',1); inc('reserved_bytes',bytes)
     redis.call('HINCRBY',route,'reserved_items',1)
@@ -538,9 +576,9 @@ elseif op == 'recover' then
     if h(R,'owner_id') == a.owner and now < n(R,'claim_until') then return reply('not_due') end
     if state == 'claimed' then
         if n(usage,'ready_ids') >= a.limits.max_ready_ids then return reply('backpressure') end
-        release()
+        refund(); release()
         redis.call('HSET',R,'state','ready')
-        redis.call('HDEL',R,'claim_id','owner_id','owner_generation')
+        redis.call('HDEL',R,'owner_id','owner_generation')
         redis.call('RPUSH',ready,a.id); inc('ready_ids',1)
         return reply('requeued')
     end
@@ -557,10 +595,24 @@ elseif op == 'promote' then
     redis.call('HSET',R,'state','ready')
     return reply('promoted')
 end
+if op == 'return_untransmitted' then
+    if state == 'ready' and h(R,'claim_id') == a.claim_id and
+        n(R,'charge_sequence') == a.charge_sequence and h(R,'refund_state') == 'refunded' then
+        return reply('existing')
+    end
+    if state ~= 'claimed' or h(R,'claim_id') ~= a.claim_id or
+        n(R,'charge_sequence') ~= a.charge_sequence then return reply('stale_claim') end
+    if n(usage,'ready_ids') >= a.limits.max_ready_ids then return reply('backpressure') end
+    refund(); release()
+    redis.call('HSET',R,'state','ready')
+    redis.call('HDEL',R,'owner_id','owner_generation')
+    redis.call('RPUSH',ready,a.id); inc('ready_ids',1)
+    return reply('returned')
+end
 if not claim_matches() then return reply('stale_claim') end
 if op == 'reject_claim' then
     if state ~= 'claimed' then return reply('invalid_state') end
-    release()
+    refund(); release()
     finish_terminal('failed',cjson.encode({error=a.reason}))
     return reply('finished')
 end
@@ -582,6 +634,7 @@ if op == 'defer' then
     if state ~= 'claimed' and state ~= 'executing' then return reply('invalid_state') end
     if state == 'executing' and not a.remote_settled then return reply('unresolved') end
     if n(R,'execution_seq') >= a.limits.max_attempts then return reply('attempts_exhausted') end
+    if state == 'claimed' then refund() end
     release()
     redis.call('HSET',R,'state','delayed','next_eligible',math.min(now+a.delay_ms,n(R,'expires_at_ms')),'last_error',a.reason)
     redis.call('ZADD',delayed,math.min(now+a.delay_ms,n(R,'expires_at_ms')),a.id)

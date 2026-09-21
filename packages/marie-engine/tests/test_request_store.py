@@ -113,6 +113,117 @@ def run_request(store, req):
     return token, started.execution_seq
 
 
+def test_claim_charge_and_pre_send_refund_are_idempotent(store):
+    from marie.engine.llm_queue.store import ClaimRecord
+
+    req = replace(request_for(store), estimated_cost_units=4)
+    assert store.admit(req).disposition == 'admitted'
+
+    first = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=req.attempt_id,
+        expected_cost=4,
+        claim_id='durable-charge',
+    )
+    replay = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=req.attempt_id,
+        expected_cost=4,
+        claim_id='durable-charge',
+    )
+
+    assert isinstance(first, ClaimRecord)
+    assert replay == first
+    assert store.charge_totals('pool') == {'charged': 4, 'refunded': 0}
+    returned = store.return_untransmitted_and_refund(store.test_owner, first)
+    returned_replay = store.return_untransmitted_and_refund(store.test_owner, first)
+    assert returned.disposition == 'returned'
+    assert returned_replay.disposition == 'existing'
+    assert store.charge_totals('pool') == {'charged': 4, 'refunded': 4}
+
+
+def test_sent_or_possibly_sent_claim_retains_its_charge(store):
+    req = replace(request_for(store), estimated_cost_units=3)
+    assert store.admit(req).disposition == 'admitted'
+    claim = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=req.attempt_id,
+        expected_cost=3,
+        claim_id='sent-charge',
+    )
+    started = store.authorize_start(
+        store.test_owner, req.attempt_id, claim_id=claim.claim_id
+    )
+    store.mark_unknown(
+        store.test_owner,
+        req.attempt_id,
+        claim_id=claim.claim_id,
+        execution_seq=started.execution_seq,
+        category='connection_lost',
+    )
+
+    assert store.charge_totals('pool') == {'charged': 3, 'refunded': 0}
+
+
+def test_owner_recovery_refunds_an_unsent_charge_once(store):
+    req = replace(request_for(store), estimated_cost_units=2)
+    assert store.admit(req).disposition == 'admitted'
+    claim = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=req.attempt_id,
+        expected_cost=2,
+        claim_id='orphaned-charge',
+    )
+    store.client.pexpire(store.keys.owner, 1)
+    time.sleep(0.01)
+    replacement = store.acquire_owner('replacement', lease_ms=10_000)
+
+    assert store.recover_claim(replacement, req.attempt_id).disposition == 'requeued'
+    assert (
+        store.recover_claim(replacement, req.attempt_id).disposition == 'invalid_state'
+    )
+    assert claim.refund_state == 'not_refunded'
+    assert store.charge_totals('pool') == {'charged': 2, 'refunded': 2}
+
+
+def test_changed_head_and_rejected_claim_have_exact_accounting(store):
+    first = request_for(store)
+    second = request_for(store, producer=first.producer_id)
+    assert store.admit(first).disposition == 'admitted'
+    assert store.admit(second).disposition == 'admitted'
+
+    changed = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=second.attempt_id,
+        expected_cost=second.estimated_cost_units,
+        claim_id='wrong-head',
+    )
+    assert changed.disposition == 'head_changed'
+    assert store.charge_totals('pool') == {'charged': 0, 'refunded': 0}
+
+    claim = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=first.attempt_id,
+        expected_cost=first.estimated_cost_units,
+        claim_id='rejected-before-send',
+    )
+    rejected = store.reject_claim(
+        store.test_owner,
+        first.attempt_id,
+        claim_id=claim.claim_id,
+        category='unsupported_streaming',
+    )
+    assert rejected.disposition == 'finished'
+    assert rejected.refund_state == 'refunded'
+    assert store.charge_totals('pool') == {'charged': 1, 'refunded': 1}
+
+
 def test_admit_is_atomic_bounded_and_digest_fenced(store):
     from marie.engine.llm_queue.store import AdmissionConflict
 
@@ -451,16 +562,24 @@ def test_lost_replies_reconcile_without_duplicate_admission_or_execution(
     assert store.usage()['active_items'] == 1
     claim_id = uuid4().hex
     lose_reply(
-        lambda: store.claim(
-            store.test_owner, req.attempt_id, pool_id='pool', claim_id=claim_id
+        lambda: store.claim_and_charge(
+            store.test_owner,
+            'pool',
+            expected_attempt=req.attempt_id,
+            expected_cost=req.estimated_cost_units,
+            claim_id=claim_id,
         )
     )
-    assert (
-        store.claim(
-            store.test_owner, req.attempt_id, pool_id='pool', claim_id=claim_id
-        ).disposition
-        == 'existing'
+    recovered_claim = store.claim_and_charge(
+        store.test_owner,
+        'pool',
+        expected_attempt=req.attempt_id,
+        expected_cost=req.estimated_cost_units,
+        claim_id=claim_id,
     )
+    assert recovered_claim.claim_id == claim_id
+    assert recovered_claim.charge_sequence == 1
+    assert store.charge_totals('pool') == {'charged': 1, 'refunded': 0}
     lose_reply(
         lambda: store.authorize_start(
             store.test_owner, req.attempt_id, claim_id=claim_id

@@ -284,14 +284,26 @@ async def test_execution_failure_counter_and_last_category_survive_success_and_i
     runtime._clients['endpoint'] = Client()
     try:
         for index, model in enumerate(['reject', 'success']):
+            from marie.engine.llm_queue.store import ClaimRecord
+
             item = request_for(store)
             item = replace(item, call=replace(item.call, model=model))
             store.admit(item)
             claim = 'claim' + str(index)
-            store.claim(
-                store.test_owner, item.attempt_id, pool_id='pool', claim_id=claim
+            record = store.claim_and_charge(
+                store.test_owner,
+                'pool',
+                expected_attempt=item.attempt_id,
+                expected_cost=item.estimated_cost_units,
+                claim_id=claim,
             )
-            await runtime._execute(item.attempt_id, claim, 'endpoint')
+            assert isinstance(record, ClaimRecord)
+            runtime.scheduler.claimed(
+                record.pool_id,
+                record.charged_cost,
+                charge_sequence=record.charge_sequence,
+            )
+            await runtime._execute(record)
         await runtime._maintenance()
         health = runtime.health()
         assert health['counters']['execution_errors'] == 1

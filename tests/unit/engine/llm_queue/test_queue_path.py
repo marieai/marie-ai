@@ -52,6 +52,8 @@ from marie.engine.llm_queue.registry import (
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.llm_queue.store import (
     AdmissionConflict,
+    ClaimRecord,
+    OwnerToken,
     PreparedAdmission,
     RequestStore,
     RoutingManifestProjection,
@@ -302,6 +304,87 @@ def test_request_context_round_trip_preserves_durable_provenance() -> None:
     )
 
     assert RequestContext.from_dict(context.to_dict()) == context
+
+
+def test_claim_and_charge_returns_durable_accounting_record() -> None:
+    store = object.__new__(RequestStore)
+    store.metadata = lambda _attempt: None
+    captured = {}
+
+    def invoke(op, **kwargs):
+        captured.update(op=op, **kwargs)
+        return {
+            "disposition": "claimed",
+            "attempt_id": "attempt-1",
+            "claim_id": "claim-1",
+            "execution_seq": 0,
+            "owner_generation": 7,
+            "pool_id": "document-small",
+            "endpoint_group_id": "primary",
+            "charged_cost": 4,
+            "charge_sequence": 11,
+            "refund_state": "not_refunded",
+        }
+
+    store._invoke = invoke
+    owner = OwnerToken("gateway", 7)
+
+    claim = store.claim_and_charge(
+        owner,
+        "document-small",
+        expected_attempt="attempt-1",
+        expected_cost=4,
+        claim_id="claim-1",
+    )
+
+    assert claim == ClaimRecord(
+        attempt_id="attempt-1",
+        claim_id="claim-1",
+        execution_sequence=0,
+        owner_generation=7,
+        pool_id="document-small",
+        endpoint_group_id="primary",
+        charged_cost=4,
+        charge_sequence=11,
+        refund_state="not_refunded",
+    )
+    assert captured["op"] == "claim"
+    assert captured["expected_cost"] == 4
+
+
+def test_return_untransmitted_and_refund_is_bound_to_claim_record() -> None:
+    store = object.__new__(RequestStore)
+    captured = {}
+    store._change = lambda op, **kwargs: captured.update(op=op, **kwargs) or StoreReply(
+        disposition="returned",
+        charged_cost=4,
+        refunded_cost=4,
+        charge_sequence=11,
+        refund_state="refunded",
+    )
+    claim = ClaimRecord(
+        attempt_id="attempt-1",
+        claim_id="claim-1",
+        execution_sequence=0,
+        owner_generation=7,
+        pool_id="document-small",
+        endpoint_group_id="primary",
+        charged_cost=4,
+        charge_sequence=11,
+        refund_state="not_refunded",
+    )
+
+    reply = store.return_untransmitted_and_refund(OwnerToken("gateway", 8), claim)
+
+    assert reply.disposition == "returned"
+    assert reply.refund_state == "refunded"
+    assert captured == {
+        "op": "return_untransmitted",
+        "owner": OwnerToken("gateway", 8),
+        "attempt_id": "attempt-1",
+        "claim_id": "claim-1",
+        "charge_sequence": 11,
+    }
 
 
 def _queue_config(**overrides) -> LlmQueueConfig:
