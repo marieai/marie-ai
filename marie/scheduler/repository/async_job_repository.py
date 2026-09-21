@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import glob
+import hashlib
+import json
 import os
 import random
 import re
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import psycopg
+from marie.engine.llm_queue.admission_policy import AdmissionPolicy
 from psycopg.rows import tuple_row
 from psycopg.types.json import Jsonb
 
@@ -18,6 +21,7 @@ from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.fixtures import create_sql_from_file
+from marie.scheduler.llm_routing import PlannedLlmRoute
 from marie.scheduler.models import RecoveredRunLease, WorkInfo
 from marie.scheduler.repository.plans import (
     cancel_jobs,
@@ -33,6 +37,7 @@ from marie.scheduler.repository.plans import (
     insert_dag,
     insert_job_search_documents,
     insert_jobs,
+    insert_llm_routes,
     insert_version,
     load_dag,
     mark_as_active_dags,
@@ -42,6 +47,7 @@ from marie.scheduler.repository.plans import (
 from marie.scheduler.search_documents import build_job_search_documents
 from marie.scheduler.state import WorkState
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
+from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
@@ -71,6 +77,17 @@ OPERATIONAL_ATTEMPT_ATTENTION = {
     "owner_mismatch",
 }
 OPERATIONAL_EVENT_SEVERITIES = {"info", "warning", "bad"}
+
+
+def _routing_digest(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(',', ':'),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class _GuardrailRouteConflict(RuntimeError):
@@ -2696,6 +2713,7 @@ class AsyncJobRepository:
         plan: QueryPlan,
         dag_nodes: List[WorkInfo],
         work_info: WorkInfo,
+        llm_routes: Sequence[PlannedLlmRoute] = (),
     ) -> Tuple[bool, Optional[str]]:
         dag_name = f"{dag_id}_dag"
         metadata = work_info.data.get("metadata", {})
@@ -2703,6 +2721,13 @@ class AsyncJobRepository:
         search_documents = build_job_search_documents(
             plan=plan, dag_nodes=dag_nodes, planner=planner
         )
+        route_records = self._routing_records(dag_id, dag_nodes, llm_routes)
+        routed_ids = {record['work_unit_id'] for record in route_records}
+        serialized_nodes = []
+        for node in dag_nodes:
+            payload = node.model_dump(mode='json')
+            payload['llm_routing_ready'] = node.id not in routed_ids
+            serialized_nodes.append(payload)
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
@@ -2725,13 +2750,213 @@ class AsyncJobRepository:
                     return False, None
                 await conn.execute(
                     insert_jobs(DEFAULT_SCHEMA),
-                    Jsonb([node.model_dump(mode="json") for node in dag_nodes]),
+                    Jsonb(serialized_nodes),
                 )
                 await conn.execute(
                     insert_job_search_documents(DEFAULT_SCHEMA),
                     Jsonb([asdict(document) for document in search_documents]),
                 )
+                if route_records:
+                    inserted = await conn.fetch(
+                        insert_llm_routes(DEFAULT_SCHEMA), Jsonb(route_records)
+                    )
+                    if len(inserted) != len(route_records):
+                        raise RuntimeError('routing_manifest_insert_incomplete')
         return True, str(row[0])
+
+    async def read_llm_job_route(self, work_unit_id: str) -> Dict[str, Any] | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT work_unit_id, job_id, fabric_group_id, policy_generation,
+                       policy_digest, rule_digest, normalized_fact_digest,
+                       effective_page_count, pool_id,
+                       logical_endpoint_group_id, endpoint_revision,
+                       estimator_version, routing_source, projection_state,
+                       projected_on, created_on
+                FROM {DEFAULT_SCHEMA}.llm_job_route
+                WHERE work_unit_id = %s::uuid
+                """,
+                work_unit_id,
+            )
+        if row is None:
+            return None
+        names = (
+            'work_unit_id',
+            'job_id',
+            'fabric_group_id',
+            'policy_generation',
+            'policy_digest',
+            'rule_digest',
+            'normalized_fact_digest',
+            'effective_page_count',
+            'pool_id',
+            'logical_endpoint_group_id',
+            'endpoint_revision',
+            'estimator_version',
+            'routing_source',
+            'projection_state',
+            'projected_on',
+            'created_on',
+        )
+        return dict(zip(names, row, strict=True))
+
+    async def load_active_admission_configuration(
+        self, fabric_group_id: str
+    ) -> tuple[str, AdmissionPolicy | None]:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT config.admission_mode, config.active_policy_generation,
+                       generation.policy_digest, generation.policy_snapshot
+                FROM {DEFAULT_SCHEMA}.llm_queue_fabric_config config
+                LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation generation
+                  ON generation.fabric_group_id = config.fabric_group_id
+                 AND generation.generation = config.active_policy_generation
+                WHERE config.fabric_group_id = %s AND config.enabled = true
+                """,
+                fabric_group_id,
+            )
+        if row is None:
+            raise ValueError('routing_policy_unavailable')
+        mode = str(row[0])
+        if mode == 'off':
+            return mode, None
+        if row[1] is None or not isinstance(row[3], dict):
+            raise ValueError('routing_policy_unavailable')
+        generation, digest, snapshot = int(row[1]), str(row[2]), row[3]
+        if _routing_digest(snapshot) != digest:
+            raise ValueError('routing_policy_digest_mismatch')
+        dispatch_lanes = {
+            lane['pool_id']: lane
+            for lane in snapshot.get('dispatch', {}).get('lanes', [])
+            if isinstance(lane, dict) and isinstance(lane.get('pool_id'), str)
+        }
+        admission = snapshot.get('admission')
+        if not isinstance(admission, dict):
+            raise ValueError('routing_policy_unavailable')
+        rows = []
+        for rule in admission.get('rules', []):
+            lane = dispatch_lanes.get(rule.get('pool_id'))
+            if lane is None:
+                raise ValueError('routing_endpoint_binding_missing')
+            rows.append(
+                {
+                    'pool_id': rule['pool_id'],
+                    'enabled': rule['enabled'],
+                    'metadata': {
+                        'admission': rule['admission'],
+                        'llm_dispatch': {
+                            'schema_version': 1,
+                            'endpoint_id': lane['endpoint_id'],
+                            'revision': lane['revision'],
+                        },
+                    },
+                }
+            )
+        policy = AdmissionPolicy.from_rows(fabric_group_id, generation, rows)
+        return mode, replace(policy, policy_digest=digest)
+
+    async def get_submission_document_for_routing(
+        self, *, document_id: str | None, storage_key: str | None
+    ) -> SubmissionDocument | None:
+        if document_id:
+            predicate = 'id = %s::uuid'
+            value = document_id
+        elif storage_key:
+            predicate = 'storage_key = %s'
+            value = storage_key
+        else:
+            return None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT id, submission_id, file_name, file_size, content_type,
+                       storage_key, status, page_count, document_type,
+                       error_message, confidence_score, extracted_fields,
+                       dag_id, job_id, hitl_request_id, indexing_status,
+                       indexing_error, indexed_at, created_at, updated_at
+                FROM {DEFAULT_SCHEMA}.submission_documents
+                WHERE {predicate}
+                """,
+                value,
+            )
+        if row is None:
+            return None
+        names = (
+            'id',
+            'submission_id',
+            'file_name',
+            'file_size',
+            'content_type',
+            'storage_key',
+            'status',
+            'page_count',
+            'document_type',
+            'error_message',
+            'confidence_score',
+            'extracted_fields',
+            'dag_id',
+            'job_id',
+            'hitl_request_id',
+            'indexing_status',
+            'indexing_error',
+            'indexed_at',
+            'created_at',
+            'updated_at',
+        )
+        return SubmissionDocument.from_row(dict(zip(names, row, strict=True)))
+
+    async def cache_submission_document_page_count(
+        self,
+        *,
+        document_id: str,
+        storage_key: str,
+        page_count: int,
+    ) -> bool:
+        if type(page_count) is not int or page_count < 1:
+            raise ValueError('routing_facts_invalid')
+        async with self._pool.acquire() as conn:
+            value = await conn.fetchval(
+                f"""
+                UPDATE {DEFAULT_SCHEMA}.submission_documents
+                SET page_count = %s, updated_at = NOW()
+                WHERE id = %s::uuid AND storage_key = %s AND page_count IS NULL
+                RETURNING true
+                """,
+                page_count,
+                document_id,
+                storage_key,
+            )
+        return bool(value)
+
+    @staticmethod
+    def _routing_records(
+        dag_id: str,
+        dag_nodes: Sequence[WorkInfo],
+        routes: Sequence[PlannedLlmRoute],
+    ) -> list[dict[str, Any]]:
+        node_ids = {node.id for node in dag_nodes}
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for route in routes:
+            if (
+                route.job_id != dag_id
+                or route.work_unit_id not in node_ids
+                or route.work_unit_id in seen
+            ):
+                raise ValueError('routing_manifest_invalid')
+            payload = route.model_dump(mode='json')
+            route_digest = _routing_digest(payload)
+            records.append(
+                {
+                    **payload,
+                    'route_digest': route_digest,
+                    'payload': payload,
+                }
+            )
+            seen.add(route.work_unit_id)
+        return records
 
     async def create_dag(self, dag: QueryPlan, jobs: List[WorkInfo]) -> bool:
         """Create a DAG and jobs through the transactional submission path."""

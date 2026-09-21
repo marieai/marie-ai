@@ -33,6 +33,8 @@ class WorkInfo(BaseModel):
     run_attempt_id: Optional[str] = None
     branch_metadata: Optional[Dict[str, Any]] = None
     routing_context: TrustedRoutingContext | None = Field(default=None, exclude=True)
+    routing_fabric_group_id: str | None = Field(default=None, exclude=True)
+    routing_request_source: str | None = Field(default=None, exclude=True)
 
 
 class JobSubmissionModel(BaseModel):

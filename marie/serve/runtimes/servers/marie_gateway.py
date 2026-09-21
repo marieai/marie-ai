@@ -1822,6 +1822,8 @@ class MarieServerGateway(CompositeServer):
             policy=submission_policy,
             soft_sla=soft_sla,
             hard_sla=hard_sla,
+            routing_fabric_group_id=self.llm_dispatch_runtime.config.fabric_group_id,
+            routing_request_source='gateway-job-api',
         )
 
         try:

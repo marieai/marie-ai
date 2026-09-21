@@ -3,8 +3,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from marie.engine.llm_queue.admission_policy import AdmissionPolicy
 
 import marie.scheduler.services.dag_submission_service as submission_module
+from marie.query_planner.base import LlmQueryDefinition, Query, QueryPlan, QueryType
+from marie.scheduler.llm_routing import TrustedRoutingContext, TrustedRoutingFacts
 from marie.scheduler.models import ExistingWorkPolicy
 from marie.scheduler.services.dag_submission_service import DagSubmissionService
 
@@ -33,6 +36,72 @@ def work_item(job_id: str) -> SimpleNamespace:
         policy='ALLOW_ALL',
         data={'metadata': {}},
     )
+
+
+@pytest.mark.asyncio
+async def test_llm_plan_passes_immutable_routes_to_submission_transaction() -> None:
+    service = build_service()
+    policy = AdmissionPolicy.from_rows(
+        'default',
+        1,
+        [
+            {
+                'pool_id': 'default',
+                'enabled': True,
+                'metadata': {
+                    'admission': {
+                        'schema_version': 1,
+                        'priority': 1_000_000,
+                        'accepting': True,
+                        'match': {},
+                    },
+                    'llm_dispatch': {
+                        'schema_version': 1,
+                        'endpoint_id': 'primary',
+                        'revision': 'r1',
+                    },
+                },
+            }
+        ],
+    )
+    root = work_item('018fa1f1-0000-7000-8000-000000000001')
+    root.routing_context = TrustedRoutingContext(
+        base_facts=TrustedRoutingFacts.from_values(
+            {
+                'workload.kind': 'text',
+                'workload.mode': 'batch',
+                'request.source': 'workflow',
+            }
+        ),
+        policy=policy,
+    )
+    node_id = '018fa1f1-0000-7000-8000-000000000002'
+    plan = QueryPlan(
+        nodes=[
+            Query(
+                task_id=node_id,
+                query_str='Extract',
+                dependencies=[],
+                node_type=QueryType.COMPUTE,
+                definition=LlmQueryDefinition(
+                    model_name='mock',
+                    endpoint='annotator_llm://extract',
+                    params={'layout': 'mock'},
+                ),
+            )
+        ]
+    )
+
+    routes = await service._plan_llm_routes(
+        root,
+        plan,
+        [SimpleNamespace(id=node_id)],
+    )
+
+    assert len(routes) == 1
+    assert routes[0].work_unit_id == node_id
+    assert routes[0].pool_id == 'default'
+    assert routes[0].logical_endpoint_group_id == 'primary'
 
 
 @pytest.mark.asyncio
