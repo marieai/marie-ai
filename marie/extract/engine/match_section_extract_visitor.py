@@ -1673,8 +1673,12 @@ class MatchSectionExtractionProcessingVisitor(BaseProcessingVisitor):
                         root_line.metadata.page_id = page_id  # FIXME: consider removing once not needed downstream
                     cell_value = root_line.line or ""
                 else:
-                    root_line = None
-                    cell_value = str(cell) if cell is not None else ""
+                    cell_value = cell.get_text() if cell is not None else ""
+                    root_line = LineWithMeta(
+                        line=cell_value,
+                        metadata=LineMetadata(page_id, None, None),
+                        annotations=[],
+                    )
 
                 self.logger.debug(
                     f"Extracting value for `{field_name}` = '{cell_value}' from column index {column_index}"

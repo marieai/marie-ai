@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-
 import pytest
 
 from marie.extract.engine.match_section_extract_visitor import (
@@ -10,7 +9,10 @@ from marie.extract.engine.record_backed_match_section_population_visitor import 
     _create_fields,
 )
 from marie.extract.models.match import Field, MatchSection
+from marie.extract.structures import UnstructuredDocument
+from marie.extract.structures.cell_with_meta import CellWithMeta
 from marie.extract.structures.line_with_meta import LineWithMeta
+from marie.extract.structures.structured_region import TableRow
 
 
 def _build_fields(
@@ -119,3 +121,36 @@ def test_record_backed_row_adds_required_default_without_source_column() -> None
         if field.field_name == "PROCEDURE_CODE"
     )
     assert procedure_code.value == "99999"
+
+
+def test_empty_table_cell_inherits_table_page() -> None:
+    visitor = MatchSectionExtractionProcessingVisitor(enabled=True)
+    rows = visitor._build_matched_field_rows(
+        document=UnstructuredDocument(
+            lines=[],
+            regions=None,
+            metadata={"source_metadata": {"pages": 0}},
+        ),
+        body_rows=[
+            TableRow(
+                cells=[
+                    CellWithMeta(lines=[]),
+                    CellWithMeta(lines=[LineWithMeta(line="99213", annotations=[])])
+                ]
+            )
+        ],
+        columns_to_process={
+            "REMARK_CODE": {"cell_index": 0, "header_config": {}},
+            "SERVICE_CODE": {"cell_index": 1, "header_config": {}},
+        },
+        page_id=42,
+        template_fields_repeating={
+            "REMARK_CODE": {"type": "ALPHA"},
+            "SERVICE_CODE": {"type": "ALPHA_NUMERIC"},
+        },
+    )
+
+    fields = {field.field_name: field for field in rows[0].fields}
+    assert fields["REMARK_CODE"].value == ""
+    assert fields["REMARK_CODE"].page == 42
+    assert fields["SERVICE_CODE"].page == 42
