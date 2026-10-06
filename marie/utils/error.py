@@ -5,7 +5,7 @@ from typing import Any, NamedTuple, Optional, Sequence, Tuple, Type, Union
 from typing_extensions import TypeAlias
 
 import marie.check as check
-from marie.excepts import BaseMarieException
+from marie.excepts import BaseMarieException, BatchExecutionError
 
 
 # mypy does not support recursive types, so "cause" has to be typed `Any`
@@ -93,8 +93,9 @@ def serialize_error(
     *,
     default_message: str,
     silence_exceptions: bool = False,
-) -> dict[str, str | int]:
-    """Build JSON-compatible failure details from an exception or executor response."""
+    include_diagnostics: bool = False,
+) -> dict[str, Any]:
+    """Serialize failure details; internal diagnostics require explicit opt-in."""
     filename = "unknown"
     name = "unknown"
     line_no = 0
@@ -117,7 +118,7 @@ def serialize_error(
         elif returned_message:
             message = returned_message
 
-    return {
+    details: dict[str, Any] = {
         "type": (
             type(exception).__name__
             if exception is not None
@@ -127,6 +128,85 @@ def serialize_error(
         "filename": filename.rsplit("/", 1)[-1],
         "name": name,
         "line_no": line_no,
+    }
+    if include_diagnostics and not silence_exceptions:
+        if exception is not None:
+            details.update(_exception_diagnostics(exception))
+        elif isinstance(return_data, dict) and isinstance(
+            return_data.get("error_details"), dict
+        ):
+            returned = return_data["error_details"]
+            for key in (
+                "filename",
+                "name",
+                "line_no",
+                "traceback",
+                "traceback_truncated",
+                "category",
+                "state",
+                "confirmed",
+                "request_id",
+                "primary_task_id",
+                "total",
+                "failed_count",
+                "failed_tasks",
+                "failed_tasks_truncated",
+                "cause",
+                "batch_error_type",
+            ):
+                if key in returned:
+                    details[key] = returned[key]
+    return details
+
+
+def _exception_diagnostics(exception: Exception, depth: int = 0) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    if exception.__traceback__ is not None:
+        encoded = "".join(traceback.format_exception(exception)).encode("utf-8")
+        if len(encoded) > 65_536:
+            marker = b"\n[truncated]"
+            details["traceback"] = encoded[: 65_536 - len(marker)].decode(
+                "utf-8", errors="ignore"
+            ) + marker.decode("utf-8")
+            details["traceback_truncated"] = True
+        else:
+            details["traceback"] = encoded.decode("utf-8")
+    for key in ("category", "state", "confirmed"):
+        value = getattr(exception, key, None)
+        if isinstance(value, (str, int, bool)):
+            details[key] = value
+    if depth >= 4:
+        return details
+    if isinstance(exception, BatchExecutionError):
+        details.update(
+            batch_error_type=type(exception).__name__,
+            request_id=exception.request_id,
+            primary_task_id=exception.primary_task_id,
+            total=exception.total,
+            failed_count=len(exception.failed_results),
+            failed_tasks_truncated=len(exception.failed_results) > 25,
+            failed_tasks=[
+                {
+                    "task_id": getattr(result, "task_id", None),
+                    "error": _nested_exception(result.error, depth + 1),
+                }
+                for result in exception.failed_results[:25]
+                if isinstance(getattr(result, "error", None), Exception)
+            ],
+        )
+        cause = exception.primary_error
+    else:
+        cause = exception.__cause__ or exception.__context__
+    if isinstance(cause, Exception) and cause is not exception:
+        details["cause"] = _nested_exception(cause, depth + 1)
+    return details
+
+
+def _nested_exception(exception: Exception, depth: int) -> dict[str, Any]:
+    return {
+        "type": type(exception).__name__,
+        "message": str(exception),
+        **_exception_diagnostics(exception, depth),
     }
 
 

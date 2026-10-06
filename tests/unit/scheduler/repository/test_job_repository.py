@@ -12,7 +12,12 @@ import pytest
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository import JobRepository
+from marie.scheduler.repository.async_job_repository import _routing_digest
 from marie.scheduler.state import WorkState
+from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+    build_policy_generation_snapshot,
+)
+from tests.unit.serve.runtimes.gateway.test_dispatch_policy import persisted
 
 
 class FakeTransaction:
@@ -109,9 +114,40 @@ def build_repository(connection: FakeConnection) -> JobRepository:
 
 
 @pytest.mark.asyncio
+async def test_active_admission_policy_loads_logical_endpoint_group_binding():
+    data = persisted()
+    dispatch = data['metadata']['llm_dispatch']
+    dispatch.pop('endpoints')
+    dispatch['endpoint_groups'] = [
+        {
+            'group_id': 'document-llm',
+            'revision': 'r1',
+            'replicas': [
+                {
+                    'replica_id': 'replica-a',
+                    'base_url': 'https://inference.example/v1',
+                    'execution_limit': 4,
+                }
+            ],
+        }
+    ]
+    lane = data['lanes'][0]['metadata']['llm_dispatch']
+    lane['endpoint_group_id'] = 'document-llm'
+    lane.pop('endpoint_id')
+    snapshot, _ = build_policy_generation_snapshot('default', 1, data)
+    digest = _routing_digest(snapshot)
+    repository = build_repository(FakeConnection(fetchrow=[(1, digest, snapshot)]))
+
+    policy = await repository.load_active_admission_policy('default')
+
+    assert policy.endpoint_binding('default').endpoint_group_id == 'document-llm'
+    assert policy.endpoint_binding('default').revision == 'r1'
+
+
+@pytest.mark.asyncio
 async def test_llm_routing_diagnostics_are_bounded_and_report_drain_references():
     connection = FakeConnection(
-        fetchrow=[('enforce', 4, 'a' * 64), (2, 9, 1)],
+        fetchrow=[(4, 'a' * 64), (2, 9, 1)],
         fetch=[
             [
                 ('document-small', 7, 4, 1, 2, 2),
@@ -158,7 +194,6 @@ async def test_llm_routing_diagnostics_are_bounded_and_report_drain_references()
     result = await repository.read_llm_routing_diagnostics('default', limit=1)
 
     assert result['policy'] == {
-        'admission_mode': 'enforce',
         'desired_generation': 4,
         'desired_digest': 'a' * 64,
     }

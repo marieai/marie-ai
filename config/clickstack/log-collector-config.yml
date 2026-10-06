@@ -12,15 +12,12 @@ receivers:
   filelog/docker:
     include:
       - /var/lib/docker/containers/*/*.log
-    exclude:
-      # Exclude noisy containers
-      - /var/lib/docker/containers/*/*hyperdx*.log
-      - /var/lib/docker/containers/*/*otel*.log
+    # Docker names these files <container-id>-json.log, so containers cannot be
+    # excluded by name here. The collectors opt out via `logging: driver: local`
+    # in docker-compose.clickstack.yml.
     start_at: end
     include_file_path: true
     include_file_name: true
-    multiline:
-      line_start_pattern: '^(INFO|WARN|ERROR|DEBUG|CRITICAL|FATAL|WARNI)'
 
     operators:
       # Parse Docker JSON log format first
@@ -50,7 +47,8 @@ receivers:
         id: marie_log_parser
         parse_from: body
         regex: '^(?P<log_level>INFO|WARN|ERROR|DEBUG|CRITICAL|FATAL|WARNI[^\s]*)\s+(?P<log_timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}):\s*:\s*(?P<component>\w+)\[\]@\s*(?P<thread_id>\d+)\s+(?P<message>.*)$'
-        on_error: send
+        # Non-marie containers never match; forward them without logging an error
+        on_error: send_quiet
 
       # ############### Extract Job Information ###############
       # Extract job_id (UUID format used by marie-ai)

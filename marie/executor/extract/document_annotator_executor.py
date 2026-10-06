@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import random
 import time
@@ -8,6 +10,7 @@ from docarray import DocList
 from omegaconf import OmegaConf
 
 from marie.api.docs import AssetKeyDoc
+from marie.assets import AssetTracker
 from marie.constants import __config_dir__
 from marie.excepts import BatchExecutionError, RuntimeTerminated
 from marie.executor.extract.util import layout_config
@@ -22,6 +25,7 @@ from marie.logging_core.mdc import MDC
 from marie.models.utils import torch_gc
 from marie.utils.asset_util import prepare_asset_directory, store_assets
 from marie.utils.docs import docs_from_asset, frames_from_docs
+from marie.utils.error import serialize_error
 from marie.utils.json import load_json_file
 from marie.utils.network import get_ip_address
 
@@ -227,15 +231,14 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 "error": None,
             }
 
-        # remove any dependencies on OmegaConf to avoid issues with index access
         annotator_conf = OmegaConf.to_container(annotator_conf, resolve=True)
-
         root_asset_dir, frames_dir, metadata_file = prepare_asset_directory(
             frames=frames,
             local_path=local_downloaded_s3_path,
             ref_id=ref_id,
             ref_type=ref_type,
             logger=self.logger,
+            restore_dirs=["agent-output"],
         )
         self.logger.info(f"root_asset_dir = {root_asset_dir}")
 
@@ -256,7 +259,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         self.logger.info(f"Doc : {doc}")
         self.logger.info(f"Doc page_count: {doc.page_count}")
 
-        # Create RunContext for execution context support
         run_context = None
         if MARIE_KERNEL_AVAILABLE:
             backend = FileSystemStateBackend(base_path=root_asset_dir)
@@ -292,17 +294,14 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             del docs
             frames = []
 
-        # --- Execution: catch task-level errors only ---
         try:
             await annotator.aannotate(doc, frames)
             del annotator
 
-            # Extract DAG tracking parameters for asset tracking
             dag_id = parameters.get("dag_id")
             node_task_id = parameters.get("node_task_id")
             partition_key = parameters.get("partition_key")
 
-            # Record asset materializations if enabled
             self._record_annotation_assets(
                 job_id=job_id,
                 ref_id=ref_id,
@@ -349,14 +348,18 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             msg = "inference exception"
             if self.show_error:
                 msg = (str(error),)
+            error_details = serialize_error(
+                error,
+                default_message="inference exception",
+                silence_exceptions=not self.show_error,
+            )
+            error_details["type"] = error_type
+            error_details["message"] = str(error) if self.show_error else msg
             return {
                 "status": "error",
                 "runtime_info": self.runtime_info,
                 "error": msg,
-                "error_details": {
-                    "type": error_type,
-                    "message": str(error) if self.show_error else msg,
-                },
+                "error_details": error_details,
             }
         finally:
             torch_gc()
@@ -380,12 +383,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             return
 
         try:
-            import hashlib
-            import json
-
-            from marie.assets import AssetTracker
-
-            # Create a fingerprint of the annotation operation
             annotation_fingerprint = f"{op_key}:{op_layout}:{ref_id}:{page_count}"
             fingerprint_bytes = annotation_fingerprint.encode("utf-8")
 
@@ -415,7 +412,6 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 }
             ]
 
-            # Record materializations
             upstream = self._get_upstream_asset_tuples(dag_id, node_task_id)
             self.asset_tracker.record_materializations(
                 storage_event_id=None,

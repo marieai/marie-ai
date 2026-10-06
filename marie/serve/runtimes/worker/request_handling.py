@@ -2276,6 +2276,15 @@ class WorkerRequestHandler:
 
         return False
 
+    def _safe_deployment_status_details(self) -> Dict[str, Any]:
+        try:
+            return self._executor.deployment_status_details()
+        except Exception as error:
+            self.logger.warning(
+                f"Could not collect executor deployment status details: {error}"
+            )
+            return {}
+
     def _claim_and_mark_serving(self) -> bool:
         """
         Claim /status and set SERVING (busy).
@@ -2284,7 +2293,10 @@ class WorkerRequestHandler:
         return self._claim_and_mark(
             initial_status=HealthCheckResponse.ServingStatus.SERVING,
             final_apply=lambda: self._status_store.set_serving(
-                self._node, self._deployment, self._worker_id
+                self._node,
+                self._deployment,
+                self._worker_id,
+                details=self._safe_deployment_status_details(),
             ),
             log_action="claim+serving",
         )
@@ -2297,7 +2309,10 @@ class WorkerRequestHandler:
         return self._claim_and_mark(
             initial_status=HealthCheckResponse.ServingStatus.NOT_SERVING,
             final_apply=lambda: self._status_store.set_not_serving(
-                self._node, self._deployment, self._worker_id
+                self._node,
+                self._deployment,
+                self._worker_id,
+                details=self._safe_deployment_status_details(),
             ),
             log_action="claim+ready",
         )

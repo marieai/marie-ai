@@ -453,6 +453,13 @@ class AsyncJobRepository:
         )
         return item
 
+    async def get_failure_report(
+        self, job_id: str, history_id: int
+    ) -> Dict[str, Any] | None:
+        from marie.scheduler.repository.failure_report import read_failure_report
+
+        return await read_failure_report(self._pool, job_id, history_id)
+
     async def list_operational_execution_history(
         self,
         *,
@@ -2137,6 +2144,7 @@ class AsyncJobRepository:
         terminal_status: str,
         source: str,
         output_metadata: Optional[dict] = None,
+        allow_retry: bool = True,
         schema: str = DEFAULT_SCHEMA,
     ) -> tuple[bool, Optional[str]]:
         if terminal_status == "SUCCEEDED":
@@ -2172,16 +2180,16 @@ class AsyncJobRepository:
                 transitioned AS (
                     UPDATE {schema}.job AS job
                     SET state = CASE
-                            WHEN job.retry_count < job.retry_limit
+                            WHEN %s AND job.retry_count < job.retry_limit
                             THEN %s::{schema}.job_state
                             ELSE %s::{schema}.job_state
                         END,
                         completed_on = CASE
-                            WHEN job.retry_count < job.retry_limit THEN NULL
+                            WHEN %s AND job.retry_count < job.retry_limit THEN NULL
                             ELSE NOW()
                         END,
                         start_after = CASE
-                            WHEN job.retry_count = job.retry_limit
+                            WHEN NOT %s OR job.retry_count = job.retry_limit
                             THEN job.start_after
                             WHEN NOT job.retry_backoff
                             THEN NOW() + job.retry_delay * INTERVAL '1 second'
@@ -2195,7 +2203,7 @@ class AsyncJobRepository:
                         lease_expires_at = NULL,
                         run_owner = NULL,
                         run_attempt_id = CASE
-                            WHEN job.retry_count < job.retry_limit THEN NULL
+                            WHEN %s AND job.retry_count < job.retry_limit THEN NULL
                             ELSE job.run_attempt_id
                         END,
                         run_lease_expires_at = NULL
@@ -2232,9 +2240,13 @@ class AsyncJobRepository:
                 )
             """
             transition_params = (
+                allow_retry,
                 WorkState.RETRY.value,
                 WorkState.FAILED.value,
+                allow_retry,
+                allow_retry,
                 Jsonb({"on_complete": "failed", **(output_metadata or {})}),
+                allow_retry,
                 queue_name,
                 job_id,
                 WorkState.ACTIVE.value,
@@ -2875,8 +2887,7 @@ class AsyncJobRepository:
         async with self._pool.acquire() as conn:
             policy = await conn.fetchrow(
                 f"""
-                SELECT config.admission_mode, config.active_policy_generation,
-                       generation.policy_digest
+                SELECT config.active_policy_generation, generation.policy_digest
                 FROM {DEFAULT_SCHEMA}.llm_queue_fabric_config config
                 LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation generation
                   ON generation.fabric_group_id = config.fabric_group_id
@@ -2947,9 +2958,8 @@ class AsyncJobRepository:
         visible_routes = route_rows[:limit]
         return {
             'policy': {
-                'admission_mode': str(policy[0]),
-                'desired_generation': int(policy[1]) if policy[1] is not None else None,
-                'desired_digest': str(policy[2]) if policy[2] is not None else None,
+                'desired_generation': int(policy[0]) if policy[0] is not None else None,
+                'desired_digest': str(policy[1]) if policy[1] is not None else None,
             },
             'routing': {
                 'projection_pending_count': int(routing[0]),
@@ -2958,11 +2968,6 @@ class AsyncJobRepository:
                     'operator_override': int(routing[2]),
                 },
                 'rejected': {},
-                'shadow': {
-                    'available': False,
-                    'match_count': None,
-                    'disagreement_count': None,
-                },
             },
             'pools': [
                 {
@@ -3049,14 +3054,14 @@ class AsyncJobRepository:
             'truncated': count > len(samples),
         }
 
-    async def load_active_admission_configuration(
+    async def load_active_admission_policy(
         self, fabric_group_id: str
-    ) -> tuple[str, AdmissionPolicy | None]:
+    ) -> AdmissionPolicy:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                SELECT config.admission_mode, config.active_policy_generation,
-                       generation.policy_digest, generation.policy_snapshot
+                SELECT config.active_policy_generation, generation.policy_digest,
+                       generation.policy_snapshot
                 FROM {DEFAULT_SCHEMA}.llm_queue_fabric_config config
                 LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation generation
                   ON generation.fabric_group_id = config.fabric_group_id
@@ -3067,12 +3072,9 @@ class AsyncJobRepository:
             )
         if row is None:
             raise ValueError('routing_policy_unavailable')
-        mode = str(row[0])
-        if mode == 'off':
-            return mode, None
-        if row[1] is None or not isinstance(row[3], dict):
+        if row[0] is None or not isinstance(row[2], dict):
             raise ValueError('routing_policy_unavailable')
-        generation, digest, snapshot = int(row[1]), str(row[2]), row[3]
+        generation, digest, snapshot = int(row[0]), str(row[1]), row[2]
         if _routing_digest(snapshot) != digest:
             raise ValueError('routing_policy_digest_mismatch')
         dispatch_lanes = {
@@ -3096,14 +3098,15 @@ class AsyncJobRepository:
                         'admission': rule['admission'],
                         'llm_dispatch': {
                             'schema_version': 1,
-                            'endpoint_id': lane['endpoint_id'],
+                            'endpoint_id': lane.get('endpoint_group_id')
+                            or lane['endpoint_id'],
                             'revision': lane['revision'],
                         },
                     },
                 }
             )
         policy = AdmissionPolicy.from_rows(fabric_group_id, generation, rows)
-        return mode, replace(policy, policy_digest=digest)
+        return replace(policy, policy_digest=digest)
 
     async def get_submission_document_for_routing(
         self, *, document_id: str | None, storage_key: str | None
@@ -3154,29 +3157,6 @@ class AsyncJobRepository:
             'updated_at',
         )
         return SubmissionDocument.from_row(dict(zip(names, row, strict=True)))
-
-    async def cache_submission_document_page_count(
-        self,
-        *,
-        document_id: str,
-        storage_key: str,
-        page_count: int,
-    ) -> bool:
-        if type(page_count) is not int or page_count < 1:
-            raise ValueError('routing_facts_invalid')
-        async with self._pool.acquire() as conn:
-            value = await conn.fetchval(
-                f"""
-                UPDATE {DEFAULT_SCHEMA}.submission_documents
-                SET page_count = %s, updated_at = NOW()
-                WHERE id = %s::uuid AND storage_key = %s AND page_count IS NULL
-                RETURNING true
-                """,
-                page_count,
-                document_id,
-                storage_key,
-            )
-        return bool(value)
 
     async def claim_pending_routing_outbox(
         self, *, limit: int = 100, lease_seconds: int = 30

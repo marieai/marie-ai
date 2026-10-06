@@ -69,26 +69,67 @@ async def test_batch_processor_retains_success_then_recovers_nine_in_order(
 
 
 async def test_same_logical_batch_has_independent_attempts(store, http_endpoint):
+    from marie.engine.completion_contract import RequestContext
+    from marie.engine.llm_queue.store import RoutingManifestProjection
+
     url, received, _, _ = http_endpoint
     runtime = dispatcher_for(store, url)
     processor = processor_for(store)
+    context = RequestContext(job_id='same-job', work_unit_id='same-unit')
     await runtime.start()
     try:
         await eventually(lambda: store.resolve_route('pool'))
+        store.project_routing_manifest(
+            RoutingManifestProjection(
+                job_id=context.job_id,
+                work_unit_id=context.work_unit_id,
+                fabric_group_id=store.keys.fabric_id,
+                policy_generation=1,
+                route_digest='e' * 64,
+                pool_id='pool',
+                endpoint_group_id='endpoint',
+                endpoint_revision='r1',
+            )
+        )
+        request = calls(1)[0]
+        request.context = context
         result = await asyncio.gather(
             *[
                 asyncio.to_thread(
-                    processor.batch_generate_calls, calls=calls(1), request_id='same'
+                    processor.batch_generate_calls,
+                    calls=[request],
+                    request_id='same',
                 )
                 for _ in range(2)
             ]
         )
         assert result == [['item-0'], ['item-0']]
         assert len(received) == 2
-        assert store.usage()['records'] == 2
+        assert store.usage()['records'] == 0
     finally:
         await asyncio.to_thread(processor.close)
         await runtime.stop()
+
+
+def test_admission_backpressure_does_not_spin(store, monkeypatch):
+    from marie.engine.exceptions import BatchExecutionError
+    from marie.engine.llm_queue.store import RequestStore, StoreReply
+
+    attempts = 0
+
+    def reject_admission(self, envelope):
+        nonlocal attempts
+        attempts += 1
+        return StoreReply(disposition='backpressure')
+
+    monkeypatch.setattr(RequestStore, 'admit_from_manifest', reject_admission)
+    processor = processor_for(store, batch_timeout=0.15)
+    try:
+        with pytest.raises(BatchExecutionError):
+            processor.batch_generate_calls(calls=calls(1))
+        assert attempts <= 2
+    finally:
+        processor.close()
 
 
 async def test_lost_admission_reply_reconciles_same_attempt(
@@ -588,7 +629,9 @@ def test_child_does_not_inherit_parent_session_or_locked_mutex(store):
 async def test_permanent_invalid_item_preserves_other_original_items(
     store, http_endpoint
 ):
+    from marie.engine.completion_contract import RequestContext
     from marie.engine.exceptions import BatchExecutionError
+    from marie.engine.llm_queue.store import RoutingManifestProjection
 
     url, received, _, _ = http_endpoint
     runtime = dispatcher_for(store, url)
@@ -598,6 +641,22 @@ async def test_permanent_invalid_item_preserves_other_original_items(
     await runtime.start()
     try:
         await eventually(lambda: store.resolve_route('pool'))
+        store.project_routing_manifest(
+            RoutingManifestProjection(
+                job_id='validation-job',
+                work_unit_id='validation-unit',
+                fabric_group_id=store.keys.fabric_id,
+                policy_generation=1,
+                route_digest='b' * 64,
+                pool_id='pool',
+                endpoint_group_id='endpoint',
+                endpoint_revision='r1',
+            )
+        )
+        for item in inputs:
+            item.context = RequestContext(
+                job_id='validation-job', work_unit_id='validation-unit'
+            )
         with pytest.raises(BatchExecutionError) as raised:
             await asyncio.to_thread(
                 processor.batch_generate_calls, calls=inputs, request_id='validation'
@@ -609,6 +668,201 @@ async def test_permanent_invalid_item_preserves_other_original_items(
             'item-2',
         ]
         assert len(received) == 2
+    finally:
+        await asyncio.to_thread(processor.close)
+        await runtime.stop()
+
+
+async def test_call_timeout_cancels_unfinished_batch_items(store, http_endpoint):
+    from marie.engine.completion_contract import RequestContext
+    from marie.engine.exceptions import BatchExecutionError
+    from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+    from marie.engine.llm_queue.store import RoutingManifestProjection
+
+    url, received, releases, _ = http_endpoint
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[
+            RegisteredEndpoint(
+                'endpoint',
+                url,
+                allow_loopback=True,
+                call_timeout_seconds=0.05,
+                execution_limit=4,
+            )
+        ],
+        lanes=[DispatchLane('pool', 'endpoint', execution_limit=4)],
+        poll_seconds=0.01,
+        circuit_open_ms=5000,
+    )
+    processor = processor_for(store, batch_timeout=2)
+    for item in calls(9):
+        releases[item.model] = asyncio.Event()
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        store.project_routing_manifest(
+            RoutingManifestProjection(
+                job_id='timed-out-job',
+                work_unit_id='timed-out-unit',
+                fabric_group_id=store.keys.fabric_id,
+                policy_generation=1,
+                route_digest='a' * 64,
+                pool_id='pool',
+                endpoint_group_id='endpoint',
+                endpoint_revision='r1',
+            )
+        )
+        inputs = calls(9)
+        for item in inputs:
+            item.context = RequestContext(
+                job_id='timed-out-job', work_unit_id='timed-out-unit'
+            )
+        started = time.monotonic()
+        with pytest.raises(BatchExecutionError) as raised:
+            await asyncio.to_thread(
+                processor.batch_generate_calls,
+                calls=inputs,
+                request_id='timed-out-batch',
+            )
+
+        assert raised.value.primary_error.category == 'call_timeout'
+        assert time.monotonic() - started < 0.8
+        assert len(received) < 9
+        await eventually(lambda: store.usage()['reserved_items'] == 0)
+    finally:
+        for release in releases.values():
+            release.set()
+        await asyncio.to_thread(processor.close)
+        await runtime.stop()
+
+
+async def test_max_tokens_cancels_unfinished_batch_items(store, http_endpoint):
+    from marie.engine.completion_contract import RequestContext
+    from marie.engine.exceptions import BatchExecutionError, MaxTokensExceededError
+    from marie.engine.llm_queue.store import RoutingManifestProjection
+
+    url, received, releases, _ = http_endpoint
+    runtime = dispatcher_for(store, url)
+    processor = processor_for(store, batch_timeout=2)
+    inputs = calls(9)
+    inputs[0].model = 'max-tokens'
+    for item in inputs[1:]:
+        releases[item.model] = asyncio.Event()
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        store.project_routing_manifest(
+            RoutingManifestProjection(
+                job_id='max-tokens-job',
+                work_unit_id='max-tokens-unit',
+                fabric_group_id=store.keys.fabric_id,
+                policy_generation=1,
+                route_digest='c' * 64,
+                pool_id='pool',
+                endpoint_group_id='endpoint',
+                endpoint_revision='r1',
+            )
+        )
+        for item in inputs:
+            item.context = RequestContext(
+                job_id='max-tokens-job', work_unit_id='max-tokens-unit'
+            )
+        started = time.monotonic()
+        with pytest.raises(BatchExecutionError) as raised:
+            await asyncio.to_thread(
+                processor.batch_generate_calls,
+                calls=inputs,
+                request_id='max-tokens-batch',
+            )
+
+        assert isinstance(raised.value.primary_error, MaxTokensExceededError)
+        assert time.monotonic() - started < 0.8
+        assert len(received) < 9
+        await eventually(lambda: store.usage()['reserved_items'] == 0)
+    finally:
+        for release in releases.values():
+            release.set()
+        await asyncio.to_thread(processor.close)
+        await runtime.stop()
+
+
+async def test_cancelled_parallel_batches_release_next_admission_wave(
+    store, http_endpoint
+):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from marie.engine.completion_contract import RequestContext
+    from marie.engine.exceptions import BatchExecutionError
+    from marie.engine.llm_queue.producer import PreparedCalls
+    from marie.engine.llm_queue.store import RoutingManifestProjection
+
+    url, _, _, _ = http_endpoint
+    runtime = dispatcher_for(store, url)
+    processor = processor_for(store, batch_timeout=2)
+    context = RequestContext(job_id='parallel-job', work_unit_id='parallel-unit')
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        store.project_routing_manifest(
+            RoutingManifestProjection(
+                job_id=context.job_id,
+                work_unit_id=context.work_unit_id,
+                fabric_group_id=store.keys.fabric_id,
+                policy_generation=1,
+                route_digest='d' * 64,
+                pool_id='pool',
+                endpoint_group_id='endpoint',
+                endpoint_revision='r1',
+            )
+        )
+        preparation_lock = threading.Lock()
+        for wave in range(3):
+            cancellation = threading.Event()
+
+            def run_page(index):
+                validation = calls(1)[0]
+                validation.model = 'max-tokens'
+                validation.context = context
+
+                def prepare(_):
+                    with preparation_lock:
+                        prepared = calls(1)[0]
+                        prepared.model = 'max-tokens'
+                        prepared.context = context
+                        return prepared
+
+                try:
+                    processor.batch_generate_calls(
+                        calls=PreparedCalls(1, prepare, validation),
+                        request_id=f'cancelled-wave-{wave}-page-{index}',
+                        cancellation=cancellation,
+                    )
+                except BatchExecutionError:
+                    cancellation.set()
+
+            with ThreadPoolExecutor(max_workers=30) as executor:
+                futures = [executor.submit(run_page, index) for index in range(30)]
+                for future in futures:
+                    future.result(timeout=2)
+
+            await eventually(lambda: not processor._queued_executor._pending)
+
+        followup = calls(1)[0]
+        followup.context = context
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                processor.batch_generate_calls,
+                calls=[followup],
+                request_id='followup-page',
+            ),
+            timeout=1,
+        )
+        assert result == ['item-0']
     finally:
         await asyncio.to_thread(processor.close)
         await runtime.stop()
@@ -916,6 +1170,59 @@ async def test_lost_terminal_read_delivers_callback_once(
         ) == ['item-0']
         assert len(reads) == 2 and reads[0] == reads[1]
         assert len(writes) == len(received) == 1
+    finally:
+        await asyncio.to_thread(processor.close)
+        await runtime.stop()
+
+
+async def test_lost_ack_reply_is_reconciled_after_delivery(
+    store, http_endpoint, monkeypatch
+):
+    from marie.engine.completion_contract import RequestContext
+    from marie.engine.llm_queue.store import (
+        RequestStore,
+        RoutingManifestProjection,
+        StoreUnavailable,
+    )
+
+    url, _, _, _ = http_endpoint
+    runtime = dispatcher_for(store, url)
+    processor = processor_for(store)
+    context = RequestContext(job_id='ack-job', work_unit_id='ack-unit')
+    ack = RequestStore.ack_result
+    acknowledgements = []
+
+    def lose_first_reply(self, producer_id, attempt_id):
+        reply = ack(self, producer_id, attempt_id)
+        acknowledgements.append(attempt_id)
+        if len(acknowledgements) == 1:
+            raise StoreUnavailable('lost acknowledgement reply')
+        return reply
+
+    monkeypatch.setattr(RequestStore, 'ack_result', lose_first_reply)
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        store.project_routing_manifest(
+            RoutingManifestProjection(
+                job_id=context.job_id,
+                work_unit_id=context.work_unit_id,
+                fabric_group_id=store.keys.fabric_id,
+                policy_generation=1,
+                route_digest='f' * 64,
+                pool_id='pool',
+                endpoint_group_id='endpoint',
+                endpoint_revision='r1',
+            )
+        )
+        request = calls(1)[0]
+        request.context = context
+        assert await asyncio.to_thread(
+            processor.batch_generate_calls, calls=[request]
+        ) == ['item-0']
+        await eventually(lambda: len(acknowledgements) == 2)
+        assert processor._queued_executor._ack_pending == {}
+        assert store.usage()['records'] == 0
     finally:
         await asyncio.to_thread(processor.close)
         await runtime.stop()

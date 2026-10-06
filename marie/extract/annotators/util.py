@@ -25,6 +25,7 @@ from marie.engine.engine_utils import check_image_preparation_budget, smart_resi
 from marie.engine.llm_ops import LLMCall
 from marie.engine.llm_queue.config import (
     LlmQueueProducerConfig,
+    llm_queue_enabled,
     resolve_fabric_id,
 )
 from marie.engine.multimodal_ops import MultimodalLLMCall
@@ -42,7 +43,6 @@ from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
 from marie.prompt.template import PromptTemplate
-from marie.utils.types import to_bool
 from marie.utils.utils import batchify
 
 if TYPE_CHECKING:
@@ -163,7 +163,7 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
         _engine_cache_pid = os.getpid()
         _engine_cache = {}
         _engine_lock = Lock()
-    queue_enabled = to_bool(os.environ.get("LLM_QUEUE_ENABLED"), False)
+    queue_enabled = llm_queue_enabled()
     queue_config = LlmQueueProducerConfig.from_env(
         enabled=queue_enabled,
     )
@@ -418,6 +418,7 @@ async def process_batch(
     mm_processor_kwargs: Optional[Dict[str, Any]] = None,
     prepare_item: Optional[Callable[[int], list]] = None,
     preparation_lock: Optional[Lock] = None,
+    cancellation: Optional[threading.Event] = None,
 ) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
@@ -440,6 +441,7 @@ async def process_batch(
         prepare_item: Internal consuming V3 scanner seam. The batch contains only
             output metadata; this callback prepares one owned image on demand.
         preparation_lock: Scanner-shared lock held through preparation and encoding.
+        cancellation: Scanner-shared cancellation signal for queued calls.
 
     Returns:
         List of converted results in original order
@@ -531,7 +533,7 @@ async def process_batch(
 
             if not engine.batch_processor.uses_v3_queue:
                 raise ValueError("Lazy image preparation requires V3")
-            cancellation = threading.Event()
+            cancellation = cancellation or threading.Event()
             deadline = time.monotonic() + engine.batch_processor.batch_timeout
             build_kwargs = {"completion_params": completion_params}
             if mm_processor_kwargs is not None:
@@ -606,6 +608,8 @@ def _prompt_lines_by_page(
     from marie.components.document_taxonomy.verbalizers import verbalizers
 
     extraction = doc.source_metadata.get("extraction", {})
+    if not isinstance(extraction, dict):
+        extraction = {}
     semantic_text = (
         extraction.get("result_kind") == "semantic_document"
         and extraction.get("ocr_invoked") is False
@@ -1142,6 +1146,7 @@ async def ascan_and_process_images(
 
     batch_processor = getattr(engine, "batch_processor", None)
     uses_v3 = getattr(batch_processor, "uses_v3_queue", False)
+    scan_cancellation = threading.Event() if uses_v3 else None
     preparation_lock = threading.Lock()
     if uses_v3:
         # One source decode, prepared RGB and formatter copy; no image resize.
@@ -1201,6 +1206,7 @@ async def ascan_and_process_images(
                 mm_processor_kwargs=mm_processor_kwargs,
                 prepare_item=prepare,
                 preparation_lock=preparation_lock,
+                cancellation=scan_cancellation,
             )
             return
 
@@ -1260,12 +1266,18 @@ async def ascan_and_process_images(
                 await _process_mini_batch(batch)
             except Exception as exc:
                 errors.append(exc)
+                if scan_cancellation is not None:
+                    scan_cancellation.set()
                 stop.set()
 
     try:
         await asyncio.gather(*(_batch_worker() for _ in range(worker_count)))
         if errors:
             raise errors[0]
+    except asyncio.CancelledError:
+        if scan_cancellation is not None:
+            scan_cancellation.set()
+        raise
     finally:
         # Tracebacks retain this frame; clear saved errors on every exit.
         errors.clear()

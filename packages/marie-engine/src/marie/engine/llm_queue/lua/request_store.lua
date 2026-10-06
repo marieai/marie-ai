@@ -50,7 +50,7 @@ local R, alive, members, ready, route, usage, owner, generation,
 local manifest = KEYS[18]
 local operations = {route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
     producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,admit_manifest=true,
-    metadata=true,result=true,claim=true,reserve_replica=true,release_replica=true,payload=true,start=true,defer=true,promote=true,
+    metadata=true,result=true,ack_result=true,claim=true,reserve_replica=true,release_replica=true,payload=true,start=true,defer=true,promote=true,
     finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true}
 if not operations[op] then return redis.error_reply('invalid operation') end
 local function integer(value, low, high)
@@ -61,6 +61,19 @@ local function identifier(value)
 end
 if type(a.limits) ~= 'table' or type(a.limits_json) ~= 'string' then return redis.error_reply('invalid limits') end
 local stored_limits = redis.call('GET',limits_key)
+if op == 'owner_acquire' and not stored_limits then
+    local empty = true
+    for index,key in ipairs(KEYS) do
+        if index ~= 14 and redis.call('EXISTS',key) ~= 0 then
+            empty = false
+            break
+        end
+    end
+    if empty then
+        redis.call('SET',limits_key,a.limits_json)
+        stored_limits = a.limits_json
+    end
+end
 if op ~= 'initialize' and stored_limits ~= a.limits_json then
     return cjson.encode({disposition='invalid_limits'})
 end
@@ -165,7 +178,7 @@ local request_limits = {feedback_seq=a.limits.max_attempts,
     owner_generation=2^40, charged_owner_generation=2^40,
     charged_cost=1000000, charge_sequence=2^53-1, refunded_on=2^53-1,
     replica_reserved=1, replica_reservation_bytes=a.limits.max_execution_bytes,
-    result_allowance=a.limits.result_allowance}
+    result_allowance=a.limits.result_allowance, admission_counted=1}
 for field, maximum in pairs(request_limits) do
     if not stored_integer(h(R,field),maximum) then
         return redis.error_reply('invalid request metadata')
@@ -180,6 +193,11 @@ for field, maximum in pairs(execution_limits) do
         if not stored_integer(h(key,field),maximum) then
             return redis.error_reply('invalid route or endpoint metadata')
         end
+    end
+end
+for field, maximum in pairs({accepted=2^53-1,completed=2^53-1}) do
+    if not stored_integer(h(route,field),maximum) then
+        return redis.error_reply('invalid route activity counter')
     end
 end
 local stored_generation = redis.call('GET',generation)
@@ -317,15 +335,24 @@ local function abandon()
         erase()
     end
 end
+local function ensure_activity_capacity()
+    if n(route,'completed') >= 2^53-1 or
+        (n(R,'admission_counted') == 0 and n(route,'accepted') >= 2^53-1) then
+        error('activity accounting exhausted')
+    end
+end
 local function finish_terminal(state, result)
+    local count_admission = n(R,'admission_counted') == 0
     drop_input()
     unlink_indexes()
     local charge = a.limits.metadata_bytes + string.len(result)
     inc('storage_bytes',charge-n(R,'storage_charge'))
     local until_time = math.max(n(R,'expires_at_ms'),now+a.limits.delivery_grace_ms)
     redis.call('HSET',R,'state',state,'result',result,'storage_charge',charge,
-        'finished_at',now,'retain_until',until_time)
+        'finished_at',now,'retain_until',until_time,'admission_counted',1)
     redis.call('ZADD',retention,until_time,a.id)
+    if count_admission then redis.call('HINCRBY',route,'accepted',1) end
+    redis.call('HINCRBY',route,'completed',1)
 end
 local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,reserve_replica=true,release_replica=true,start=true,payload=true,defer=true,return_untransmitted=true,
     promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true}
@@ -397,6 +424,8 @@ elseif op == 'endpoint' then
     if a.transport_fingerprint and a.transport_fingerprint ~= cjson.null then redis.call('HSET',endpoint,'transport_fingerprint',a.transport_fingerprint) end
     if a.target_fingerprint and a.target_fingerprint ~= cjson.null then redis.call('HSET',endpoint,'target_fingerprint',a.target_fingerprint) end
     redis.call('HSET',endpoint,'gate',a.gate,'execution_limit',a.execution_limit,'execution_bytes',a.execution_bytes)
+    redis.call('HSETNX',endpoint,'reserved_items',0)
+    redis.call('HSETNX',endpoint,'reserved_bytes',0)
     return reply('configured')
 elseif op == 'route' then
     if redis.call('SISMEMBER',routes,a.pool_id) == 0 and redis.call('SCARD',routes) >= a.limits.max_routes then return reply('backpressure') end
@@ -409,6 +438,8 @@ elseif op == 'route' then
         if redis.call('SISMEMBER',endpoints,a.endpoint_id) == 0 and redis.call('SCARD',endpoints) >= a.limits.max_endpoints then return reply('backpressure') end
         redis.call('SADD',endpoints,a.endpoint_id)
         redis.call('HSET',endpoint,'gate',a.gate,'execution_limit',a.execution_limit,'execution_bytes',a.execution_bytes)
+        redis.call('HSETNX',endpoint,'reserved_items',0)
+        redis.call('HSETNX',endpoint,'reserved_bytes',0)
     end
     redis.call('HSET',route,'endpoint_id',a.endpoint_id,'revision',a.revision,
         'enabled',a.enabled,'gate',a.gate,'execution_limit',a.execution_limit,
@@ -445,12 +476,13 @@ elseif op == 'admit' or op == 'admit_manifest' then
         n(usage,'records') >= a.limits.max_records or
         n(usage,'storage_bytes')+charge > a.limits.max_storage_bytes or
         n(usage,'ready_ids') >= a.limits.max_ready_ids then return reply('backpressure') end
+    if n(route,'accepted') >= 2^53-1 then return redis.error_reply('activity accounting exhausted') end
     redis.call('HSET',R,'version','v3','fabric_group_id',a.fabric_id,'attempt_id',a.id,'producer_id',a.producer_id,'pool_id',a.pool_id,
         'endpoint_id',a.endpoint_id,'config_revision',a.config_revision,'digest',a.digest,
         'logical_batch_id',a.logical_batch_id,'logical_task_id',a.logical_task_id,'item_index',a.item_index,
         'expires_at_ms',a.expires_at_ms,'payload',a.payload,'payload_bytes',a.payload_bytes,
         'model',a.model,'admitted_at_ms',now,'cost',a.cost,'state','ready','execution_seq',0,'active',1,'reserved',0,
-        'storage_charge',charge,'result_allowance',a.limits.result_allowance)
+        'storage_charge',charge,'result_allowance',a.limits.result_allowance,'admission_counted',1)
     if op == 'admit_manifest' then
         redis.call('HSET',R,'job_id',a.job_id,'work_unit_id',a.work_unit_id,'route_digest',a.manifest_digest,
             'policy_generation',n(manifest,'policy_generation'))
@@ -460,6 +492,7 @@ elseif op == 'admit' or op == 'admit_manifest' then
     redis.call('ZADD',deadlines,a.expires_at_ms,a.id)
     inc('active_items',1); inc('payload_bytes',a.payload_bytes)
     inc('records',1); inc('storage_bytes',charge); inc('ready_ids',1)
+    redis.call('HINCRBY',route,'accepted',1)
     return reply('admitted')
 end
 local exists = redis.call('EXISTS',R) == 1
@@ -472,7 +505,7 @@ if op == 'claim' or op == 'prune' then
         return reply('tombstone')
     end
 end
-if op == 'result' and not live() then return reply('producer_dead') end
+if (op == 'result' or op == 'ack_result') and not live() then return reply('producer_dead') end
 if not exists then return reply('missing') end
 if op == 'metadata' then return reply('found') end
 if op == 'circuit_feedback' then
@@ -503,13 +536,24 @@ end
 if op == 'mark_unknown' then
     if h(R,'claim_id') ~= a.claim_id or n(R,'execution_seq') ~= a.execution_seq then return reply('stale_claim') end
     if h(R,'state') ~= 'executing' and h(R,'state') ~= 'outcome_unknown' then return reply('invalid_state') end
-    redis.call('HSET',R,'state','outcome_unknown','last_error',a.reason)
-    return reply('outcome_unknown')
+    if not live() then
+        abandon()
+        return reply('producer_dead')
+    end
+    ensure_activity_capacity()
+    release()
+    finish_terminal('failed',cjson.encode({error='remote_outcome_unknown',category=a.reason}))
+    return reply('finished')
 end
 if op == 'result' then
     if not live() then return reply('producer_dead') end
     if terminal() then return cjson.encode({disposition='result',result=h(R,'result')}) end
     return reply('pending')
+end
+if op == 'ack_result' then
+    if not terminal() then return reply('not_terminal') end
+    erase()
+    return reply('acked')
 end
 if op == 'discard' then
     if live() then return reply('producer_live') end
@@ -541,6 +585,7 @@ end
 if op == 'cancel' then
     if terminal() then return reply('existing') end
     if a.expire and now < n(R,'expires_at_ms') then return reply('not_due') end
+    ensure_activity_capacity()
     if h(R,'state') == 'claimed' then refund(); release() end
     local result = {error=a.expire and 'expired' or 'cancelled'}
     if h(R,'last_error') then result.category = h(R,'last_error') end
@@ -548,6 +593,10 @@ if op == 'cancel' then
     return reply('finished')
 end
 if terminal() then
+    if op == 'recover' then
+        release()
+        return reply('settled')
+    end
     if op == 'finish' and h(R,'claim_id') == a.claim_id and n(R,'execution_seq') == a.execution_seq then return reply('existing') end
     return reply('terminal')
 end
@@ -633,8 +682,8 @@ elseif op == 'release_replica' then
     return reply('released')
 elseif op == 'recover' then
     if state ~= 'claimed' and state ~= 'executing' and state ~= 'outcome_unknown' then return reply('invalid_state') end
-    if h(R,'owner_id') == a.owner and now < n(R,'claim_until') then return reply('not_due') end
     if state == 'claimed' then
+        if h(R,'owner_id') == a.owner and now < n(R,'claim_until') then return reply('not_due') end
         if n(usage,'ready_ids') >= a.limits.max_ready_ids then return reply('backpressure') end
         refund(); release()
         redis.call('HSET',R,'state','ready')
@@ -642,9 +691,11 @@ elseif op == 'recover' then
         redis.call('RPUSH',ready,a.id); inc('ready_ids',1)
         return reply('requeued')
     end
-    redis.call('HSET',R,'state','outcome_unknown','owner_id',a.owner,'owner_generation',a.generation)
-    redis.call('ZADD',processing,n(R,'uncertainty_until'),a.id)
-    return reply('outcome_unknown')
+    if now < n(R,'uncertainty_until') then return reply('not_due') end
+    ensure_activity_capacity()
+    release()
+    finish_terminal('failed','{"error":"remote_outcome_unknown","category":"dispatcher_owner_lost"}')
+    return reply('finished')
 elseif op == 'promote' then
     if state ~= 'delayed' then return reply('invalid_state') end
     if now < n(R,'next_eligible') then return reply('not_due') end
@@ -677,6 +728,7 @@ end
 if not claim_matches() then return reply('stale_claim') end
 if op == 'reject_claim' then
     if state ~= 'claimed' then return reply('invalid_state') end
+    ensure_activity_capacity()
     refund(); release()
     finish_terminal('failed',cjson.encode({error=a.reason}))
     return reply('finished')
@@ -706,6 +758,7 @@ if op == 'defer' then
     return reply('deferred')
 elseif op == 'finish' then
     if state ~= 'executing' and state ~= 'outcome_unknown' then return reply('invalid_state') end
+    ensure_activity_capacity()
     release()
     if a.oversized or string.len(a.result) > n(R,'result_allowance') then
         finish_terminal('failed','{"error":"result_too_large"}')

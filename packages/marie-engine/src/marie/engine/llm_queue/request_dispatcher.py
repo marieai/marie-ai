@@ -12,11 +12,17 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from marie.engine.completion_contract import (
     CompletionCallParams,
     UnsupportedQueueStreaming,
+    apply_repetition_recovery,
+    completion_finish_reason,
+    extract_completion_text,
+    has_terminal_repetition,
+    recover_complete_json,
 )
 from marie.engine.llm_queue.endpoint import (
     EndpointClient,
@@ -35,6 +41,7 @@ from marie.engine.llm_queue.scheduler import DrrLaneConfig, DrrLaneScheduler
 from marie.engine.llm_queue.store import (
     ClaimRecord,
     OwnerToken,
+    RequestMetadata,
     RequestStore,
     StaleOwner,
     StoreUnavailable,
@@ -46,12 +53,24 @@ from opentelemetry.trace import StatusCode
 _tracer = get_tracer("marie.engine.llm_queue.request_dispatcher")
 
 
+def _endpoint_port(base_url: str) -> int:
+    parsed = urlsplit(base_url)
+    return parsed.port or (443 if parsed.scheme == "https" else 80)
+
+
 class _DispatchStopped(Exception):
     pass
 
 
 class _NoReplicaAvailable(Exception):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class _InflightClaim:
+    claim: ClaimRecord
+    metadata: RequestMetadata
+    popped_at: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,10 +277,12 @@ class RequestDispatcher:
         self._next_config_retry = 0.0
         self._owner_until = 0.0
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._inflight_claims: dict[str, _InflightClaim] = {}
         self._calling: set[str] = set()
         self._clients: dict[str, EndpointClient] = {}
         self._replica_cursors: Counter[str] = Counter()
         self._stop = asyncio.Event()
+        self._dispatch_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
         self._stop_workers = threading.Event()
         self._route_cursor = 0
         self._runner: asyncio.Task[None] | None = None
@@ -407,7 +428,10 @@ class RequestDispatcher:
         endpoint_states = {}
         for endpoint_id in sorted(visible_replica_ids):
             read_budget.before_read()
-            endpoint_states[endpoint_id] = self.store.endpoint_status(endpoint_id)
+            endpoint_states[endpoint_id] = {
+                **self.store.endpoint_status(endpoint_id),
+                "port": _endpoint_port(self.endpoints[endpoint_id].base_url),
+            }
         processing_limit = min(
             self.store.limits.cleanup_page_size,
             max(1, detail_row_limit - rows_used),
@@ -431,7 +455,7 @@ class RequestDispatcher:
             read_budget.before_read()
             route = self.store.route_status(lane.pool_id)
             read_budget.before_read()
-            charge_totals = self.store.charge_totals(lane.pool_id)
+            route_totals = self.store.route_totals(lane.pool_id)
             lane_processing = [
                 row for row in processing_rows if row.pool_id == lane.pool_id
             ]
@@ -533,8 +557,10 @@ class RequestDispatcher:
                         if head and head[0].admitted_at_ms is not None
                         else None
                     ),
-                    charged_cost=charge_totals["charged"],
-                    refunded_cost=charge_totals["refunded"],
+                    charged_cost=route_totals["charged"],
+                    refunded_cost=route_totals["refunded"],
+                    accepted=route_totals["accepted"],
+                    completed=route_totals["completed"],
                     state_counts={
                         "ready": depth,
                         "claimed": state_counts["claimed"],
@@ -704,6 +730,7 @@ class RequestDispatcher:
         self, limit: int, *, read_budget: SnapshotReadBudget | None = None
     ) -> list[dict[str, Any]]:
         read_budget = read_budget or SnapshotReadBudget(limit, time.monotonic() + 1.0)
+        observed_at = time.time()
         rows = []
         malformed = 0
         for lane in self.lanes:
@@ -740,6 +767,23 @@ class RequestDispatcher:
                     last_error=record.last_error,
                     model=record.model,
                     admitted_at_ms=record.admitted_at_ms,
+                    submitted_at=(
+                        record.admitted_at_ms / 1000
+                        if record.admitted_at_ms is not None
+                        else None
+                    ),
+                    popped_at=None,
+                    state_updated_at=(
+                        record.admitted_at_ms / 1000
+                        if record.admitted_at_ms is not None
+                        else observed_at
+                    ),
+                    queue_wait_age_seconds=(
+                        max(0.0, observed_at - record.admitted_at_ms / 1000)
+                        if record.admitted_at_ms is not None
+                        else None
+                    ),
+                    inflight_age_seconds=None,
                     endpoint_group_id=record.endpoint_id,
                     replica_id=getattr(record, "replica_id", None),
                     policy_generation=getattr(record, "policy_generation", 0),
@@ -753,14 +797,46 @@ class RequestDispatcher:
         return rows
 
     def inflight_requests_snapshot(self) -> list[dict[str, Any]]:
+        observed_at = time.time()
         return [
             dict(
-                request_id=attempt,
+                request_id=inflight.claim.attempt_id,
+                attempt_id=inflight.claim.attempt_id,
                 fabric_group_id=self.store.keys.fabric_id,
                 contract_version="v3",
                 lifecycle_stage="dispatching",
+                state_source="dispatcher",
+                dispatcher_id=self.dispatcher_id,
+                pool_id=inflight.claim.pool_id,
+                endpoint_id=inflight.claim.endpoint_group_id,
+                endpoint_group_id=inflight.claim.endpoint_group_id,
+                config_revision=inflight.metadata.config_revision,
+                model=inflight.metadata.model,
+                payload_bytes=inflight.metadata.payload_bytes,
+                cost=inflight.metadata.cost,
+                admitted_at_ms=inflight.metadata.admitted_at_ms,
+                submitted_at=(
+                    inflight.metadata.admitted_at_ms / 1000
+                    if inflight.metadata.admitted_at_ms is not None
+                    else None
+                ),
+                expires_at_ms=inflight.metadata.expires_at_ms,
+                popped_at=inflight.popped_at,
+                state_updated_at=inflight.popped_at,
+                queue_wait_age_seconds=(
+                    max(
+                        0.0,
+                        inflight.popped_at - inflight.metadata.admitted_at_ms / 1000,
+                    )
+                    if inflight.metadata.admitted_at_ms is not None
+                    else None
+                ),
+                inflight_age_seconds=max(0.0, observed_at - inflight.popped_at),
+                execution_seq=inflight.claim.execution_sequence,
+                claim_id=inflight.claim.claim_id,
+                owner_generation=inflight.claim.owner_generation,
             )
-            for attempt in self._tasks
+            for inflight in self._inflight_claims.values()
         ]
 
     async def start(self) -> None:
@@ -788,7 +864,20 @@ class RequestDispatcher:
         self._draining = True
         self._stop_workers.set()
         self._stop.set()
+        self._wake_dispatcher()
         await asyncio.shield(self._runner)
+
+    def _wake_dispatcher(self) -> None:
+        if not self._dispatch_wakeup.full():
+            self._dispatch_wakeup.put_nowait(None)
+
+    async def _wait_for_dispatch(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._dispatch_wakeup.get(), timeout=self.poll_seconds
+            )
+        except TimeoutError:
+            pass
 
     async def _pause(self, seconds: float) -> None:
         try:
@@ -1113,6 +1202,10 @@ class RequestDispatcher:
                                         claim.charged_cost,
                                         charge_sequence=claim.charge_sequence,
                                     )
+                            elif recovered.disposition == "finished":
+                                self._counts["remote_outcomes_recovered"] += 1
+                            elif recovered.disposition == "settled":
+                                self._counts["terminal_reservations_recovered"] += 1
                         self._owner_ready = True
                     if time.monotonic() >= self._owner_until:
                         raise StaleOwner("owner expired locally")
@@ -1120,7 +1213,7 @@ class RequestDispatcher:
                     await self._maintenance()
                     if not self._policy_paused:
                         await self._dispatch()
-                    await self._pause(self.poll_seconds)
+                    await self._wait_for_dispatch()
                 except _DispatchStopped:
                     break
                 except StoreUnavailable:
@@ -1213,6 +1306,10 @@ class RequestDispatcher:
                 )
                 if recovered.disposition == "requeued":
                     self._counts["live_claims_recovered"] += 1
+                elif recovered.disposition == "finished":
+                    self._counts["remote_outcomes_recovered"] += 1
+                elif recovered.disposition == "settled":
+                    self._counts["terminal_reservations_recovered"] += 1
         promoted = await self._maintenance_io(
             "promote_due", self.owner, limit=page, offset=self._delayed_offset
         )
@@ -1307,6 +1404,11 @@ class RequestDispatcher:
             )
             self._counts["claims"] += 1
             # Track the selected claim before any subsequent fallible store inspection.
+            self._inflight_claims[reply.attempt_id] = _InflightClaim(
+                claim=reply,
+                metadata=head,
+                popped_at=time.time(),
+            )
             task = asyncio.create_task(self._execute(reply))
             self._tasks[reply.attempt_id] = task
             task.add_done_callback(partial(self._completed_task, reply.attempt_id))
@@ -1331,6 +1433,8 @@ class RequestDispatcher:
 
     def _completed_task(self, attempt: str, task: asyncio.Task[None]) -> None:
         self._tasks.pop(attempt, None)
+        self._inflight_claims.pop(attempt, None)
+        self._wake_dispatcher()
         if not task.cancelled() and task.exception() is not None:
             self._category = "dispatch_error"
             self._counts["dispatch_errors"] += 1
@@ -1408,6 +1512,7 @@ class RequestDispatcher:
             )
             if started.disposition != "started":
                 raise TransitionRejected("start_unconfirmed")
+            repetition_retry_used = False
             while True:
                 timeout = min(
                     request_deadline - time.monotonic(),
@@ -1455,7 +1560,26 @@ class RequestDispatcher:
                 outcome = await self._clients[replica.replica_id].execute(
                     call, timeout_seconds=timeout
                 )
-                _emit_execution_history(attributes, outcome, began_ns, began)
+                recovered, repetitive = _normalize_length_response(outcome.response)
+                if recovered:
+                    self._counts["missing_eos_recovered"] += 1
+                    _emit_execution_history(attributes, outcome, began_ns, began)
+                elif repetitive:
+                    outcome.category = "repetition"
+                    _emit_execution_history(attributes, outcome, began_ns, began)
+                    recovered_call = apply_repetition_recovery(call)
+                    if not repetition_retry_used and recovered_call is not None:
+                        call = recovered_call
+                        repetition_retry_used = True
+                        self._counts["repetition_retries"] += 1
+                        continue
+                    outcome = ExecutionOutcome(
+                        category="repetition",
+                        remote_settled=True,
+                        availability_success=True,
+                    )
+                else:
+                    _emit_execution_history(attributes, outcome, began_ns, began)
                 if outcome.request_started:
                     return started.execution_seq, outcome, replica.replica_id
                 await self._commit(
@@ -1544,10 +1668,11 @@ class RequestDispatcher:
                 open_ms=self.circuit_open_ms,
             )
             if not outcome.remote_settled:
-                await self._commit(
+                reply = await self._commit(
                     "mark_unknown", attempt, **args, category=outcome.category
                 )
-                self._counts["outcome_unknown"] += 1
+                if reply.disposition == "finished":
+                    self._counts["remote_outcomes_failed"] += 1
                 return
             if outcome.retryable and sequence < self.store.limits.max_attempts:
                 delay = max(
@@ -1619,7 +1744,8 @@ def _emit_execution_history(
     attributes[prefix + "total_latency_ms"] = (
         attributes[prefix + "queue_wait_ms"] + elapsed
     )
-    attributes[prefix + "status"] = "ok" if outcome.response is not None else "error"
+    failed = outcome.response is None or bool(outcome.category)
+    attributes[prefix + "status"] = "error" if failed else "ok"
     if outcome.category:
         attributes[prefix + "error_type"] = outcome.category
     if outcome.response is not None:
@@ -1637,5 +1763,35 @@ def _emit_execution_history(
     span = _tracer.start_span(
         "LLMDispatch.completion", start_time=began_ns, attributes=attributes
     )
-    span.set_status(StatusCode.OK if outcome.response is not None else StatusCode.ERROR)
+    span.set_status(StatusCode.ERROR if failed else StatusCode.OK)
     span.end()
+
+
+def _normalize_length_response(
+    response: dict[str, Any] | None,
+) -> tuple[bool, bool]:
+    if response is None:
+        return False, False
+    try:
+        if completion_finish_reason(response) != "length":
+            return False, False
+        _, text = extract_completion_text(response)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return False, False
+    recovered = recover_complete_json(text or "")
+    if recovered is None:
+        return False, has_terminal_repetition(text or "")
+
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return False, False
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return False, False
+    message["content"] = recovered
+    choices[0]["finish_reason"] = "stop"
+    response["marie_recovery"] = {
+        "method": "complete_json",
+        "reason": "missing_eos",
+    }
+    return True, False

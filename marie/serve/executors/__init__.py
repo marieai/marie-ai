@@ -705,6 +705,10 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
         """
         pass
 
+    def deployment_status_details(self) -> Dict[str, Any]:
+        """Return executor metadata included with worker lifecycle status."""
+        return {}
+
     def __call__(self, req_endpoint: str, **kwargs):
         """
         # noqa: DAR101

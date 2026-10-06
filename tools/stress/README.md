@@ -193,7 +193,7 @@ Use it when the goal is to test:
 - **Latency breakdowns**: submit, scheduling, queue wait, execution, and end-to-end timing
 - **SLA verification**: stamps `soft_sla` / `hard_sla` onto each request and reports compliance
 - **Mock executor failure injection**: stamps `failure_rate`, `failure_mode`, and deterministic `force_fail` controls for mock-executor runs
-- **AIMock fault profile integration**: can switch the mock backend into `normal`, `timeout`, `error`, or randomized `chaos`
+- **AIMock fault profile integration**: can switch the mock backend into normal, timeout, provider-error, max-output, recoverable-repetition, persistent-repetition, or randomized-chaos behavior
 - **Gateway preflight**: verifies the gateway debug endpoint before submission and records executor capacity as non-blocking diagnostics
 - **Run correlation**: stamps deterministic request/ref IDs, `stress_run_id`, logical index, queue, planner, and executor identities
 - **Reliability gates**: validates submission acceptance, terminal completion, event loss, lifecycle order, duplicate terminals, and conflicting outcomes
@@ -415,6 +415,81 @@ python tools/stress/gateway_e2e_stresser.py \
     --project-id mock-annotator-llm-stress \
     --request-template tools/stress/mock_annotator_llm.invoke.json \
     --dry-run
+
+# Replay the balanced small/medium/large qualification matrix. This generates
+# deterministic 1-, 8-, and 30-page fixtures, then runs normal load, a timed
+# connection outage, bounded HTTP 503 recovery, delay, post-send hang,
+# terminal rejection, max-output truncation, recoverable repetition,
+# persistent repetition, and mixed-chaos phases. AIMock is
+# restored to normal even when a phase fails or the command is interrupted.
+.venv/bin/python tools/stress/llm_dispatch_stress_suite.py \
+    --runtime-mode queued-dispatch \
+    --suite-id local-baseline \
+    --job-count 3000
+
+# Run only the normal phase with an exact document-size partition. The counts
+# determine the total job count and are interleaved during submission.
+.venv/bin/python tools/stress/llm_dispatch_stress_suite.py \
+    --runtime-mode queued-dispatch \
+    --suite-id local-queue-small-heavy \
+    --phases normal \
+    --pool-counts document-small=80,document-medium=15,document-large=5 \
+    --provider-concurrency 4 \
+    --provider-delay-ms 100 \
+    --debug-sample-interval 1
+
+# Compare queued dispatch with direct batching under the same workload and
+# provider limit. Keep this suite ID for both commands.
+SUITE_ID="small-heavy-manual-$(date +%Y%m%d-%H%M%S)"
+
+.venv/bin/python tools/stress/llm_dispatch_stress_suite.py \
+    --runtime-mode queued-dispatch \
+    --suite-id "$SUITE_ID" \
+    --phases normal \
+    --pool-counts document-small=500,document-medium=250,document-large=25 \
+    --provider-concurrency 4 \
+    --provider-delay-ms 100 \
+    --debug-sample-interval 1
+
+# Set LLM_QUEUE_ENABLED=false for the annotator runtime, then restart the
+# annotator deployments. The gateway and AIMock do not need a restart.
+.venv/bin/python tools/stress/llm_dispatch_stress_suite.py \
+    --runtime-mode direct-batch \
+    --suite-id "$SUITE_ID" \
+    --phases normal \
+    --pool-counts document-small=500,document-medium=250,document-large=25 \
+    --provider-concurrency 4 \
+    --provider-delay-ms 100 \
+    --debug-sample-interval 1
+
+# Review both runs and their comparison in:
+# /home/gbugaj/tmp/llm-dispatch-stress/index.html
+# Restore LLM_QUEUE_ENABLED=true and restart the annotator deployments before
+# returning the environment to queued dispatch.
+
+# --job-count controls the normal load phase. Failure phases keep smaller fixed
+# workloads while covering every pool. The normal drain timeout scales to eight
+# seconds per document with a 30-minute minimum; use --normal-terminal-timeout
+# to set an explicit bound. Gateway snapshots default to every 30 seconds, and
+# retained job and metric samples are bounded while the complete terminal stream
+# remains in the phase jobs JSONL file. Queued-dispatch runs first require
+# an idle runtime: no queued requests, retained reservations, or stopped
+# dispatchers. A contaminated runtime fails before AIMock is changed or
+# any document is submitted. Open
+# ~/tmp/llm-dispatch-stress/index.html to browse runs. Every run directory also
+# contains report.html, comparison.json, comparison.md, and phase JSON/JSONL.
+# `--provider-concurrency` is enforced inside AIMock, so direct and queued runs
+# share the same model-call limit. Set it to 10 or 20 when the scheduler target
+# has at least that much capacity. Reports refuse to compare runs whose provider
+# limit or deterministic `--provider-delay-ms` differs.
+
+# After starting the annotator with direct batching, run the identical matrix.
+# The runtime-mode flag labels the artifacts; it does not change the annotator.
+.venv/bin/python tools/stress/llm_dispatch_stress_suite.py \
+    --runtime-mode direct-batch \
+    --suite-id local-baseline \
+    --provider-concurrency 4 \
+    --provider-delay-ms 100
 
 # Preview exactly what would be submitted without uploading or calling the gateway
 python tools/stress/gateway_e2e_stresser.py \
@@ -1053,9 +1128,10 @@ python tools/stress/gateway_e2e_stresser.py \
   --debug-sample-interval 5
 ```
 
-The gateway derives the authoritative page count and the active admission policy
-selects the internal pool. Normal stress submissions never contain a pool ID or
-queue contract version.
+The submitter determines the page count before upload and includes it as routing
+metadata. The gateway matches that metadata against the active admission policy;
+it does not load the document. Normal stress submissions never contain a pool ID
+or queue contract version.
 
 #### Important options
 
@@ -1083,7 +1159,7 @@ queue contract version.
 | `--mock-process-time` | Fixed per-node mock executor processing time override in seconds |
 | `--submit-rate` | Target submit rate in jobs per second |
 | `--dry-run-preview-count` | Number of sample submissions to show when `--dry-run` is combined with `--run-time` |
-| `--fault-profile` | Run label and AIMock control target: `normal`, `timeout`, `error`, `chaos` |
+| `--fault-profile` | Run label and AIMock control target: `normal`, `timeout`, `error`, `transient_error`, `terminal_error`, `max_tokens`, `chaos` |
 | `--aimock-admin-url` | AIMock admin endpoint used to switch the active fault profile before the run |
 | `--soft-sla-seconds` | Relative soft SLA target from submit start |
 | `--hard-sla-seconds` | Relative hard SLA target from submit start |

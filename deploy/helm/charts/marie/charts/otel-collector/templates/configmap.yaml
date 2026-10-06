@@ -1,0 +1,88 @@
+{{- if .Values.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "otel-collector.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "otel-collector.labels" . | nindent 4 }}
+data:
+  config.yml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        send_batch_size: 100
+        send_batch_max_size: 200
+        timeout: 2s
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: {{ .Values.config.memoryLimitMiB }}
+        spike_limit_mib: {{ .Values.config.memorySpikeLimitMiB }}
+      resource:
+        attributes:
+          - key: service.namespace
+            value: {{ .Values.config.serviceNamespace | quote }}
+            action: upsert
+      # The OTel SDK leaves status UNSET unless the app sets it; promote UNSET to OK so
+      # ClickHouse and dashboards show a meaningful status for non-error spans.
+      transform/status:
+        trace_statements:
+          - context: span
+            statements:
+              - set(status.code, 1) where status.code == 0
+
+    exporters:
+      clickhouse:
+        endpoint: tcp://{{ include "otel-collector.clickhouseHost" . }}:{{ .Values.clickhouse.nativePort }}
+        database: {{ .Values.clickhouse.database }}
+        username: ${env:CLICKHOUSE_USERNAME}
+        password: ${env:CLICKHOUSE_PASSWORD}
+        logs_table_name: otel_logs
+        traces_table_name: otel_traces
+        metrics_tables:
+          gauge:
+            name: otel_metrics_gauge
+          sum:
+            name: otel_metrics_sum
+          summary:
+            name: otel_metrics_summary
+          histogram:
+            name: otel_metrics_histogram
+          exponential_histogram:
+            name: otel_metrics_exp_histogram
+        ttl: {{ .Values.clickhouse.ttl }}
+        create_schema: true
+        timeout: 10s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [clickhouse]
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, transform/status, batch]
+          exporters: [clickhouse]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [clickhouse]
+{{- end }}

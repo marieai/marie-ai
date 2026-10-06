@@ -441,6 +441,13 @@ class EndpointClient:
                             )
                         )
                         return ExecutionOutcome(category=category, remote_settled=True)
+                    if status == 503:
+                        return ExecutionOutcome(
+                            category='provider_unavailable',
+                            retryable=True,
+                            remote_settled=True,
+                            availability_failure=True,
+                        )
                     if status >= 500:
                         return ExecutionOutcome(
                             category='provider_5xx', availability_failure=True

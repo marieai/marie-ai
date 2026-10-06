@@ -6,6 +6,21 @@ from test_request_store import request_for
 from test_request_store import store as store
 
 
+@pytest.mark.parametrize(
+    'category', ['provider_5xx', 'replica_unavailable', 'unsupported_streaming']
+)
+def test_runtime_snapshot_preserves_known_dispatcher_error_categories(category):
+    from marie.engine.llm_queue.registry import _clean
+
+    assert _clean({'last_error': category, 'category': category}) == {
+        'last_error': category,
+        'category': category,
+    }
+    assert _clean({'last_error': 'arbitrary private exception message'}) == {
+        'last_error': 'runtime_error'
+    }
+
+
 def test_v3_snapshot_selects_only_metadata_and_preserves_good_rows(store, monkeypatch):
     from marie.engine.llm_queue.endpoint import RegisteredEndpoint
     from marie.engine.llm_queue.request_dispatcher import (
@@ -52,6 +67,9 @@ def test_v3_snapshot_selects_only_metadata_and_preserves_good_rows(store, monkey
     assert rows[0]['state_source'] == 'store'
     assert rows[0]['model'] == 'model'
     assert rows[0]['admitted_at_ms'] > 0
+    assert rows[0]['submitted_at'] == rows[0]['admitted_at_ms'] / 1000
+    assert rows[0]['queue_wait_age_seconds'] >= 0
+    assert rows[0]['inflight_age_seconds'] is None
     assert health['lanes'][0]['head_cost_units'] == request.estimated_cost_units
     assert (
         health['lanes'][0]['oldest_pending_admitted_at_ms'] == rows[0]['admitted_at_ms']

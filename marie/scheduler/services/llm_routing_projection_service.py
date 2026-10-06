@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from marie.engine.llm_queue.store import (
     AdmissionConflict,
@@ -30,12 +30,15 @@ class LlmRoutingProjectionService:
         repository: Any,
         store: RequestStore,
         logger: MarieLogger,
+        admission_callback: Callable[[str], Awaitable[bool]],
         retry_seconds: int = 5,
     ) -> None:
         self.repository = repository
         self.store = store
         self.logger = logger
+        self.admission_callback = admission_callback
         self.retry_seconds = retry_seconds
+        self._admission_wakeup_pending = False
 
     async def run_once(self, limit: int = 100) -> ProjectionBatchResult:
         events = await self.repository.claim_pending_routing_outbox(limit=limit)
@@ -62,6 +65,7 @@ class LlmRoutingProjectionService:
                     route_digest=route_digest,
                 ):
                     acknowledged += 1
+                    self._admission_wakeup_pending = True
             except AdmissionConflict:
                 failed += 1
                 await self._record_failure(
@@ -82,6 +86,7 @@ class LlmRoutingProjectionService:
                 await self._record_failure(
                     event_id, route_digest, 'routing_projection_failed'
                 )
+        await self._wake_admission()
         return ProjectionBatchResult(
             attempted=len(events),
             projected=projected,
@@ -89,6 +94,16 @@ class LlmRoutingProjectionService:
             acknowledged=acknowledged,
             failed=failed,
         )
+
+    async def _wake_admission(self) -> None:
+        if not self._admission_wakeup_pending:
+            return
+        try:
+            await self.admission_callback('llm_routing_projection')
+        except Exception:
+            self.logger.exception('Failed to wake admission after LLM route projection')
+            return
+        self._admission_wakeup_pending = False
 
     async def run_forever(self, idle_seconds: float = 0.25) -> None:
         while True:
@@ -123,7 +138,7 @@ class LlmRoutingProjectionService:
         event: dict[str, Any], route_digest: str
     ) -> RoutingManifestProjection:
         payload = event['payload']
-        if not isinstance(payload, dict) or set(payload) != {
+        required_fields = {
             'job_id',
             'work_unit_id',
             'fabric_group_id',
@@ -137,7 +152,13 @@ class LlmRoutingProjectionService:
             'endpoint_revision',
             'estimator_version',
             'routing_source',
-        }:
+        }
+        allowed_fields = required_fields | {'routing_actor', 'routing_reason'}
+        if (
+            not isinstance(payload, dict)
+            or not required_fields.issubset(payload)
+            or not set(payload).issubset(allowed_fields)
+        ):
             raise ValueError('routing_projection_invalid')
         return RoutingManifestProjection(
             job_id=payload['job_id'],

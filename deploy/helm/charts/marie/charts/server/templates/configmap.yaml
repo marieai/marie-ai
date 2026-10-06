@@ -35,8 +35,8 @@ data:
   {{- $gatewayConfig := .Files.Get "files/service/marie-gateway-4.0.0.yml" }}
   {{- $gatewayConfig = replace "__ETCD_HOST__" (printf "%s-etcd" .Release.Name) $gatewayConfig }}
   {{- $gatewayConfig = replace "__CLICKHOUSE_HOST__" (printf "%s-clickhouse" .Release.Name) $gatewayConfig }}
-  {{- $gatewayConfig = replace "__OTEL_HOST__" "localhost" $gatewayConfig }}
-  {{- $gatewayConfig = replace "__OTEL_ENDPOINT__" "http://localhost:4317" $gatewayConfig }}
+  {{- $gatewayConfig = replace "__OTEL_HOST__" (tpl (((.Values.global).otel).host | default "localhost") $) $gatewayConfig }}
+  {{- $gatewayConfig = replace "__OTEL_ENDPOINT__" (tpl (((.Values.global).otel).endpoint | default "http://localhost:4317") $) $gatewayConfig }}
   {{- $gatewayConfig = replace "__LLM_TRACKING_ENABLED__" (ternary "true" "false" .Values.llmTracking.enabled) $gatewayConfig }}
   marie-gateway-4.0.0.yml: |
 {{ $gatewayConfig | indent 4 }}

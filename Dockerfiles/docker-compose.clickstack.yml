@@ -35,11 +35,15 @@ services:
     image: otel/opentelemetry-collector-contrib:0.149.0
     container_name: marie-otel-collector
     restart: unless-stopped
+    # Keep collector output out of /var/lib/docker/containers/*-json.log so the
+    # log-collector does not ingest it (docker logs still works)
+    logging:
+      driver: local
     command: ["--config=/etc/otel/config.yml"]
     environment:
       - DEPLOYMENT_ENV=${STACK_NAME:-dev}
     volumes:
-      - ./config/clickstack/otel-collector-config.yml:/etc/otel/config.yml:ro
+      - ${PWD}/config/clickstack/otel-collector-config.yml:/etc/otel/config.yml:ro
     ports:
       - "${OTEL_GRPC_PORT:-4317}:4317"        # OTLP gRPC receiver
       - "${OTEL_HTTP_PORT:-4318}:4318"        # OTLP HTTP receiver
@@ -67,13 +71,17 @@ services:
     image: otel/opentelemetry-collector-contrib:0.149.0
     container_name: marie-log-collector
     restart: unless-stopped
+    # Keep collector output out of /var/lib/docker/containers/*-json.log so the
+    # log-collector does not ingest it (docker logs still works)
+    logging:
+      driver: local
     command: ["--config=/etc/otel/config.yml"]
     user: "0:0"  # Run as root to read Docker logs
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://marie-otel-collector:4318
       - DEPLOYMENT_ENV=${STACK_NAME:-dev}
     volumes:
-      - ./config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
+      - ${PWD}/config/clickstack/log-collector-config.yml:/etc/otel/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -122,13 +130,19 @@ services:
     restart: unless-stopped
     profiles:
       - ui
+    # Lets HyperDX reach the M3 Forge API on the Docker host as "marie-studio", so alert webhooks
+    # can be sent back to it (http://marie-studio:3500/api/alert-callbacks). The host resolves the
+    # same name through /etc/hosts, so one URL works from both sides. A literal private IP or
+    # "localhost" would be rejected by HyperDX's webhook URL validation; a hostname is not.
+    extra_hosts:
+      - "marie-studio:host-gateway"
     environment:
       # FerretDB provides MongoDB wire protocol on port 27017
       # FerretDB delegates auth to PostgreSQL, only SCRAM-SHA-256 is supported
       - MONGO_URI=mongodb://${POSTGRES_USER}:${POSTGRES_PASSWORD}@marie-ferretdb:27017/hyperdx?authMechanism=SCRAM-SHA-256
       - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
       - HYPERDX_APP_PORT=${HYPERDX_APP_PORT:-8080}
-      - FRONTEND_URL=${FRONTEND_URL:-http://marie-hyperdx:8080}
+      - FRONTEND_URL=${FRONTEND_URL:-http://localhost:${HYPERDX_UI_PORT:-8080}}
     depends_on:
       ferretdb:
         condition: service_healthy
@@ -139,7 +153,7 @@ services:
     networks:
       - marie_default
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -167,6 +181,11 @@ networks:
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml up -d
 #
 # 4. (Optional) Start with HyperDX UI:
+#    FerretDB needs the documentdb extension in marie-psql-server. A fresh database gets it from
+#    config/psql/init.sql; one initialized before that was added needs it created once (idempotent):
+#    docker exec marie-psql-server psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;"
+#    If that fails with "can only be loaded via shared_preload_libraries", recreate marie-psql-server
+#    from docker-compose.storage.yml first (its command must preload pg_documentdb_core).
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml --profile ui up -d
 #
 # 5. (First-time only) Initialize HyperDX admin user:

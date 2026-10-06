@@ -50,6 +50,10 @@ def test_default_args_from_python():
     assert b.metas.name
 
 
+def test_base_executor_has_no_deployment_status_details() -> None:
+    assert BaseExecutor().deployment_status_details() == {}
+
+
 def test_name_python_jaml_identical():
     # There are two different ways of importing the executors in jina 2.0.
     # We want the executors to have the same metas.name field regardless of

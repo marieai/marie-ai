@@ -167,6 +167,41 @@ async def test_retry_reconciles_memory_and_wakes_without_resolving_dag(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error_type", ["MaxTokensExceededError", "RepetitionError"])
+async def test_llm_output_failure_is_terminal_without_job_retry(
+    error_type: str,
+) -> None:
+    context = build_service()
+    context.repository.transition_job_attempt_terminal.return_value = (
+        True,
+        WorkState.FAILED.value,
+    )
+
+    accepted = await context.service.transition_terminal(
+        JOB_ID,
+        context.work_item,
+        JobStatus.FAILED,
+        run_owner="worker-1",
+        run_attempt_id=ATTEMPT_ID,
+        source="job_event",
+        runtime_env={
+            "error": {
+                "type": error_type,
+                "message": "LLM output cannot be recovered",
+            }
+        },
+    )
+
+    assert accepted is True
+    failure = context.repository.transition_job_attempt_terminal.await_args.kwargs
+    assert failure["allow_retry"] is False
+    assert failure["output_metadata"]["retryable"] is False
+    assert context.work_item.state == WorkState.FAILED
+    context.frontier.on_job_retry.assert_not_awaited()
+    context.frontier.on_job_failed.assert_awaited_once_with(JOB_ID)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["job_event", "storage_sync"])
 async def test_stale_attempt_is_audited_and_does_not_change_memory(
     source: str,

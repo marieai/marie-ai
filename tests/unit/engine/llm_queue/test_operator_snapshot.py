@@ -33,6 +33,9 @@ class Runtime:
                 'request_id': str(n),
                 'pool_id': str(n),
                 'submitted_at': 1,
+                'state_updated_at': 2,
+                'queue_wait_age_seconds': 3.5,
+                'inflight_age_seconds': None,
                 'prompt': 'PHI data:image secret',
             }
             for n in range(limit)
@@ -60,6 +63,8 @@ class RoutingRuntime(Runtime):
                     'charged_cost': 9,
                     'refunded_cost': 2,
                     'committed_charge': 7,
+                    'accepted': 42,
+                    'completed': 40,
                     'state_counts': {
                         'ready': 3,
                         'claimed': 1,
@@ -84,6 +89,7 @@ class RoutingRuntime(Runtime):
                             'reserved_bytes': 4096,
                             'execution_limit': 4,
                             'execution_bytes': 8192,
+                            'port': 4010,
                             'credential_env': 'SECRET_ENV',
                             'base_url': 'https://secret',
                             'raw_error': 'PHI',
@@ -109,6 +115,9 @@ def test_snapshot_reads_health_once_filters_before_read_and_has_global_budget():
     assert first.calls == second.calls == 1
     assert other.calls == 0
     assert len(result['live_requests']) <= 5
+    assert result['live_requests'][0]['state_updated_at'] == 2
+    assert result['live_requests'][0]['queue_wait_age_seconds'] == 3.5
+    assert result['live_requests'][0]['inflight_age_seconds'] is None
     assert result['runtime_summary']['pending_request_count'] == 10
     assert 'secret' not in json.dumps(result) and 'PHI' not in json.dumps(result)
 
@@ -232,8 +241,11 @@ def test_runtime_snapshot_reports_bounded_routing_recovery_and_replica_state(
         'unknown': 0,
     }
     assert snapshot['pools'][0]['oldest_ready_age_seconds'] == 12.5
+    assert snapshot['pools'][0]['accepted'] == 42
+    assert snapshot['pools'][0]['completed'] == 40
     assert snapshot['endpoint_groups'][0]['selected_replica_id'] == 'replica-b'
     assert snapshot['endpoint_groups'][0]['replicas'][0]['available_items'] == 3
+    assert snapshot['endpoint_groups'][0]['replicas'][0]['port'] == 4010
     assert snapshot['observation']['stale'] is False
     encoded = json.dumps(snapshot)
     for forbidden in (

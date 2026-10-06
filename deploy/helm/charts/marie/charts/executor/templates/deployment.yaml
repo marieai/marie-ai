@@ -226,9 +226,9 @@ spec:
               value: "2379"
             {{- end }}
             - name: OTEL_EXPORTER_HOST
-              value: localhost
+              value: {{ tpl ((($.Values.global).otel).host | default "localhost") $ | quote }}
             - name: OTEL_EXPORTER_ENDPOINT
-              value: http://localhost:4317
+              value: {{ tpl ((($.Values.global).otel).endpoint | default "http://localhost:4317") $ | quote }}
             - name: CLICKHOUSE_HOSTNAME
               value: {{ printf "%s-clickhouse" $.Release.Name | quote }}
             {{- if $rabbitmq.enabled }}

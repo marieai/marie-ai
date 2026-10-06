@@ -61,6 +61,12 @@ ORDER BY (ServiceName, Timestamp)
 TTL toDateTime(Timestamp) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
+-- Store frequent log facets so their counts do not scan the complete attribute map.
+ALTER TABLE otel.otel_logs
+    ADD COLUMN IF NOT EXISTS event_type LowCardinality(String) MATERIALIZED LogAttributes['event.type'],
+    ADD COLUMN IF NOT EXISTS job_tag LowCardinality(String) MATERIALIZED LogAttributes['job.tag'],
+    ADD COLUMN IF NOT EXISTS event_source String MATERIALIZED LogAttributes['event.source'];
+
 -- ############### Traces Table ###############
 -- Stores distributed traces and spans
 CREATE TABLE IF NOT EXISTS otel.otel_traces (
@@ -370,10 +376,10 @@ ORDER BY timestamp
 TTL timestamp + INTERVAL 7 DAY
 AS SELECT
     Timestamp as timestamp,
-    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 1, 2, 'capacity') as total_capacity,
-    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 1, 2, 'used') as used,
-    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 1, 2, 'available') as available,
-    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 1, 2, 'holder_count') as holders
+    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 2, 'capacity') as total_capacity,
+    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 2, 'used') as used,
+    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 2, 'available') as available,
+    JSONExtractInt(JSONExtractRaw(LogAttributes['payload.metadata'], 'capacity'), 2, 'holder_count') as holders
 FROM otel.otel_logs
 WHERE LogAttributes['job.tag'] = 'RESOURCE_EXECUTOR_UPDATED';
 

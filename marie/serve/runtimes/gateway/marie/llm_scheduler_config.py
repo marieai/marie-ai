@@ -209,6 +209,70 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             self._close_cursor(cursor)
             self._close_connection(conn)
 
+    def activate_policy_revision(
+        self,
+        fabric_group_id: str,
+        generation: int,
+        actor_id: str,
+        *,
+        expected_generation: int | None = None,
+    ) -> ActivatedPolicy:
+        """Activate a validated saved snapshot without modifying draft settings."""
+        if type(generation) is not int or not 1 <= generation <= 2**53 - 1:
+            raise ValueError('routing_policy_invalid')
+        if not _ACTOR_ID_RE.fullmatch(actor_id):
+            raise ValueError('routing_policy_invalid')
+        cursor = conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '3000ms'")
+            cursor.execute(
+                f"""SELECT active_policy_generation
+                FROM {self.config_schema}.llm_queue_fabric_config
+                WHERE fabric_group_id = %s FOR UPDATE""",
+                (fabric_group_id,),
+            )
+            current = cursor.fetchone()
+            if current is None:
+                raise ValueError('routing_policy_revision_unavailable')
+            if expected_generation is not None and current[0] != expected_generation:
+                raise ValueError('routing_policy_activation_conflict')
+            cursor.execute(
+                f"""SELECT policy_digest, policy_snapshot, created_on
+                FROM {self.config_schema}.llm_queue_policy_generation
+                WHERE fabric_group_id = %s AND generation = %s""",
+                (fabric_group_id, generation),
+            )
+            stored = cursor.fetchone()
+            if stored is None:
+                raise ValueError('routing_policy_revision_unavailable')
+            digest, snapshot = str(stored[0]), stored[1]
+            _admission_policy_from_snapshot(
+                fabric_group_id, generation, digest, snapshot
+            )
+            cursor.execute(
+                f"""UPDATE {self.config_schema}.llm_queue_fabric_config
+                SET active_policy_generation = %s, updated_on = NOW()
+                WHERE fabric_group_id = %s""",
+                (generation, fabric_group_id),
+            )
+            conn.commit()
+            return ActivatedPolicy(
+                fabric_group_id=fabric_group_id,
+                generation=generation,
+                policy_digest=digest,
+                activated_by=actor_id,
+                created_on=stored[2],
+            )
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
     def load_active_admission_policy(self, fabric_group_id: str) -> AdmissionPolicy:
         cursor = None
         conn = None
@@ -240,38 +304,11 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             if stored is None or not isinstance(stored[1], dict):
                 raise ValueError('LLM routing policy generation is unavailable')
             digest, snapshot = str(stored[0]), stored[1]
-            if _policy_digest(snapshot) != digest:
-                raise ValueError('LLM routing policy digest mismatch')
-            validate_dispatch_policy(snapshot.get('dispatch', {}))
-            admission_snapshot = snapshot.get('admission')
-            if not isinstance(admission_snapshot, dict):
-                raise ValueError('LLM admission policy snapshot is unavailable')
-            dispatch_lanes = {
-                lane['pool_id']: lane
-                for lane in snapshot.get('dispatch', {}).get('lanes', [])
-                if isinstance(lane, dict) and isinstance(lane.get('pool_id'), str)
-            }
-            rows = [
-                {
-                    'pool_id': rule['pool_id'],
-                    'enabled': rule['enabled'],
-                    'metadata': {
-                        'admission': rule['admission'],
-                        'llm_dispatch': {
-                            'schema_version': 1,
-                            'endpoint_id': dispatch_lanes[rule['pool_id']].get(
-                                'endpoint_group_id'
-                            )
-                            or dispatch_lanes[rule['pool_id']]['endpoint_id'],
-                            'revision': dispatch_lanes[rule['pool_id']]['revision'],
-                        },
-                    },
-                }
-                for rule in admission_snapshot.get('rules', [])
-            ]
-            policy = AdmissionPolicy.from_rows(fabric_group_id, generation, rows)
+            policy = _admission_policy_from_snapshot(
+                fabric_group_id, generation, digest, snapshot
+            )
             conn.commit()
-            return replace(policy, policy_digest=digest)
+            return policy
         except Exception:
             if conn is not None:
                 conn.rollback()
@@ -343,8 +380,8 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             cursor.execute("SET LOCAL statement_timeout = '1500ms'")
             cursor.execute(
                 f"""
-                SELECT config.admission_mode, config.active_policy_generation,
-                       generation.policy_digest
+                SELECT config.active_policy_generation, generation.policy_digest,
+                       generation.policy_snapshot
                 FROM {self.config_schema}.llm_queue_fabric_config config
                 LEFT JOIN {self.config_schema}.llm_queue_policy_generation generation
                   ON generation.fabric_group_id = config.fabric_group_id
@@ -356,6 +393,19 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             policy = cursor.fetchone()
             if policy is None:
                 raise ValueError('LLM routing fabric is not configured')
+            scheduler_config = None
+            if policy[0] is not None:
+                from marie.serve.runtimes.gateway.marie.scheduler_observation import (
+                    scheduler_observation,
+                )
+
+                if not isinstance(policy[2], dict) or _policy_digest(policy[2]) != str(
+                    policy[1]
+                ):
+                    raise ValueError('LLM routing policy digest mismatch')
+                scheduler_config = scheduler_observation(
+                    policy[2], int(policy[0]), limit=limit
+                )
             cursor.execute(
                 f"""
                 SELECT
@@ -417,12 +467,12 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             visible = rows[:limit]
             visible_routes = route_rows[:limit]
             return {
+                'scheduler_config': scheduler_config,
                 'policy': {
-                    'admission_mode': str(policy[0]),
                     'desired_generation': (
-                        int(policy[1]) if policy[1] is not None else None
+                        int(policy[0]) if policy[0] is not None else None
                     ),
-                    'desired_digest': str(policy[2]) if policy[2] is not None else None,
+                    'desired_digest': str(policy[1]) if policy[1] is not None else None,
                 },
                 'routing': {
                     'projection_pending_count': int(routing[0]),
@@ -431,11 +481,6 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
                         'operator_override': int(routing[2]),
                     },
                     'rejected': {},
-                    'shadow': {
-                        'available': False,
-                        'match_count': None,
-                        'disagreement_count': None,
-                    },
                 },
                 'pools': [
                     {
@@ -552,7 +597,7 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
         cursor.execute(
             f"""
             SELECT policy, total_concurrent_dispatch, enabled, metadata,
-                   admission_mode, active_policy_generation
+                   active_policy_generation
             FROM {self.config_schema}.llm_queue_fabric_config
             WHERE fabric_group_id = %s{suffix}
             """,
@@ -581,8 +626,7 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             'total_concurrent_dispatch': fabric[1],
             'enabled': fabric[2],
             'metadata': fabric[3],
-            'admission_mode': fabric[4],
-            'active_policy_generation': fabric[5],
+            'active_policy_generation': fabric[4],
             'lanes': [
                 {
                     'pool_id': row[0],
@@ -598,6 +642,47 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
                 for row in rows
             ],
         }
+
+
+def _admission_policy_from_snapshot(
+    fabric_group_id: str, generation: int, digest: str, snapshot: dict[str, Any]
+) -> AdmissionPolicy:
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get('fabric_group_id') != fabric_group_id
+    ):
+        raise ValueError('routing_policy_invalid')
+    if _policy_digest(snapshot) != digest:
+        raise ValueError('LLM routing policy digest mismatch')
+    validate_dispatch_policy(snapshot.get('dispatch', {}))
+    admission_snapshot = snapshot.get('admission')
+    if not isinstance(admission_snapshot, dict):
+        raise ValueError('LLM admission policy snapshot is unavailable')
+    dispatch_lanes = {
+        lane['pool_id']: lane
+        for lane in snapshot.get('dispatch', {}).get('lanes', [])
+        if isinstance(lane, dict) and isinstance(lane.get('pool_id'), str)
+    }
+    rows = [
+        {
+            'pool_id': rule['pool_id'],
+            'enabled': rule['enabled'],
+            'metadata': {
+                'admission': rule['admission'],
+                'llm_dispatch': {
+                    'schema_version': 1,
+                    'endpoint_id': dispatch_lanes[rule['pool_id']].get(
+                        'endpoint_group_id'
+                    )
+                    or dispatch_lanes[rule['pool_id']]['endpoint_id'],
+                    'revision': dispatch_lanes[rule['pool_id']]['revision'],
+                },
+            },
+        }
+        for rule in admission_snapshot.get('rules', [])
+    ]
+    policy = AdmissionPolicy.from_rows(fabric_group_id, generation, rows)
+    return replace(policy, policy_digest=digest)
 
 
 def _sql_identifier(value: Any, *, label: str) -> str:

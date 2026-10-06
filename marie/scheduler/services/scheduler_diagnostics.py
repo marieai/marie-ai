@@ -71,6 +71,11 @@ class SchedulerDiagnostics:
     async def job(self, job_id: str) -> dict[str, Any] | None:
         return await self.repository.get_operational_job(job_id)
 
+    async def failure_report(
+        self, job_id: str, history_id: int
+    ) -> dict[str, Any] | None:
+        return await self.repository.get_failure_report(job_id, history_id)
+
     async def execution_history(
         self,
         *,

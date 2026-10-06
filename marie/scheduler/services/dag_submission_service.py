@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import os
+import math
 from collections.abc import Awaitable, Callable
-
-from marie.engine.llm_queue.config import INTERNAL_LEGACY_POOL_ID, route_behavior
 
 from marie.logging_core.logger import MarieLogger
 from marie.messaging import mark_as_failed as mark_as_failed_toast
 from marie.messaging import mark_as_scheduled as mark_as_scheduled_toast
+from marie.query_planner.base import QueryPlan
 from marie.scheduler.llm_routing import (
     PlannedLlmRoute,
     RoutingSubmissionError,
@@ -22,7 +20,6 @@ from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
 from marie.scheduler.planner_util import query_plan_work_items
 from marie.scheduler.repository import JobRepository
 from marie.storage.submission.types import SubmissionDocument
-from marie.utils.docs import document_page_count_from_uri
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
 
@@ -103,12 +100,10 @@ class DagSubmissionService:
         try:
             llm_routes = await self._plan_llm_routes(work_info, plan, dag_nodes)
         except RoutingSubmissionError as exc:
-            routing_context = getattr(work_info, 'routing_context', None)
-            fabric_group_id = getattr(
-                work_info, 'routing_fabric_group_id', None
-            ) or getattr(
-                getattr(routing_context, 'policy', None), 'fabric_group_id', None
-            )
+            routing_context = work_info.routing_context
+            fabric_group_id = work_info.routing_fabric_group_id
+            if fabric_group_id is None and routing_context is not None:
+                fabric_group_id = routing_context.policy.fabric_group_id
             if fabric_group_id:
                 admission_routing_metrics.record_rejection(
                     fabric_group_id=fabric_group_id,
@@ -173,25 +168,19 @@ class DagSubmissionService:
     async def _plan_llm_routes(
         self,
         work_info: WorkInfo,
-        plan,
+        plan: QueryPlan,
         dag_nodes: list[WorkInfo],
     ) -> tuple[PlannedLlmRoute, ...]:
-        plan_nodes = getattr(plan, 'nodes', ())
-        if not any(str(node.definition.method).upper() == 'LLM' for node in plan_nodes):
+        if not any(str(node.definition.method).upper() == 'LLM' for node in plan.nodes):
             return ()
         reject_external_routing_selectors(work_info.data)
 
         context = work_info.routing_context
-        mode = 'enforce'
         if context is None:
             fabric_group_id = work_info.routing_fabric_group_id
             if not fabric_group_id:
                 raise RoutingSubmissionError('routing_facts_missing')
-            mode, policy = await self.repository.load_active_admission_configuration(
-                fabric_group_id
-            )
-            if route_behavior(mode) == 'legacy-read-only':
-                return ()
+            policy = await self.repository.load_active_admission_policy(fabric_group_id)
             if policy is None:
                 raise RoutingSubmissionError('routing_policy_unavailable')
             metadata = work_info.data.get('metadata', {})
@@ -206,12 +195,47 @@ class DagSubmissionService:
                 document_id=document_id,
                 storage_key=uri,
             )
+            if document_id is not None and document is None:
+                raise RoutingSubmissionError('routing_facts_missing')
             if document is not None and uri and document.storage_key != uri:
                 raise RoutingSubmissionError('routing_facts_invalid')
 
             workload_kind = 'document' if document is not None or uri else 'text'
+            page_count = metadata.get('page_count')
+            if (
+                type(page_count) is float
+                and math.isfinite(page_count)
+                and page_count.is_integer()
+            ):
+                page_count = int(page_count)
+            if page_count is not None and (
+                type(page_count) is not int or page_count < 1
+            ):
+                raise RoutingSubmissionError('routing_facts_invalid')
             if workload_kind == 'document':
-                document = await self._ensure_document_page_count(document, uri)
+                resolved_uri = document.storage_key if document is not None else uri
+                if not resolved_uri:
+                    raise RoutingSubmissionError('routing_facts_missing')
+                if document is None:
+                    if page_count is None:
+                        raise RoutingSubmissionError('routing_facts_missing')
+                    document = SubmissionDocument(
+                        id='',
+                        submission_id='',
+                        file_name=resolved_uri.rsplit('/', 1)[-1],
+                        file_size=0,
+                        content_type='application/octet-stream',
+                        storage_key=resolved_uri,
+                        page_count=page_count,
+                    )
+                elif document.page_count is None:
+                    if page_count is None:
+                        raise RoutingSubmissionError('routing_facts_missing')
+                    document.page_count = page_count
+                elif page_count is not None and page_count != document.page_count:
+                    raise RoutingSubmissionError('routing_facts_invalid')
+            elif page_count is not None:
+                raise RoutingSubmissionError('routing_facts_invalid')
             requested_pages = metadata.get('pages')
             if requested_pages is not None and not isinstance(requested_pages, list):
                 raise RoutingSubmissionError('routing_facts_invalid')
@@ -234,66 +258,7 @@ class DagSubmissionService:
             base_facts=context.base_facts,
             override=work_info.routing_override,
         )
-        if route_behavior(mode) == 'compare-without-binding':
-            for route in routes:
-                admission_routing_metrics.record_shadow_comparison(
-                    fabric_group_id=route.fabric_group_id,
-                    automatic_pool_id=route.pool_id,
-                    legacy_pool_id=INTERNAL_LEGACY_POOL_ID,
-                )
-            self.logger.info(
-                'LLM admission shadow matched %s route(s) for %s',
-                len(routes),
-                work_info.id,
-            )
-            return ()
         return routes
-
-    async def _ensure_document_page_count(
-        self,
-        document: SubmissionDocument | None,
-        uri: str | None,
-    ) -> SubmissionDocument:
-        resolved_uri = document.storage_key if document is not None else uri
-        if not resolved_uri:
-            raise RoutingSubmissionError('routing_facts_missing')
-        max_bytes = int(
-            os.environ.get('MARIE_SUBMISSION_MAX_ASSET_BYTES', str(512 * 1024**2))
-        )
-        timeout_seconds = float(
-            os.environ.get('MARIE_SUBMISSION_PAGE_COUNT_TIMEOUT_SECONDS', '10')
-        )
-        if document is not None and document.file_size > max_bytes:
-            raise RoutingSubmissionError('routing_facts_invalid')
-        if document is None:
-            document = SubmissionDocument(
-                id='',
-                submission_id='',
-                file_name=resolved_uri.rsplit('/', 1)[-1],
-                file_size=0,
-                content_type='application/octet-stream',
-                storage_key=resolved_uri,
-            )
-        if document.page_count is None:
-            try:
-                page_count = await asyncio.to_thread(
-                    document_page_count_from_uri,
-                    resolved_uri,
-                    max_bytes,
-                    timeout_seconds,
-                )
-            except (FileNotFoundError, TimeoutError):
-                raise RoutingSubmissionError('routing_facts_missing') from None
-            except (TypeError, ValueError):
-                raise RoutingSubmissionError('routing_facts_invalid') from None
-            document.page_count = page_count
-            if document.id:
-                await self.repository.cache_submission_document_page_count(
-                    document_id=document.id,
-                    storage_key=document.storage_key,
-                    page_count=page_count,
-                )
-        return document
 
     async def is_valid_submission(
         self,

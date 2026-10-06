@@ -29,7 +29,6 @@ class _PolicyDatabase:
     def __init__(self) -> None:
         self.data = persisted()
         self.data['enabled'] = True
-        self.data['admission_mode'] = 'shadow'
         self.active_generation = None
         self.generations: list[tuple[int, str, dict, str, datetime]] = []
         self.commits = 0
@@ -62,7 +61,6 @@ class _PolicyDatabase:
                         database.data['total_concurrent_dispatch'],
                         database.data['enabled'],
                         database.data['metadata'],
-                        database.data['admission_mode'],
                         database.active_generation,
                     )
                 elif 'FROM marie_scheduler.llm_queue_pool' in compact:
@@ -109,9 +107,12 @@ class _PolicyDatabase:
                 elif 'SELECT policy_digest, policy_snapshot' in compact:
                     generation = params[1]
                     found = next(
-                        row for row in database.generations if row[0] == generation
+                        (row for row in database.generations if row[0] == generation),
+                        None,
                     )
-                    self.result = (found[1], found[2])
+                    self.result = (found[1], found[2]) if found else None
+                    if found and 'created_on' in compact:
+                        self.result = (*self.result, found[4])
                 else:
                     raise AssertionError(compact)
 
@@ -185,6 +186,44 @@ def test_runtime_uses_immutable_activated_dispatch_snapshot() -> None:
     assert runtime_policy['policy_generation'] == activated.generation
     assert runtime_policy['policy_digest'] == activated.policy_digest
     assert runtime_policy['lanes'][0]['quantum'] != 99
+
+
+def test_selecting_a_saved_revision_restores_active_policy_without_changing_draft() -> (
+    None
+):
+    database = _PolicyDatabase()
+    repository = _memory_repository(database)
+    first = repository.activate_admission_policy('default', 'operator-1')
+    database.data['lanes'][0]['quantum'] = 99
+    second = repository.activate_admission_policy('default', 'operator-1')
+
+    result = repository.activate_policy_revision(
+        'default', first.generation, 'operator-2', expected_generation=second.generation
+    )
+
+    assert result.generation == first.generation
+    assert result.activated_by == 'operator-2'
+    assert (
+        repository.load_runtime_dispatch_policy('default')['lanes'][0]['quantum'] != 99
+    )
+    assert database.data['lanes'][0]['quantum'] == 99
+    assert len(database.generations) == 2
+
+
+@pytest.mark.parametrize('failure', ['missing', 'digest', 'stale'])
+def test_invalid_saved_revision_activation_keeps_current_policy(failure) -> None:
+    database = _PolicyDatabase()
+    repository = _memory_repository(database)
+    current = repository.activate_admission_policy('default', 'operator-1')
+    revision = 999 if failure == 'missing' else current.generation
+    if failure == 'digest':
+        database.generations[0][2]['scheduler']['enabled'] = False
+    expected = 999 if failure == 'stale' else current.generation
+    with pytest.raises(ValueError):
+        repository.activate_policy_revision(
+            'default', revision, 'operator-2', expected_generation=expected
+        )
+    assert database.active_generation == current.generation
 
 
 @pytest.mark.asyncio

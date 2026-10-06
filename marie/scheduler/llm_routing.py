@@ -15,7 +15,6 @@ from marie.engine.llm_queue.admission_policy import (
     FactValue,
     PoolEndpointBinding,
 )
-from opentelemetry import metrics as otel_metrics
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from marie.query_planner.base import Query, QueryPlan
@@ -23,7 +22,6 @@ from marie.storage.submission.types import SubmissionDocument
 
 if TYPE_CHECKING:
     from marie.scheduler.models import WorkInfo
-    from marie.storage.submission.storage import SubmissionStorage
 
 EndpointBinding = PoolEndpointBinding
 
@@ -51,15 +49,9 @@ _METRIC_CATEGORY_RE = re.compile(r'^[a-z][a-z0-9_]{0,63}$')
 
 class AdmissionRoutingMetrics:
     def __init__(self) -> None:
-        meter = otel_metrics.get_meter("marie.scheduler.llm_routing")
-        self._shadow_comparisons = meter.create_counter(
-            name="marie_llm_admission_shadow_comparisons",
-            description="Automatic pool decisions compared with legacy admission",
-        )
         self._lock = threading.Lock()
         self._matched: Counter[tuple[str, str]] = Counter()
         self._rejected: Counter[tuple[str, str]] = Counter()
-        self._shadow: Counter[tuple[str, str]] = Counter()
         self._seen_fabrics: set[str] = set()
 
     def record_match(self, *, fabric_group_id: str, category: str) -> None:
@@ -92,35 +84,7 @@ class AdmissionRoutingMetrics:
                     for (fabric, category), count in self._rejected.items()
                     if fabric == fabric_group_id
                 },
-                'shadow': {
-                    'match_count': self._shadow[(fabric_group_id, 'match')],
-                    'disagreement_count': self._shadow[
-                        (fabric_group_id, 'disagreement')
-                    ],
-                },
             }
-
-    def record_shadow_comparison(
-        self,
-        *,
-        fabric_group_id: str,
-        automatic_pool_id: str,
-        legacy_pool_id: str,
-    ) -> None:
-        result = "match" if automatic_pool_id == legacy_pool_id else "disagreement"
-        self._shadow_comparisons.add(
-            1,
-            attributes={
-                "fabric_group_id": fabric_group_id,
-                "result": result,
-                "automatic_pool_id": automatic_pool_id,
-                "legacy_pool_id": legacy_pool_id,
-            },
-        )
-        if hasattr(self, '_lock'):
-            with self._lock:
-                self._seen_fabrics.add(fabric_group_id)
-                self._shadow[(fabric_group_id, result)] += 1
 
 
 admission_routing_metrics = AdmissionRoutingMetrics()
@@ -253,60 +217,6 @@ def normalize_routing_facts(
         raise RoutingSubmissionError('routing_facts_invalid')
 
     return TrustedRoutingFacts.from_values(values)
-
-
-def resolve_submission_document(
-    *,
-    storage: SubmissionStorage | None,
-    document_id: str | None,
-    uri: str | None,
-    page_count_loader: Any,
-    max_bytes: int,
-    timeout_seconds: float,
-) -> SubmissionDocument:
-    document = None
-    if storage is not None and document_id:
-        document = storage.get_document_by_id(document_id)
-        if document is None:
-            raise RoutingSubmissionError('routing_facts_missing')
-    elif storage is not None and uri:
-        document = storage.get_document_by_storage_key(uri)
-
-    if document is not None and uri and document.storage_key != uri:
-        raise RoutingSubmissionError('routing_facts_invalid')
-    resolved_uri = document.storage_key if document is not None else uri
-    if not resolved_uri:
-        raise RoutingSubmissionError('routing_facts_missing')
-    if document is not None and document.file_size > max_bytes:
-        raise RoutingSubmissionError('routing_facts_invalid')
-
-    if document is None:
-        document = SubmissionDocument(
-            id='',
-            submission_id='',
-            file_name=resolved_uri.rsplit('/', 1)[-1],
-            file_size=0,
-            content_type='application/octet-stream',
-            storage_key=resolved_uri,
-        )
-    if document.page_count is None:
-        try:
-            page_count = page_count_loader(resolved_uri, max_bytes, timeout_seconds)
-        except Exception as exc:
-            category = (
-                'routing_facts_invalid'
-                if isinstance(exc, (ValueError, TypeError))
-                else 'routing_facts_missing'
-            )
-            raise RoutingSubmissionError(category) from None
-        if type(page_count) is not int or page_count < 1:
-            raise RoutingSubmissionError('routing_facts_invalid')
-        document.page_count = page_count
-        if storage is not None and document.id:
-            storage.update_document_page_count(
-                document.id, document.storage_key, page_count
-            )
-    return document
 
 
 def normalize_pipeline_stage(node: Query) -> str:

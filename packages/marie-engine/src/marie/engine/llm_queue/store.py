@@ -523,6 +523,7 @@ class RequestStore:
         ]
         values = self._read("hmget", self.keys.endpoint(endpoint_id), *names)
         result = dict(zip(names, values))
+        result["circuit"] = result["circuit"] or "closed"
         result["waiting_reason"] = (
             "probe_unresolved"
             if result["probe_claim"]
@@ -646,7 +647,7 @@ class RequestStore:
         return RoutingManifestProjection(**data)
 
     def processing_ids(self, *, offset: int = 0, limit: int = 100) -> list[str]:
-        """Read a bounded page for owner handoff even before lease/uncertainty expiry."""
+        """Read a bounded page for dispatcher owner handoff."""
         self._page(limit)
         return self._read(
             "zrange", self.keys.prefix + "processing", offset, offset + limit - 1
@@ -996,6 +997,12 @@ class RequestStore:
             json.loads(result["result"]) if result["disposition"] == "result" else None
         )
 
+    def ack_result(self, producer_id: str, attempt_id: str) -> StoreReply:
+        """Release a terminal record after its original producer delivers the result."""
+        return self._change(
+            "ack_result", producer_id=producer_id, attempt_id=attempt_id
+        )
+
     def claim(
         self,
         owner: OwnerToken,
@@ -1164,11 +1171,33 @@ class RequestStore:
 
     def charge_totals(self, pool_id: str) -> dict[str, int]:
         """Return bounded cumulative charge/refund totals for one lane."""
+        totals = self.route_totals(pool_id)
+        return {"charged": totals["charged"], "refunded": totals["refunded"]}
+
+    def route_activity_totals(self, pool_id: str) -> dict[str, int]:
+        """Return cumulative accepted/completed request totals for one lane."""
+        totals = self.route_totals(pool_id)
+        return {
+            "accepted": totals["accepted"],
+            "completed": totals["completed"],
+        }
+
+    def route_totals(self, pool_id: str) -> dict[str, int]:
+        """Return bounded cumulative scheduling totals for one lane."""
         validate_identifier(pool_id)
-        charged, refunded = self._read(
-            "hmget", self.keys.route(pool_id), "charged_cost", "refunded_cost"
+        names = ("charged_cost", "refunded_cost", "accepted", "completed")
+        values = self._read(
+            "hmget",
+            self.keys.route(pool_id),
+            *names,
         )
-        return {"charged": int(charged or 0), "refunded": int(refunded or 0)}
+        charged, refunded, accepted, completed = (int(value or 0) for value in values)
+        return {
+            "charged": charged,
+            "refunded": refunded,
+            "accepted": accepted,
+            "completed": completed,
+        }
 
     def fetch_payload(
         self, owner: OwnerToken, attempt_id: str, *, claim_id: str
@@ -1275,7 +1304,7 @@ class RequestStore:
         )
 
     def recover_claim(self, owner: OwnerToken, attempt_id: str) -> StoreReply:
-        """Recover unsent live work or adopt unknown executions without resending."""
+        """Recover unsent work or fail an unresolved execution after its safety window."""
         return self._change("recover", owner=owner, attempt_id=attempt_id)
 
     def settle_remote(

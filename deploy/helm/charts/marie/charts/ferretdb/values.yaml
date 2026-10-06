@@ -1,0 +1,40 @@
+# FerretDB subchart values
+# Stateless MongoDB wire-protocol proxy in front of PostgreSQL with the DocumentDB
+# extension. HyperDX keeps its state (users, alerts, webhooks) through it.
+# Mirrors the ferretdb service in Dockerfiles/docker-compose.clickstack.yml.
+# Used by: hyperdx
+
+enabled: false
+replicas: 1
+
+image:
+  repository: ghcr.io/ferretdb/ferretdb
+  tag: "2.7.0"
+  digest: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 27017
+  annotations: {}
+
+# PostgreSQL that FerretDB stores documents in. An empty host means the bundled
+# PostgreSQL of this release; an empty password reads its Secret.
+postgresql:
+  host: ""
+  port: 5432
+  database: postgres
+  username: postgres
+  password: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

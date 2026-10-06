@@ -7,8 +7,11 @@
 # Usage:
 #   ./scripts/hyperdx-init-user.sh [--env-file <path>] [email] [password]
 #
+# Without --env-file, config/.env.dev is loaded when it exists.
+#
 # Examples:
-#   ./scripts/hyperdx-init-user.sh --env-file ./config/.env.dev
+#   ./scripts/hyperdx-init-user.sh
+#   ./scripts/hyperdx-init-user.sh --env-file ./config/.env.prod
 #   ./scripts/hyperdx-init-user.sh admin@example.com mypassword
 #
 # Environment Variables:
@@ -83,7 +86,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Load env file if provided
+# Default to the dev env file so HYPERDX_ADMIN_* match the rest of the stack
+DEFAULT_ENV_FILE="config/.env.dev"
+if [[ -z "$ENV_FILE" && -f "${REPO_ROOT}/${DEFAULT_ENV_FILE}" ]]; then
+    ENV_FILE="${REPO_ROOT}/${DEFAULT_ENV_FILE}"
+fi
+
+# Load env file
 if [[ -n "$ENV_FILE" ]]; then
     if ! RESOLVED_ENV_FILE="$(resolve_env_file "$ENV_FILE")"; then
         echo "ERROR: Env file not found: $ENV_FILE" >&2
@@ -129,7 +138,7 @@ for i in $(seq 1 $MAX_RETRIES); do
     fi
 
     # Check if API is responding (wget returns 0 on success)
-    if docker exec "$CONTAINER_NAME" wget -q --spider http://localhost:8080/ 2>/dev/null; then
+    if docker exec "$CONTAINER_NAME" wget -q --spider http://127.0.0.1:8080/ 2>/dev/null; then
         echo "    Container is ready"
         break
     fi
@@ -148,7 +157,7 @@ sleep 3
 
 # Create/reset user
 echo "==> Creating/resetting admin user..."
-docker exec -e ADMIN_EMAIL="$ADMIN_EMAIL" -e ADMIN_PASSWORD="$ADMIN_PASSWORD" "$CONTAINER_NAME" sh -c 'cd /app/api/packages/api/build && node -e "
+docker exec -e ADMIN_EMAIL="$ADMIN_EMAIL" -e ADMIN_PASSWORD="$ADMIN_PASSWORD" "$CONTAINER_NAME" sh -c 'cd /app/packages/api/build 2>/dev/null || cd /app/api/packages/api/build; node -e "
 const config = require(\"./config\");
 const User = require(\"./models/user\").default;
 const Team = require(\"./models/team\").default;
@@ -205,7 +214,7 @@ const PASSWORD = process.env.ADMIN_PASSWORD;
 })();
 "'
 
-echo "==> Done! You can now login at http://localhost:8080"
+echo "==> Done! You can now login at ${FRONTEND_URL:-http://localhost:8080}"
 echo "    Email: ${ADMIN_EMAIL}"
 echo "    Password: (as configured)"
 echo ""

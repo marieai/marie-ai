@@ -20,37 +20,10 @@ from marie.scheduler.llm_routing import (
     plan_llm_routes,
     reject_external_routing_selectors,
     resolve_planned_route,
-    resolve_submission_document,
 )
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.state import WorkState
 from marie.storage.submission.types import SubmissionDocument
-
-
-def test_shadow_comparison_metric_contains_only_bounded_route_labels() -> None:
-    recorded: list[tuple[int, dict[str, str]]] = []
-    metrics = object.__new__(AdmissionRoutingMetrics)
-    metrics._shadow_comparisons = SimpleNamespace(
-        add=lambda value, *, attributes: recorded.append((value, attributes))
-    )
-
-    metrics.record_shadow_comparison(
-        fabric_group_id="default",
-        automatic_pool_id="document-small",
-        legacy_pool_id="default",
-    )
-
-    assert recorded == [
-        (
-            1,
-            {
-                "fabric_group_id": "default",
-                "result": "disagreement",
-                "automatic_pool_id": "document-small",
-                "legacy_pool_id": "default",
-            },
-        )
-    ]
 
 
 def test_admission_metrics_snapshot_uses_stable_categories_only() -> None:
@@ -59,17 +32,10 @@ def test_admission_metrics_snapshot_uses_stable_categories_only() -> None:
     metrics.record_rejection(
         fabric_group_id='default', category='routing_facts_missing'
     )
-    metrics.record_shadow_comparison(
-        fabric_group_id='default',
-        automatic_pool_id='document-small',
-        legacy_pool_id='default',
-    )
-
     assert metrics.snapshot('default') == {
         'available': True,
         'matched': {'automatic': 1},
         'rejected': {'routing_facts_missing': 1},
-        'shadow': {'match_count': 0, 'disagreement_count': 1},
     }
 
 
@@ -184,50 +150,6 @@ def test_document_workload_requires_authoritative_page_count() -> None:
             pipeline_stage='extract',
             request_source='gateway-job-api',
         )
-
-
-def test_document_id_must_match_submitted_storage_uri() -> None:
-    class Storage:
-        def get_document_by_id(self, document_id):
-            assert document_id == 'document-1'
-            return _document(storage_key='s3://docs/registered.tif')
-
-    with pytest.raises(RoutingSubmissionError, match='routing_facts_invalid'):
-        resolve_submission_document(
-            storage=Storage(),
-            document_id='document-1',
-            uri='s3://docs/different.tif',
-            page_count_loader=lambda *_: 20,
-            max_bytes=1_000,
-            timeout_seconds=1.0,
-        )
-
-
-def test_missing_registered_count_is_calculated_and_cached() -> None:
-    document = _document(page_count=None)
-
-    class Storage:
-        cached = None
-
-        def get_document_by_storage_key(self, uri):
-            assert uri == document.storage_key
-            return document
-
-        def update_document_page_count(self, document_id, storage_key, page_count):
-            self.cached = (document_id, storage_key, page_count)
-
-    storage = Storage()
-    resolved = resolve_submission_document(
-        storage=storage,
-        document_id=None,
-        uri=document.storage_key,
-        page_count_loader=lambda *_: 6,
-        max_bytes=1_000,
-        timeout_seconds=1.0,
-    )
-
-    assert resolved.page_count == 6
-    assert storage.cached == ('document-1', document.storage_key, 6)
 
 
 @pytest.mark.parametrize(

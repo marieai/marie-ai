@@ -45,8 +45,14 @@ class GatewayLlmDispatchRuntime:
     ) -> None:
         self.logger = logger or MarieLogger("GatewayLlmDispatchRuntime")
         self.runtime_config = config or {}
+        registered_policy = self.runtime_config.get('llm_dispatch')
+        contract_version = (
+            'v3'
+            if isinstance(registered_policy, dict) and registered_policy
+            else self.runtime_config.get('queue_contract_version')
+        )
         self.config = queue_config or LlmQueueRuntimeConfig.from_env(
-            queue_contract_version=self.runtime_config.get('queue_contract_version')
+            queue_contract_version=contract_version
         )
         if self.config.queue_contract_version == 'v3':
             scheduler = self.runtime_config.get('scheduler') or {}
@@ -83,6 +89,10 @@ class GatewayLlmDispatchRuntime:
     @property
     def enabled(self) -> bool:
         return bool(self.config.enabled)
+
+    @property
+    def mode(self) -> str:
+        return "queued-dispatch" if self.enabled else "direct-batch"
 
     def health(self) -> dict[str, object]:
         if self._dispatcher is not None:

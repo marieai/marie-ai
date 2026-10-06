@@ -18,7 +18,7 @@ from marie.engine.completion_contract import (
     extract_completion_text,
     require_terminal_completion,
 )
-from marie.engine.exceptions import MaxTokensExceededError
+from marie.engine.exceptions import MaxTokensExceededError, RepetitionError
 from marie.engine.llm_queue.config import (
     LlmQueueProducerConfig,
     LlmQueueRuntimeConfig,
@@ -103,6 +103,7 @@ class V3Producer:
             raise ValueError("Producer admission window must be positive")
         self._max_buffered_requests = max_buffered_requests
         self._poll_ids: deque[str] = deque()
+        self._ack_pending: dict[str, float] = {}
         self._threads: list[threading.Thread] = []
         self._lease_ms = int(config.producer_ttl_seconds * 1000)
         self._refresh = config.producer_refresh_interval_seconds
@@ -198,6 +199,23 @@ class V3Producer:
                 # Unknown is not dead; a later renew must still validate the old lease.
                 continue
 
+    def _ack_result(self, attempt_id: str) -> None:
+        try:
+            reply = self._store.ack_result(self.producer_id, attempt_id)
+        except StoreUnavailable:
+            reply = None
+        if reply is not None and reply.disposition in {
+            "acked",
+            "missing",
+            "producer_dead",
+        }:
+            with self._condition:
+                self._ack_pending.pop(attempt_id, None)
+                self._condition.notify_all()
+            return
+        with self._condition:
+            self._ack_pending[attempt_id] = time.monotonic() + 0.25
+
     def _poll(self) -> None:
         while not self._stop.wait(0.02):
             with self._condition:
@@ -205,6 +223,16 @@ class V3Producer:
                     self._poll_ids.popleft()
                     for _ in range(min(64, len(self._poll_ids)))
                 ]
+                now = time.monotonic()
+                ack_ids = [
+                    attempt
+                    for attempt, retry_at in list(self._ack_pending.items())[:64]
+                    if retry_at <= now
+                ]
+            for attempt in ack_ids:
+                if self._stop.is_set():
+                    return
+                self._ack_result(attempt)
             for attempt in ids:
                 if self._stop.is_set():
                     return
@@ -302,9 +330,11 @@ class V3Producer:
             store = self._start(deadline, cancellation)
             expires = None
             while next_index < len(calls) or any(result is None for result in results):
+                wait_seconds = 0.02
                 self._check()
                 if cancellation.is_set():
                     raise QueueTaskError("cancellation_requested")
+                terminal_error = None
                 for attempt, (index, pending) in list(owned.items()):
                     if pending.result is None or results[index] is not None:
                         continue
@@ -317,6 +347,15 @@ class V3Producer:
                             results[index] = BatchResult(
                                 pending.task_id, None, QueueTaskError("callback_failed")
                             )
+                    self._ack_result(attempt)
+                    error = results[index].error
+                    if isinstance(error, MaxTokensExceededError) or (
+                        isinstance(error, QueueTaskError)
+                        and error.category == "call_timeout"
+                    ):
+                        terminal_error = error
+                if terminal_error is not None:
+                    raise terminal_error
                 if cancellation.is_set():
                     raise QueueTaskError("cancellation_requested")
                 remaining = deadline - time.monotonic()
@@ -387,8 +426,9 @@ class V3Producer:
                             raise ProducerDead("Original producer lease expired")
                         if reply.disposition != "backpressure":
                             raise QueueTaskError(reply.disposition)
+                        wait_seconds = 0.25
                     except StoreUnavailable:
-                        pass
+                        wait_seconds = 0.25
                     except (ValueError, TypeError, OverflowError):
                         if preparing:
                             with self._condition:
@@ -406,13 +446,16 @@ class V3Producer:
                         next_index += 1
                 with self._condition:
                     self._condition.wait(
-                        timeout=min(0.02, max(0, deadline - time.monotonic()))
+                        timeout=min(wait_seconds, max(0, deadline - time.monotonic()))
                     )
-        except QueueTaskError as error:
+        except (QueueTaskError, MaxTokensExceededError) as error:
             for index, result in enumerate(results):
                 if result is None:
                     cause = error
-                    if error.category == "deadline_exceeded":
+                    if (
+                        isinstance(error, QueueTaskError)
+                        and error.category == "deadline_exceeded"
+                    ):
                         pending = next(
                             (
                                 entry
@@ -475,6 +518,7 @@ class V3Producer:
             with self._condition:
                 self._pending.clear()
                 self._poll_ids.clear()
+                self._ack_pending.clear()
 
 
 def _batch_result(task_id: str, state: str, outcome: Any) -> BatchResult:
@@ -484,6 +528,12 @@ def _batch_result(task_id: str, state: str, outcome: Any) -> BatchResult:
             if isinstance(outcome, dict)
             else None
         )
+        if category == "repetition":
+            return BatchResult(
+                task_id,
+                None,
+                RepetitionError(retryable=False),
+            )
         return BatchResult(
             task_id, None, QueueTaskError(category, state=state, confirmed=True)
         )

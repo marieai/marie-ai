@@ -28,6 +28,13 @@ global:
     logging:
       level: INFO
     debugQueryPlanner: "FALSE"
+  # Where bundled Marie services send OTLP telemetry. Empty keeps the previous behaviour
+  # (localhost:4317, i.e. nowhere unless a sidecar listens). The otel-collector subchart's
+  # Service is "<release>-otel-collector".
+  # Host and endpoint values may contain Helm template expressions.
+  otel:
+    host: ""
+    endpoint: ""
   grpc:
     trace: ""
     verbosity: ""
@@ -558,6 +565,29 @@ clickhouse:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# -----------------------------------------------------------------------------
+# OpenTelemetry Collector (telemetry ingestion into ClickHouse)
+# Receives OTLP from Marie services and writes logs, traces and metrics to the
+# ClickHouse "otel" database that marie-studio's Observability pages read.
+# -----------------------------------------------------------------------------
+otel-collector:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# FerretDB (MongoDB wire protocol over the bundled PostgreSQL)
+# State store for HyperDX; requires postgresql.enabled.
+# -----------------------------------------------------------------------------
+ferretdb:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# HyperDX (alert evaluation)
+# Evaluates marie-studio alert policies against the ClickHouse "otel" database.
+# Requires clickhouse.enabled and ferretdb.enabled.
+# -----------------------------------------------------------------------------
+hyperdx:
+  enabled: false
 
 # -----------------------------------------------------------------------------
 # Gitea Configuration (Git Service)

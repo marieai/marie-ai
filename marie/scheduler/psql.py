@@ -16,7 +16,7 @@ import psycopg
 
 from marie.constants import JOB_STATUS_NOTIFICATION_CHANNEL
 from marie.excepts import BadConfigSource, RuntimeFailToStart
-from marie.job.common import JobInfo, JobStatus
+from marie.job.common import DuplicateJobSubmissionError, JobInfo, JobStatus
 from marie.job.job_manager import JobManager
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
@@ -401,6 +401,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             repository=self.repository,
             store=store,
             logger=self.logger,
+            admission_callback=self.dag_service.request_admission,
         )
         self.llm_routing_projection_service = service
         self.runtime.create_task(
@@ -2017,15 +2018,41 @@ class PostgreSQLJobScheduler(JobScheduler):
                 )
 
             async def _submit_and_confirm() -> None:
-                await self.job_manager.submit_job(
-                    entrypoint=entrypoint,
-                    submission_id=submission_id,
-                    metadata=job_metadata,
-                    confirmation_event=confirmation_event,
-                    is_retry=is_retry,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                )
+                async def submit(retry: bool) -> None:
+                    await self.job_manager.submit_job(
+                        entrypoint=entrypoint,
+                        submission_id=submission_id,
+                        metadata=job_metadata,
+                        confirmation_event=confirmation_event,
+                        is_retry=retry,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                    )
+
+                try:
+                    await submit(bool(is_retry))
+                except DuplicateJobSubmissionError:
+                    existing_status = await self.job_manager.get_job_status(
+                        submission_id
+                    )
+                    if existing_status is None or not existing_status.is_terminal():
+                        raise
+                    self.logger.info(
+                        "Replaying reset job %s over terminal runtime status %s",
+                        submission_id,
+                        existing_status.value,
+                    )
+                    scheduler_trace(
+                        "gateway_dispatch_terminal_replay",
+                        job_id=submission_id,
+                        dag_id=work_info.dag_id,
+                        entrypoint=entrypoint,
+                        previous_status=existing_status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        **self._ha_trace_fields(),
+                    )
+                    await submit(True)
                 scheduler_trace(
                     "gateway_dispatch_submitted",
                     job_id=submission_id,

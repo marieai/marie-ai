@@ -13,7 +13,13 @@ class MaxTokensExceededError(Exception):
 class RepetitionError(Exception):
     """Raised when an LLM response becomes repetitious."""
 
-    def __init__(self, message: str = "LLM output is repetitive") -> None:
+    def __init__(
+        self,
+        message: str = "LLM output is repetitive",
+        *,
+        retryable: bool = True,
+    ) -> None:
+        self.retryable = retryable
         super().__init__(message)
 
 

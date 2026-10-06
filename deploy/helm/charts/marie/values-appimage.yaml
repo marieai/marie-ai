@@ -7,6 +7,9 @@ global:
     managed: true
     phase: infrastructure
   storageClass: local-path
+  otel:
+    host: '{{ printf "%s-otel-collector" .Release.Name | trunc 63 | trimSuffix "-" }}'
+    endpoint: 'http://{{ printf "%s-otel-collector" .Release.Name | trunc 63 | trimSuffix "-" }}:4317'
   marie:
     image:
       repository: docker.io/marieai/marie
@@ -127,6 +130,27 @@ clickhouse:
     pullPolicy: IfNotPresent
   persistence:
     storageClass: local-path
+
+otel-collector:
+  enabled: true
+  image:
+    repository: docker.io/otel/opentelemetry-collector-contrib
+    tag: "0.149.0"
+    pullPolicy: IfNotPresent
+
+ferretdb:
+  enabled: true
+  image:
+    repository: ghcr.io/ferretdb/ferretdb
+    tag: "2.7.0"
+    pullPolicy: IfNotPresent
+
+hyperdx:
+  enabled: true
+  image:
+    repository: docker.hyperdx.io/hyperdx/hyperdx
+    tag: "2.39.1"
+    pullPolicy: IfNotPresent
 
 gitea:
   enabled: true

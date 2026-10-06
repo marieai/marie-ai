@@ -7,7 +7,11 @@ from marie.engine.llm_queue.admission_policy import AdmissionPolicy
 
 import marie.scheduler.services.dag_submission_service as submission_module
 from marie.query_planner.base import LlmQueryDefinition, Query, QueryPlan, QueryType
-from marie.scheduler.llm_routing import TrustedRoutingContext, TrustedRoutingFacts
+from marie.scheduler.llm_routing import (
+    RoutingSubmissionError,
+    TrustedRoutingContext,
+    TrustedRoutingFacts,
+)
 from marie.scheduler.models import ExistingWorkPolicy
 from marie.scheduler.services.dag_submission_service import DagSubmissionService
 
@@ -35,6 +39,7 @@ def work_item(job_id: str) -> SimpleNamespace:
         name='extract',
         policy='ALLOW_ALL',
         data={'metadata': {}},
+        routing_override=None,
     )
 
 
@@ -105,8 +110,23 @@ async def test_llm_plan_passes_immutable_routes_to_submission_transaction() -> N
 
 
 @pytest.mark.asyncio
-async def test_shadow_admission_records_bounded_comparison_without_binding(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ('metadata', 'expect_missing'),
+    [
+        ({'uri': 's3://marie/stress/document.tif', 'page_count': 3.0}, False),
+        (
+            {
+                'document_id': '018fa1f1-0000-7000-8000-000000000099',
+                'uri': 's3://marie/stress/document.tif',
+                'page_count': 3.0,
+            },
+            True,
+        ),
+        ({'document_id': '018fa1f1-0000-7000-8000-000000000099'}, True),
+    ],
+)
+async def test_active_admission_policy_requires_lookup_for_supplied_document_id(
+    metadata: dict[str, object], expect_missing: bool
 ) -> None:
     service = build_service()
     policy = AdmissionPolicy.from_rows(
@@ -132,22 +152,15 @@ async def test_shadow_admission_records_bounded_comparison_without_binding(
             }
         ],
     )
-    service.repository.load_active_admission_configuration = AsyncMock(
-        return_value=('shadow', policy)
-    )
+    service.repository.load_active_admission_policy = AsyncMock(return_value=policy)
     service.repository.get_submission_document_for_routing = AsyncMock(
         return_value=None
-    )
-    comparisons: list[dict[str, str]] = []
-    monkeypatch.setattr(
-        submission_module.admission_routing_metrics,
-        'record_shadow_comparison',
-        lambda **values: comparisons.append(values),
     )
     root = work_item('018fa1f1-0000-7000-8000-000000000011')
     root.routing_context = None
     root.routing_fabric_group_id = 'default'
     root.routing_request_source = 'workflow'
+    root.data['metadata'] = metadata
     node_id = '018fa1f1-0000-7000-8000-000000000012'
     plan = QueryPlan(
         nodes=[
@@ -165,20 +178,26 @@ async def test_shadow_admission_records_bounded_comparison_without_binding(
         ]
     )
 
+    if expect_missing:
+        with pytest.raises(RoutingSubmissionError, match='^routing_facts_missing$'):
+            await service._plan_llm_routes(root, plan, [SimpleNamespace(id=node_id)])
+        service.repository.get_submission_document_for_routing.assert_awaited_once_with(
+            document_id=metadata['document_id'], storage_key=metadata.get('uri')
+        )
+        assert root.routing_context is None
+        return
+
     routes = await service._plan_llm_routes(
         root,
         plan,
         [SimpleNamespace(id=node_id)],
     )
 
-    assert routes == ()
-    assert comparisons == [
-        {
-            'fabric_group_id': 'default',
-            'automatic_pool_id': 'document-small',
-            'legacy_pool_id': 'default',
-        }
-    ]
+    assert len(routes) == 1
+    assert routes[0].work_unit_id == node_id
+    assert routes[0].pool_id == 'document-small'
+    assert routes[0].logical_endpoint_group_id == 'primary'
+    assert routes[0].effective_page_count == 3
 
 
 @pytest.mark.asyncio
@@ -335,7 +354,7 @@ async def test_persist_commits_the_dag_before_post_commit_effects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = build_service()
-    plan = object()
+    plan = QueryPlan(nodes=[])
     nodes = [SimpleNamespace(dag_id=None), SimpleNamespace(dag_id=None)]
     calls: list[str] = []
 
@@ -378,7 +397,7 @@ async def test_persist_keeps_dag_successful_when_post_commit_effects_fail(
     monkeypatch.setattr(
         submission_module,
         'query_plan_work_items',
-        MagicMock(return_value=(object(), [SimpleNamespace(dag_id=None)])),
+        MagicMock(return_value=(QueryPlan(nodes=[]), [SimpleNamespace(dag_id=None)])),
     )
 
     assert await service.persist(work_item('dag-1')) == 'dag-1'
@@ -422,7 +441,7 @@ async def test_concurrent_duplicate_id_has_one_durable_success(
     monkeypatch.setattr(
         submission_module,
         'query_plan_work_items',
-        MagicMock(return_value=(object(), [SimpleNamespace(dag_id=None)])),
+        MagicMock(return_value=(QueryPlan(nodes=[]), [SimpleNamespace(dag_id=None)])),
     )
 
     results = await asyncio.gather(

@@ -19,9 +19,9 @@ from docarray.documents import TextDoc
 from fastapi import FastAPI, Request
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 from marie.engine.llm_queue.registry import (
+    SnapshotUnavailable,
     dispatch_runtime_live_state,
     dispatch_runtime_snapshot,
-    read_runtime_snapshot,
 )
 from rich.traceback import install
 
@@ -73,6 +73,9 @@ from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
     GatewayLlmDispatchRuntime,
+)
+from marie.serve.runtimes.gateway.marie.operator_routes import (
+    read_operator_runtime_snapshot,
 )
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
@@ -641,6 +644,15 @@ class MarieServerGateway(CompositeServer):
                     None,
                 ),
                 getattr(self, '_submit_operator_routing_override', None),
+                gateway_debug=lambda: {
+                    'llm_dispatch': {
+                        'enabled': self.llm_dispatch_runtime.enabled,
+                        'mode': self.llm_dispatch_runtime.mode,
+                    }
+                },
+                failure_report_reader=lambda job_id, history_id: (
+                    self.job_scheduler.diagnostics.failure_report(job_id, history_id)
+                ),
             )
 
             @app.api_route(
@@ -2079,6 +2091,7 @@ class MarieServerGateway(CompositeServer):
 
     async def _start_gateway_background_runtimes(self) -> None:
         await self.llm_dispatch_runtime.start()
+        self.logger.info(f"LLM execution mode: {self.llm_dispatch_runtime.mode}")
         runtime_config = getattr(self.llm_dispatch_runtime, "config", None)
         if (
             getattr(runtime_config, "queue_contract_version", None) == 'v3'
@@ -2350,8 +2363,15 @@ class MarieServerGateway(CompositeServer):
         *,
         unchanged_interval_s: float = LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
     ) -> None:
-        snapshot = await read_runtime_snapshot(
-            fabric_group_id=self.llm_dispatch_runtime.config.fabric_group_id, limit=50
+        repository = getattr(
+            getattr(self.llm_dispatch_runtime, '_scheduler_config_source', None),
+            'repository',
+            None,
+        )
+        snapshot = await read_operator_runtime_snapshot(
+            fabric_group_id=self.llm_dispatch_runtime.config.fabric_group_id,
+            limit=50,
+            policy_repository=repository,
         )
         fingerprint = _llm_dispatch_runtime_event_fingerprint(snapshot)
         now = time.monotonic()
@@ -2382,9 +2402,15 @@ class MarieServerGateway(CompositeServer):
         while True:
             try:
                 await self._publish_llm_dispatch_runtime_event()
+            except SnapshotUnavailable as exc:
+                self.logger.error(
+                    "LLM dispatch broadcast unavailable: %s",
+                    str(exc) or "runtime_snapshot_unavailable",
+                )
             except Exception as exc:
                 self.logger.error(
-                    "LLM dispatch broadcast unavailable",
+                    "LLM dispatch broadcast unavailable: %s",
+                    type(exc).__name__,
                 )
             await asyncio.sleep(interval_s)
 

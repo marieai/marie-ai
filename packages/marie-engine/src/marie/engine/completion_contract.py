@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import re
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any, Optional
 
 COMPLETION_QUEUE_CONTRACT_VERSION = "v2"
@@ -97,6 +98,7 @@ class CompletionCallParams:
     extra_body: Optional[dict[str, Any]] = None
     extra_create_kwargs: dict[str, Any] = field(default_factory=dict)
     context: RequestContext | None = None
+    repetition_recovery: Optional[dict[str, Any]] = None
 
     def to_create_kwargs(self) -> dict[str, Any]:
         create_kwargs = {
@@ -154,6 +156,9 @@ def build_completion_call(
     effective.pop("context", None)
     response_format = effective.pop("response_format", None)
     extra_body = effective.pop("extra_body", None)
+    repetition_recovery = _validate_repetition_recovery(
+        effective.pop("repetition_recovery", None)
+    )
     if extra_body is not None and not isinstance(extra_body, dict):
         raise ValueError("completion_params.extra_body must be a dict when provided")
 
@@ -179,7 +184,108 @@ def build_completion_call(
         extra_body=extra_body_dict or None,
         extra_create_kwargs=effective,
         context=context,
+        repetition_recovery=repetition_recovery,
     )
+
+
+def apply_repetition_recovery(
+    call: CompletionCallParams,
+) -> CompletionCallParams | None:
+    recovery = _validate_repetition_recovery(call.repetition_recovery)
+    if recovery is None:
+        return None
+
+    extra_body = dict(call.extra_body or {})
+    extra_body.update(recovery.get("extra_body") or {})
+    return replace(
+        call,
+        temperature=recovery.get("temperature", call.temperature),
+        top_p=recovery.get("top_p", call.top_p),
+        frequency_penalty=recovery.get("frequency_penalty", call.frequency_penalty),
+        presence_penalty=recovery.get("presence_penalty", call.presence_penalty),
+        extra_body=extra_body or None,
+        repetition_recovery=None,
+    )
+
+
+def has_terminal_repetition(text: str) -> bool:
+    tokens = text.split()
+    for size in range(1, min(20, len(tokens) // 4) + 1):
+        required = max(4, math.ceil(8 / size))
+        if required * size > len(tokens):
+            continue
+        unit = tokens[-size:]
+        if tokens[-required * size :] == unit * required:
+            return True
+
+    stripped = text.rstrip()
+    for size in range(1, min(128, len(stripped) // 4) + 1):
+        required = max(4, math.ceil(24 / size))
+        if required * size > len(stripped):
+            continue
+        unit = stripped[-size:]
+        if unit and stripped.endswith(unit * required):
+            return True
+    return False
+
+
+def recover_complete_json(text: str) -> str | None:
+    candidate = text.lstrip()
+    try:
+        value, end = json.JSONDecoder().raw_decode(candidate)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, (dict, list)):
+        return None
+    remainder = candidate[end:].strip()
+    if remainder and not has_terminal_repetition(remainder):
+        return None
+    return candidate[:end]
+
+
+def _validate_repetition_recovery(
+    value: Any,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("completion_params.repetition_recovery must be a dict")
+    allowed = {
+        "temperature",
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+        "extra_body",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(
+            "Unsupported repetition recovery parameters: "
+            + ", ".join(sorted(str(key) for key in unknown))
+        )
+    normalized = dict(value)
+    bounds = {
+        "temperature": (0.0, 2.0),
+        "top_p": (0.0, 1.0),
+        "frequency_penalty": (-2.0, 2.0),
+        "presence_penalty": (-2.0, 2.0),
+    }
+    for name, (minimum, maximum) in bounds.items():
+        if name not in normalized:
+            continue
+        setting = normalized[name]
+        if (
+            isinstance(setting, bool)
+            or not isinstance(setting, (int, float))
+            or not math.isfinite(setting)
+            or not minimum <= setting <= maximum
+            or (name == "top_p" and setting == 0)
+        ):
+            raise ValueError(f"Invalid repetition recovery {name}")
+    extra_body = normalized.get("extra_body")
+    if extra_body is not None and not isinstance(extra_body, dict):
+        raise ValueError("repetition_recovery.extra_body must be a dict")
+    return normalized
 
 
 def build_dispatch_profile_key(call: CompletionCallParams) -> str:

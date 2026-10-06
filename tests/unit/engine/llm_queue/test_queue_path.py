@@ -27,7 +27,6 @@ from marie.engine.llm_queue.config import (
     DEFAULT_MAX_INLINE_PAYLOAD_BYTES,
     LlmQueueConfig,
     LlmQueueProducerConfig,
-    route_behavior,
 )
 from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
 from marie.engine.llm_queue.endpoint import (
@@ -83,6 +82,55 @@ class _Logger:
 
     def debug(self, *args, **kwargs):
         pass
+
+
+def test_endpoint_status_defaults_uninitialized_circuit_to_closed() -> None:
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+    store._read = mock.Mock(
+        return_value=["open", None, "0", None, None, "0", None, "0", "0"]
+    )
+
+    status = store.endpoint_status("endpoint")
+
+    assert status["circuit"] == "closed"
+    assert status["waiting_reason"] is None
+
+
+def test_execution_history_marks_semantic_failure_as_error(monkeypatch) -> None:
+    from marie.engine.llm_queue import request_dispatcher
+    from marie.engine.llm_queue.endpoint import ExecutionOutcome
+
+    class Span:
+        def set_status(self, status):
+            self.status = status
+
+        def end(self):
+            pass
+
+    span = Span()
+    monkeypatch.setattr(
+        request_dispatcher._tracer,
+        "start_span",
+        lambda *_args, **_kwargs: span,
+    )
+    attributes = {"marie.llm_dispatch.queue_wait_ms": 5}
+
+    request_dispatcher._emit_execution_history(
+        attributes,
+        ExecutionOutcome(
+            response={"usage": {"total_tokens": 192}},
+            category="repetition",
+            remote_settled=True,
+            availability_success=True,
+        ),
+        time.time_ns(),
+        time.monotonic(),
+    )
+
+    assert attributes["marie.llm_dispatch.status"] == "error"
+    assert attributes["marie.llm_dispatch.error_type"] == "repetition"
+    assert attributes["llm.token_count.total"] == 192
 
 
 def test_endpoint_group_requires_compatible_unique_replicas() -> None:
@@ -791,18 +839,6 @@ def test_producer_config_ignores_removed_pool_and_version_environment(monkeypatc
 
     assert not hasattr(config, "pool_id")
     assert not hasattr(config, "queue_contract_version")
-
-
-@pytest.mark.parametrize(
-    ("mode", "expected"),
-    [
-        ("off", "legacy-read-only"),
-        ("shadow", "compare-without-binding"),
-        ("enforce", "manifest-required"),
-    ],
-)
-def test_admission_mode_has_explicit_behavior(mode, expected):
-    assert route_behavior(mode) == expected
 
 
 @pytest.mark.parametrize(

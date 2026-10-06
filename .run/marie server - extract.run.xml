@@ -6,7 +6,6 @@
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
-      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="CUDA_VISIBLE_DEVICES" value="0" />
       <env name="GRPC_VERBOSITY" value="debug" />
@@ -18,6 +17,8 @@
       <env name="MARIE_SCHEDULER_TRACE_ENABLED" value="true" />
       <env name="MARIE_SCHEDULER_TRACE_PATH" value="$USER_HOME$/tmp/marie-scheduler-trace.jsonl" />
       <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="compact" />
+      <env name="PYTHONUNBUFFERED" value="1" />
+      <env name="MARIE_LEGACY_WORKING_DIR" value="false" />
     </envs>
     <option name="SDK_HOME" value="" />
     <option name="SDK_NAME" value="Python 3.12 (marie-ai)" />

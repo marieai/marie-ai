@@ -16,12 +16,42 @@
 import { getTextContent, LLMock, type ChatCompletionRequest, type FixtureResponse } from "@copilotkit/aimock";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
+import {
+  maxTokensReached,
+  providerRejected,
+  providerUnavailable,
+  repetitiveLengthOutput,
+} from "./fault-response.js";
+import { beginTimedOutage } from "./outage-controller.js";
+import { ProviderCapacity } from "./provider-capacity.js";
+
 const PORT = parseInt(process.env.AIMOCK_PORT || "4010", 10);
 const ADMIN_PORT = parseInt(process.env.AIMOCK_ADMIN_PORT || "4011", 10);
 const HOST = process.env.AIMOCK_HOST || "127.0.0.1";
-const VALID_FAULT_PROFILES = new Set(["normal", "timeout", "error", "invalid_json", "chaos"]);
+const VALID_FAULT_PROFILES = new Set([
+  "normal",
+  "timeout",
+  "error",
+  "transient_error",
+  "terminal_error",
+  "max_tokens",
+  "repetition",
+  "persistent_repetition",
+  "invalid_json",
+  "chaos",
+]);
 
-type FaultProfile = "normal" | "timeout" | "error" | "invalid_json" | "chaos";
+type FaultProfile =
+  | "normal"
+  | "timeout"
+  | "error"
+  | "transient_error"
+  | "terminal_error"
+  | "max_tokens"
+  | "repetition"
+  | "persistent_repetition"
+  | "invalid_json"
+  | "chaos";
 type MessageHandler = (request: ChatCompletionRequest) => FixtureResponse | Promise<FixtureResponse>;
 
 // Document processing state for stateful mocks
@@ -30,25 +60,50 @@ const processingState = new Map<string, { status: string; progress: number }>();
 const faultState: {
   profile: FaultProfile;
   timeoutMs: number;
+  transientErrors: number;
+  remainingTransientErrors: number;
   chaosErrorRate: number;
   chaosTimeoutRate: number;
   chaosSlowRate: number;
   chaosSlowMs: number;
+  processingDelayMs: number;
 } = {
   profile: (process.env.AIMOCK_FAULT_PROFILE as FaultProfile) || "normal",
   timeoutMs: parseInt(process.env.AIMOCK_TIMEOUT_MS || "180000", 10),
+  transientErrors: parseInt(process.env.AIMOCK_TRANSIENT_ERRORS || "3", 10),
+  remainingTransientErrors: parseInt(process.env.AIMOCK_TRANSIENT_ERRORS || "3", 10),
   chaosErrorRate: parseFloat(process.env.AIMOCK_CHAOS_ERROR_RATE || "0.15"),
   chaosTimeoutRate: parseFloat(process.env.AIMOCK_CHAOS_TIMEOUT_RATE || "0.15"),
   chaosSlowRate: parseFloat(process.env.AIMOCK_CHAOS_SLOW_RATE || "0.2"),
   chaosSlowMs: parseInt(process.env.AIMOCK_CHAOS_SLOW_MS || "5000", 10),
+  processingDelayMs: parseInt(process.env.AIMOCK_PROCESSING_DELAY_MS || "0", 10),
 };
+const providerCapacity = new ProviderCapacity(
+  parseInt(process.env.AIMOCK_MAX_CONCURRENT_CALLS || "0", 10),
+);
 let requestCount = 0;
 const requestsByProfile: Record<FaultProfile, number> = {
   normal: 0,
   timeout: 0,
   error: 0,
+  transient_error: 0,
+  terminal_error: 0,
+  max_tokens: 0,
+  repetition: 0,
+  persistent_repetition: 0,
   invalid_json: 0,
   chaos: 0,
+};
+const outageState: {
+  active: boolean;
+  count: number;
+  until: number | null;
+  recoveryError: string | null;
+} = {
+  active: false,
+  count: 0,
+  until: null,
+  recoveryError: null,
 };
 
 if (!VALID_FAULT_PROFILES.has(faultState.profile)) {
@@ -59,7 +114,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function applyFaultProfile(): Promise<FixtureResponse | null> {
+async function applyFaultProfile(
+  request: ChatCompletionRequest,
+): Promise<FixtureResponse | null> {
   requestCount += 1;
   requestsByProfile[faultState.profile] += 1;
 
@@ -68,7 +125,34 @@ async function applyFaultProfile(): Promise<FixtureResponse | null> {
   }
 
   if (faultState.profile === "error") {
-    throw new Error("Simulated AIMock error profile");
+    return providerUnavailable("Simulated AIMock error profile");
+  }
+
+  if (faultState.profile === "transient_error") {
+    if (faultState.remainingTransientErrors > 0) {
+      faultState.remainingTransientErrors -= 1;
+      return providerUnavailable("Simulated transient AIMock outage");
+    }
+    return null;
+  }
+
+  if (faultState.profile === "terminal_error") {
+    return providerRejected("Simulated AIMock terminal error profile");
+  }
+
+  if (faultState.profile === "max_tokens") {
+    return maxTokensReached();
+  }
+
+  if (faultState.profile === "repetition") {
+    if (request.temperature === 0.7 && request.top_p === 0.8) {
+      return null;
+    }
+    return repetitiveLengthOutput();
+  }
+
+  if (faultState.profile === "persistent_repetition") {
+    return repetitiveLengthOutput();
   }
 
   if (faultState.profile === "invalid_json") {
@@ -88,7 +172,7 @@ async function applyFaultProfile(): Promise<FixtureResponse | null> {
 
   const roll = Math.random();
   if (roll < faultState.chaosErrorRate) {
-    throw new Error("Simulated AIMock chaos error");
+    return providerRejected("Simulated AIMock chaos error");
   }
   if (roll < faultState.chaosErrorRate + faultState.chaosTimeoutRate) {
     await sleep(faultState.timeoutMs);
@@ -120,11 +204,19 @@ function lastUserMessageText(request: ChatCompletionRequest): string {
 
 function withFaultProfile(handler: MessageHandler | FixtureResponse): MessageHandler {
   return async (request: ChatCompletionRequest) => {
-    const override = await applyFaultProfile();
-    if (override) {
-      return override;
+    const release = await providerCapacity.acquire();
+    try {
+      if (faultState.processingDelayMs > 0) {
+        await sleep(faultState.processingDelayMs);
+      }
+      const override = await applyFaultProfile(request);
+      if (override) {
+        return override;
+      }
+      return typeof handler === "function" ? await handler(request) : handler;
+    } finally {
+      release();
     }
-    return typeof handler === "function" ? await handler(request) : handler;
   };
 }
 
@@ -149,16 +241,23 @@ function snapshotFaultState(): Record<string, unknown> {
   return {
     profile: faultState.profile,
     timeoutMs: faultState.timeoutMs,
+    transientErrors: faultState.transientErrors,
+    remainingTransientErrors: faultState.remainingTransientErrors,
     chaosErrorRate: faultState.chaosErrorRate,
     chaosTimeoutRate: faultState.chaosTimeoutRate,
     chaosSlowRate: faultState.chaosSlowRate,
     chaosSlowMs: faultState.chaosSlowMs,
+    processingDelayMs: faultState.processingDelayMs,
     requestCount,
     requestsByProfile: { ...requestsByProfile },
+    ...providerCapacity.snapshot(),
+    outage: { ...outageState },
   };
 }
 
-function startAdminServer(): Server {
+function startAdminServer(
+  scheduleOutage: (durationMs: number) => Promise<void>,
+): Server {
   const server = createServer(async (req, res) => {
     const method = req.method || "GET";
     const url = new URL(req.url || "/", `http://127.0.0.1:${ADMIN_PORT}`);
@@ -200,6 +299,9 @@ function startAdminServer(): Server {
       if (typeof body.timeoutMs === "number") {
         faultState.timeoutMs = Math.max(1, Math.trunc(body.timeoutMs));
       }
+      if (typeof body.transientErrors === "number") {
+        faultState.transientErrors = Math.max(1, Math.trunc(body.transientErrors));
+      }
       if (typeof body.chaosErrorRate === "number") {
         faultState.chaosErrorRate = Math.max(0, Math.min(1, body.chaosErrorRate));
       }
@@ -212,17 +314,40 @@ function startAdminServer(): Server {
       if (typeof body.chaosSlowMs === "number") {
         faultState.chaosSlowMs = Math.max(1, Math.trunc(body.chaosSlowMs));
       }
+      if (typeof body.processingDelayMs === "number") {
+        faultState.processingDelayMs = Math.max(0, Math.trunc(body.processingDelayMs));
+      }
+      if (typeof body.maxConcurrentCalls === "number") {
+        providerCapacity.setLimit(Math.max(0, Math.trunc(body.maxConcurrentCalls)));
+      }
       if (body.resetCounters === true) {
         requestCount = 0;
         for (const profile of VALID_FAULT_PROFILES) {
           requestsByProfile[profile as FaultProfile] = 0;
         }
+        providerCapacity.resetTelemetry();
+      }
+      if (requestedProfile === "transient_error") {
+        faultState.remainingTransientErrors = faultState.transientErrors;
+      }
+      if (typeof body.outageMs === "number") {
+        if (
+          !Number.isFinite(body.outageMs) ||
+          body.outageMs < 1 ||
+          body.outageMs > 300_000
+        ) {
+          sendJson(res, 400, {
+            error: "outageMs must be between 1 and 300000",
+          });
+          return;
+        }
+        await scheduleOutage(Math.trunc(body.outageMs));
       }
 
       sendJson(res, 200, snapshotFaultState());
     } catch (error) {
       sendJson(res, 400, {
-        error: "Invalid JSON body",
+        error: "Unable to apply fault profile",
         detail: error instanceof Error ? error.message : String(error),
       });
     }
@@ -243,7 +368,43 @@ async function main() {
     throw new Error("AIMock retention limits must be positive integers");
   }
   const mock = new LLMock({ port: PORT, host: HOST, journalMaxEntries, fixtureCountsMaxTestIds });
-  const adminServer = startAdminServer();
+  let inferenceRunning = false;
+  let outageTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const scheduleOutage = async (durationMs: number): Promise<void> => {
+    if (outageState.active) {
+      throw new Error("An inference outage is already active");
+    }
+    outageState.active = true;
+    outageState.count += 1;
+    outageState.until = Date.now() + durationMs;
+    outageState.recoveryError = null;
+    try {
+      outageTimer = await beginTimedOutage({
+        durationMs,
+        stop: async () => {
+          await mock.stop();
+          inferenceRunning = false;
+        },
+        start: async () => {
+          await mock.start();
+          inferenceRunning = true;
+          outageState.active = false;
+          outageState.until = null;
+        },
+        onRecoveryError: (error) => {
+          outageState.active = false;
+          outageState.until = null;
+          outageState.recoveryError =
+            error instanceof Error ? error.message : String(error);
+        },
+      });
+    } catch (error) {
+      outageState.active = false;
+      outageState.until = null;
+      throw error;
+    }
+  };
 
   // ==========================================================================
   // Document Extraction Handlers
@@ -457,6 +618,8 @@ async function main() {
   // ==========================================================================
 
   await mock.start();
+  inferenceRunning = true;
+  const adminServer = startAdminServer(scheduleOutage);
 
   console.log(`
 ╔══════════════════════════════════════════════════════════════════╗
@@ -486,14 +649,24 @@ async function main() {
   // Handle graceful shutdown
   process.on("SIGINT", async () => {
     console.log("\nShutting down mock server...");
+    if (outageTimer) {
+      clearTimeout(outageTimer);
+    }
     adminServer.close();
-    await mock.stop();
+    if (inferenceRunning) {
+      await mock.stop();
+    }
     process.exit(0);
   });
 
   process.on("SIGTERM", async () => {
+    if (outageTimer) {
+      clearTimeout(outageTimer);
+    }
     adminServer.close();
-    await mock.stop();
+    if (inferenceRunning) {
+      await mock.stop();
+    }
     process.exit(0);
   });
 }

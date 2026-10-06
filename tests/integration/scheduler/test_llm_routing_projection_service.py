@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from marie.engine.llm_queue.store import AdmissionConflict, StoreUnavailable
@@ -28,6 +29,8 @@ def _event(route_digest: str = 'd' * 64) -> dict:
             'endpoint_revision': 'r1',
             'estimator_version': 'page-count-v1',
             'routing_source': 'automatic',
+            'routing_actor': None,
+            'routing_reason': None,
         },
     }
 
@@ -74,10 +77,12 @@ async def test_projector_restart_replays_projection_and_acknowledges() -> None:
     repository = _Repository()
     repository.fail_first_ack = True
     store = _Store()
+    request_admission = AsyncMock(return_value=True)
     service = LlmRoutingProjectionService(
         repository=repository,
         store=store,
         logger=SimpleNamespace(warning=lambda *args: None),
+        admission_callback=request_admission,
     )
 
     first = await service.run_once()
@@ -88,6 +93,7 @@ async def test_projector_restart_replays_projection_and_acknowledges() -> None:
     assert second.existing == 1
     assert second.acknowledged == 1
     assert repository.pending == []
+    request_admission.assert_awaited_once_with('llm_routing_projection')
 
 
 @pytest.mark.asyncio
@@ -101,6 +107,7 @@ async def test_projection_conflict_stays_pending_with_bounded_category() -> None
         repository=repository,
         store=store,
         logger=SimpleNamespace(warning=lambda *args: None),
+        admission_callback=AsyncMock(return_value=True),
     )
 
     result = await service.run_once()
@@ -108,6 +115,30 @@ async def test_projection_conflict_stays_pending_with_bounded_category() -> None
     assert result.failed == 1
     assert result.acknowledged == 0
     assert repository.failures[0]['category'] == 'routing_binding_conflict'
+
+
+@pytest.mark.asyncio
+async def test_admission_wakeup_retries_after_projection_is_acknowledged() -> None:
+    repository = _Repository()
+    request_admission = AsyncMock(
+        side_effect=[RuntimeError('admission worker unavailable'), True]
+    )
+    service = LlmRoutingProjectionService(
+        repository=repository,
+        store=_Store(),
+        logger=SimpleNamespace(
+            warning=lambda *args: None,
+            exception=lambda *args: None,
+        ),
+        admission_callback=request_admission,
+    )
+
+    first = await service.run_once()
+    second = await service.run_once()
+
+    assert first.acknowledged == 1
+    assert second.attempted == 0
+    assert request_admission.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -122,6 +153,7 @@ async def test_store_unavailable_does_not_acknowledge() -> None:
         repository=repository,
         store=Store(),
         logger=SimpleNamespace(warning=lambda *args: None),
+        admission_callback=AsyncMock(return_value=True),
     )
 
     result = await service.run_once()

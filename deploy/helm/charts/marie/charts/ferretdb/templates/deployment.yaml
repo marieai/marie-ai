@@ -1,0 +1,74 @@
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ferretdb.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ferretdb.labels" . | nindent 4 }}
+spec:
+  replicas: {{ include "marie.infrastructureReplicas" (dict "root" . "replicas" .Values.replicas) }}
+  selector:
+    matchLabels:
+      {{- include "ferretdb.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ferretdb.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: ferretdb
+          image: {{ include "ferretdb.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POSTGRES_PASSWORD
+              {{- if .Values.postgresql.password }}
+              value: {{ .Values.postgresql.password | quote }}
+              {{- else }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  key: postgres-password
+              {{- end }}
+            # Kubernetes expands $(POSTGRES_PASSWORD); it must be URL-safe
+            - name: FERRETDB_POSTGRESQL_URL
+              value: "postgres://{{ .Values.postgresql.username }}:$(POSTGRES_PASSWORD)@{{ .Values.postgresql.host | default (printf "%s-postgresql" .Release.Name) }}:{{ .Values.postgresql.port }}/{{ .Values.postgresql.database }}?sslmode=disable"
+          ports:
+            - name: mongodb
+              containerPort: 27017
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: mongodb
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: mongodb
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

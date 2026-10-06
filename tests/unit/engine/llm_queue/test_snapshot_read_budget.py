@@ -67,9 +67,9 @@ class MetadataStore:
         self.record('processing', 'fabric')
         return []
 
-    def charge_totals(self, pool):
+    def route_totals(self, pool):
         self.record('charge', pool)
-        return {'charged': 0, 'refunded': 0}
+        return {'charged': 0, 'refunded': 0, 'accepted': 0, 'completed': 0}
 
     def endpoint_status(self, identity):
         self.record('endpoint', identity)
@@ -301,7 +301,7 @@ def test_health_reads_distinct_endpoints_once_and_uses_complete_shared_budget():
     )
     runtime = RequestDispatcher(
         store=store,
-        endpoints=[RegisteredEndpoint('endpoint', 'https://example.test')],
+        endpoints=[RegisteredEndpoint('endpoint', 'https://example.test:4010')],
         lanes=[DispatchLane('p1', 'endpoint'), DispatchLane('p2', 'endpoint')],
     )
     try:
@@ -313,6 +313,9 @@ def test_health_reads_distinct_endpoints_once_and_uses_complete_shared_budget():
         assert store.calls.count(('endpoint', 'endpoint')) == 1
         assert budget.units_left == 0
         assert health['endpoints']['endpoint']['circuit'] == 'closed'
+        assert health['endpoints']['endpoint']['port'] == 4010
+        assert all(lane['accepted'] == 0 for lane in health['lanes'])
+        assert all(lane['completed'] == 0 for lane in health['lanes'])
         assert health['lanes'][0]['waiting_reason'] is None
         with pytest.raises(registry.SnapshotUnavailable):
             runtime.health(

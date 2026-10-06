@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -171,6 +172,7 @@ async def test_gateway_llm_dispatch_runtime_is_noop_when_disabled():
 
     health = runtime.health()
     assert health["enabled"] is False
+    assert runtime.mode == "direct-batch"
     assert health["running"] is False
 
     await runtime.stop()
@@ -300,6 +302,71 @@ def test_llm_dispatch_runtime_event_uses_control_plane_event_shape():
     assert event.payload["pool_id"] == "default"
     assert event.payload["result"] == snapshot
     assert event.payload["metadata"]["llm_dispatch_runtime"].value == snapshot
+
+
+@pytest.mark.asyncio
+async def test_llm_dispatch_runtime_event_joins_database_drain_references(
+    monkeypatch,
+):
+    from marie.serve.runtimes.servers import marie_gateway as module
+
+    snapshot = {
+        'fabric_group_id': 'default',
+        'runtime_summary': {},
+        'live_requests': [],
+        'dispatchers': [],
+        'pools': [
+            {
+                'pool_id': 'document-small',
+                'drain_references': {
+                    'postgres': 2,
+                    'valkey': 1,
+                    'total': 3,
+                },
+            }
+        ],
+    }
+    reads = []
+
+    async def read_observation(**kwargs):
+        reads.append(kwargs)
+        return snapshot
+
+    published = []
+
+    async def notify(*args):
+        published.append(args)
+
+    monkeypatch.setattr(module, 'read_operator_runtime_snapshot', read_observation)
+    monkeypatch.setattr(module.Toast, 'notify', notify)
+    repository = object()
+    gateway = SimpleNamespace(
+        llm_dispatch_runtime=SimpleNamespace(
+            config=_queue_config(
+                fabric_group_id='default',
+                gateway_id='gateway-localhost',
+            ),
+            _scheduler_config_source=SimpleNamespace(repository=repository),
+        ),
+        _last_llm_dispatch_event_fingerprint=None,
+        _last_llm_dispatch_event_monotonic=0.0,
+    )
+
+    await MarieServerGateway._publish_llm_dispatch_runtime_event(gateway)
+
+    assert reads == [
+        {
+            'fabric_group_id': 'default',
+            'limit': 50,
+            'policy_repository': repository,
+        }
+    ]
+    assert len(published) == 1
+    assert published[0][1].payload['result']['pools'][0]['drain_references'] == {
+        'postgres': 2,
+        'valkey': 1,
+        'total': 3,
+    }
 
 
 def test_llm_dispatch_runtime_event_publish_policy_repeats_idle_snapshots():
@@ -450,6 +517,28 @@ def test_llm_queue_runtime_config_preserves_explicit_scheduler_postgres_config()
     assert repository_config is not None
     assert repository_config["hostname"] == "llm-postgres"
     assert repository_config["schema"] == "llm_scheduler"
+
+
+def test_registered_policy_selects_current_runtime_without_version_selector(
+    monkeypatch,
+):
+    from marie.serve.runtimes.gateway.marie import llm_dispatch_runtime as module
+
+    monkeypatch.setenv("LLM_QUEUE_CONTRACT_VERSION", "v2")
+    monkeypatch.setattr(
+        module,
+        "_build_scheduler_config_source",
+        lambda **_kwargs: object(),
+    )
+
+    runtime = GatewayLlmDispatchRuntime(
+        config={
+            "fabric_group_id": "default",
+            "llm_dispatch": {"policy_source": "database"},
+        }
+    )
+
+    assert runtime.config.queue_contract_version == "v3"
 
 
 def test_build_dispatcher_uses_drr_dispatcher_for_drr_policy():
@@ -652,6 +741,8 @@ async def test_gateway_background_runtime_start_calls_llm_dispatch_runtime():
     started = 0
 
     class _Runtime:
+        mode = "queued-dispatch"
+
         async def start(self):
             nonlocal started
             started += 1
@@ -663,6 +754,7 @@ async def test_gateway_background_runtime_start_calls_llm_dispatch_runtime():
     await gateway._start_gateway_background_runtimes()
 
     assert started == 1
+    assert "LLM execution mode: queued-dispatch" in gateway.logger.info_messages
 
 
 @pytest.mark.asyncio

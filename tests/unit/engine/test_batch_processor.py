@@ -3,7 +3,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from marie.engine.batch_processor import BatchProcessor, BatchResult
+from marie.engine.batch_processor import (
+    BatchProcessor,
+    BatchResult,
+    _create_retry_decorator,
+)
 from marie.engine.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -12,9 +16,14 @@ from marie.engine.circuit_breaker import (
 from marie.engine.completion_contract import (
     CompletionCallParams,
     RequestContext,
+    apply_repetition_recovery,
     build_completion_call,
+    has_terminal_repetition,
+    recover_complete_json,
 )
+from marie.engine.exceptions import MaxTokensExceededError, RepetitionError
 from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.producer import _batch_result
 
 from marie.excepts import BatchExecutionError, CircuitOpenError
 
@@ -282,6 +291,103 @@ def test_completion_call_context_is_not_provider_payload():
     assert "context" not in create_kwargs
 
 
+@pytest.mark.parametrize(
+    ("recovery", "unsupported"),
+    [
+        ({1: 0.7}, "1"),
+        ({1: 0.7, "unexpected": 0.8}, "1, unexpected"),
+        ({None: 0.7, 1: 0.8}, "1, None"),
+    ],
+)
+def test_repetition_recovery_rejects_non_string_keys(
+    recovery: dict[object, object], unsupported: str
+) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        _call("hello", repetition_recovery=recovery)
+
+    assert str(exc_info.value) == (
+        "Unsupported repetition recovery parameters: " + unsupported
+    )
+
+
+def test_repetition_recovery_round_trips_without_entering_provider_payload():
+    call = build_completion_call(
+        model="qwen",
+        messages=[{"role": "user", "content": "extract"}],
+        completion_params={
+            "temperature": 0.0,
+            "repetition_recovery": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "presence_penalty": 1.5,
+                "extra_body": {"top_k": 20},
+            },
+        },
+    )
+
+    restored = CompletionCallParams.from_dict(call.to_dict())
+    recovered = apply_repetition_recovery(restored)
+
+    assert "repetition_recovery" not in call.to_create_kwargs()
+    assert recovered is not None
+    assert recovered.temperature == 0.7
+    assert recovered.top_p == 0.8
+    assert recovered.presence_penalty == 1.5
+    assert recovered.extra_body == {"top_k": 20}
+    assert recovered.messages == call.messages
+    assert recovered.repetition_recovery is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "value value value value value value value value value value value value",
+        "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+        "abc def abc def abc def abc def abc def",
+    ],
+)
+def test_terminal_repetition_detects_runaway_suffixes(text: str):
+    assert has_terminal_repetition(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"values":[1,1,1,1]}',
+        "a short phrase a short phrase",
+        "ordinary model output",
+    ],
+)
+def test_terminal_repetition_ignores_short_valid_content(text: str):
+    assert has_terminal_repetition(text) is False
+
+
+def test_complete_json_is_recoverable_when_length_stops_before_eos():
+    text = '  {"document_type":"invoice","fields":[]}  '
+
+    assert recover_complete_json(text) == '{"document_type":"invoice","fields":[]}'
+
+
+def test_complete_json_prefix_is_recoverable_before_repetitive_tail():
+    text = '{"ok":true}\n' + "loop " * 20
+
+    assert recover_complete_json(text) == '{"ok":true}'
+
+
+def test_incomplete_json_is_not_recovered():
+    assert recover_complete_json('{"document_type":"invoice","fields":') is None
+
+
+def test_queued_repetition_result_preserves_terminal_error_type():
+    result = _batch_result(
+        "task-1",
+        "failed",
+        {"error": "repetition", "category": "repetition"},
+    )
+
+    assert isinstance(result.error, RepetitionError)
+
+
 def test_openai_engine_request_context_length_mismatch_warns_and_falls_back():
     class _RecordingLogger(_Logger):
         def __init__(self):
@@ -473,6 +579,204 @@ def test_completion_non_streaming_call_reraises_unexpected_exception():
                 )
 
     asyncio.run(run())
+
+
+def test_max_tokens_exceeded_is_not_retried() -> None:
+    attempts = 0
+
+    @_create_retry_decorator(3)
+    async def truncated_completion() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise MaxTokensExceededError()
+
+    with pytest.raises(MaxTokensExceededError):
+        asyncio.run(truncated_completion())
+
+    assert attempts == 1
+
+
+@pytest.mark.parametrize(
+    ("content", "complete"),
+    [
+        ('{"document_type":"invoice"}', True),
+        ('["invoice"]', True),
+        ('{"document_type":', False),
+        ('["invoice",', False),
+    ],
+)
+@pytest.mark.parametrize(
+    ("completion_params", "expect_recovery"),
+    [
+        ({}, False),
+        ({"response_format": {"type": "text"}}, False),
+        ({"extra_body": {"guided_json": None}}, False),
+        ({"extra_body": {"top_k": 20}}, False),
+        ({"response_format": {"type": "json_object"}}, True),
+        (
+            {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "test", "schema": {}},
+                }
+            },
+            True,
+        ),
+        ({"extra_body": {"guided_json": {}}}, True),
+    ],
+)
+def test_length_response_recovers_json_only_with_json_contract(
+    content: str, complete: bool, completion_params: dict, expect_recovery: bool
+) -> None:
+    import unittest.mock as mock
+
+    import marie.engine.batch_processor as batch_processor_module
+
+    processor = _build_processor(max_concurrency=1)
+    calls = []
+
+    async def complete_json(client, call):
+        calls.append(call)
+        return {
+            "choices": [
+                {
+                    "message": {"content": content},
+                    "finish_reason": "length",
+                }
+            ]
+        }
+
+    async def run():
+        with (
+            mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=complete_json,
+            ),
+            mock.patch.object(processor, "save_debug_msg", new=mock.AsyncMock()),
+        ):
+            return await processor.acompletion_call_with_retry(
+                max_retries=3,
+                call=_call("hello", **completion_params),
+                task_id="task-1",
+                request_id="request-1",
+            )
+
+    if expect_recovery and complete:
+        assert asyncio.run(run()) == ("task-1", content)
+    else:
+        with pytest.raises(MaxTokensExceededError):
+            asyncio.run(run())
+    assert len(calls) == 1
+
+
+def test_repetitive_length_response_retries_once_with_recovery_sampling() -> None:
+    import unittest.mock as mock
+
+    import marie.engine.batch_processor as batch_processor_module
+
+    processor = _build_processor(max_concurrency=1)
+    calls = []
+    responses = [
+        {
+            "choices": [
+                {
+                    "message": {"content": '{"value":"' + "loop " * 20},
+                    "finish_reason": "length",
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "message": {"content": '{"value":"recovered"}'},
+                    "finish_reason": "stop",
+                }
+            ]
+        },
+    ]
+
+    async def respond(client, call):
+        calls.append(call)
+        return responses.pop(0)
+
+    async def run():
+        with (
+            mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=respond,
+            ),
+            mock.patch.object(
+                batch_processor_module,
+                "wait_exponential",
+                return_value=lambda retry_state: 0,
+            ),
+        ):
+            return await processor.acompletion_call_with_retry(
+                max_retries=3,
+                call=_call(
+                    "hello",
+                    temperature=0.0,
+                    repetition_recovery={"temperature": 0.7, "top_p": 0.8},
+                ),
+                task_id="task-1",
+                request_id="request-1",
+            )
+
+    assert asyncio.run(run()) == ("task-1", '{"value":"recovered"}')
+    assert [call.temperature for call in calls] == [0.0, 0.7]
+    assert [call.top_p for call in calls] == [1.0, 0.8]
+
+
+def test_persistent_repetition_stops_after_one_recovery_call() -> None:
+    import unittest.mock as mock
+
+    import marie.engine.batch_processor as batch_processor_module
+
+    processor = _build_processor(max_concurrency=1)
+    calls = []
+
+    async def repeat(client, call):
+        calls.append(call)
+        return {
+            "choices": [
+                {
+                    "message": {"content": '{"value":"' + "loop " * 20},
+                    "finish_reason": "length",
+                }
+            ]
+        }
+
+    async def run():
+        with (
+            mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=repeat,
+            ),
+            mock.patch.object(
+                batch_processor_module,
+                "wait_exponential",
+                return_value=lambda retry_state: 0,
+            ),
+        ):
+            with pytest.raises(RepetitionError):
+                await processor.acompletion_call_with_retry(
+                    max_retries=3,
+                    call=_call(
+                        "hello",
+                        repetition_recovery={"temperature": 0.7, "top_p": 0.8},
+                    ),
+                    task_id="task-1",
+                    request_id="request-1",
+                )
+
+    asyncio.run(run())
+    assert len(calls) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -914,6 +1218,63 @@ def test_scan_stops_new_work_and_finishes_active_batches(tmp_path):
         assert second_finished.is_set()
         assert processed == ["00001.png", "00002.png"]
         eager_frame_loader.assert_not_called()
+
+    asyncio.run(run())
+
+
+def test_v3_scan_failure_cancels_active_batches(tmp_path):
+    import unittest.mock as mock
+    from types import SimpleNamespace
+
+    from PIL import Image
+
+    from marie.extract.annotators import util
+
+    for name in ("00001.png", "00002.png", "00003.png"):
+        with Image.new("RGB", (8, 8), "white") as image:
+            image.save(tmp_path / name)
+    second_started = asyncio.Event()
+    second_cancelled = asyncio.Event()
+    cancellations = []
+
+    async def fake_process_batch(batch, *args, cancellation=None, **kwargs):
+        cancellations.append(cancellation)
+        if batch[0][2].endswith("00001.png"):
+            await second_started.wait()
+            raise RuntimeError("first mini-batch failed")
+        if batch[0][2].endswith("00002.png"):
+            second_started.set()
+            while not cancellation.is_set():
+                await asyncio.sleep(0.001)
+            second_cancelled.set()
+            return
+        raise AssertionError("new work started after a batch failure")
+
+    async def run():
+        with mock.patch.object(
+            util,
+            "process_batch",
+            side_effect=fake_process_batch,
+        ):
+            with pytest.raises(RuntimeError, match="first mini-batch failed"):
+                await util.ascan_and_process_images(
+                    source_dir=str(tmp_path),
+                    output_dir=str(tmp_path),
+                    prompt=mock.MagicMock(),
+                    document=mock.MagicMock(),
+                    engine=SimpleNamespace(
+                        batch_processor=SimpleNamespace(
+                            max_concurrency=2,
+                            uses_v3_queue=True,
+                        )
+                    ),
+                    expect_output="json",
+                    mini_batch_size=1,
+                )
+
+        assert second_cancelled.is_set()
+        assert len(cancellations) == 2
+        assert cancellations[0] is cancellations[1]
 
     asyncio.run(run())
 

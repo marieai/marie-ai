@@ -13,6 +13,66 @@ from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
 )
 
 
+async def test_failure_report_requires_observer_scope_and_preserves_event_identity(
+    monkeypatch,
+):
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    APIKeyManager.add_key(
+        dict(
+            name='report-reader',
+            api_key='mas_' + 'r' * 54,
+            scopes=['runtime-observability'],
+            allowed_fabrics=['a'],
+        )
+    )
+    reads = []
+
+    async def report(job_id, history_id):
+        reads.append((job_id, history_id))
+        if history_id == 999:
+            raise LookupError('Event not found')
+        if history_id == 998:
+            raise RuntimeError('private database error')
+        return {'selected_event': {'history_id': history_id}, 'job': {'job_id': job_id}}
+
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a', failure_report_reader=report)
+    job_id = '06a68ba1-5890-7896-8000-30e4db21aeef'
+    route = f'/api/operations/jobs/{job_id}/failure-report'
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.get(
+            route, params={'fabric_group_id': 'a', 'history_id': 912}
+        )
+        assert response.status_code == 401 and reads == []
+        headers = {'Authorization': 'Bearer mas_' + 'r' * 54}
+        response = await client.get(
+            route, params={'fabric_group_id': 'b', 'history_id': 912}, headers=headers
+        )
+        assert response.status_code == 403 and reads == []
+        response = await client.get(
+            route, params={'fabric_group_id': 'a', 'history_id': 912}, headers=headers
+        )
+        assert response.status_code == 200
+        assert response.json()['result']['selected_event']['history_id'] == 912
+        assert reads == [(job_id, 912)]
+        response = await client.get(
+            route, params={'fabric_group_id': 'a', 'history_id': 999}, headers=headers
+        )
+        assert response.status_code == 404
+        response = await client.get(
+            route, params={'fabric_group_id': 'a', 'history_id': 998}, headers=headers
+        )
+        assert response.status_code == 503 and 'private' not in response.text
+        response = await client.get(
+            route, params={'fabric_group_id': 'a', 'history_id': -1}, headers=headers
+        )
+        assert response.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_operator_routes_authorize_before_any_snapshot_or_debug_read(monkeypatch):
     from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
@@ -39,7 +99,13 @@ async def test_operator_routes_authorize_before_any_snapshot_or_debug_read(monke
                 **policy,
             )
         )
-    add_runtime_routes(app, lambda: 'a')
+    add_runtime_routes(
+        app,
+        lambda: 'a',
+        gateway_debug=lambda: {
+            'llm_dispatch': {'enabled': True, 'mode': 'queued-dispatch'}
+        },
+    )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url='http://test'
     ) as client:
@@ -64,6 +130,13 @@ async def test_operator_routes_authorize_before_any_snapshot_or_debug_read(monke
             assert response.status_code == 403 and reads == []
             response = await client.get(route + '?fabric_group_id=a', headers=headers)
             assert response.status_code == 200
+            if route == '/api/debug':
+                assert response.json()['result']['gateway'] == {
+                    'llm_dispatch': {
+                        'enabled': True,
+                        'mode': 'queued-dispatch',
+                    }
+                }
             assert reads.pop()['fabric_group_id'] == 'a'
 
         async def failing(**kwargs):
@@ -76,6 +149,63 @@ async def test_operator_routes_authorize_before_any_snapshot_or_debug_read(monke
         assert response.status_code == 503
         assert 'secret' not in response.text
         assert response.json()['correlation_id']
+
+        response = await client.get('/api/debug?fabric_group_id=a', headers=headers)
+        assert response.status_code == 503
+        assert response.json()['gateway'] == {
+            'llm_dispatch': {
+                'enabled': True,
+                'mode': 'queued-dispatch',
+            }
+        }
+
+
+@pytest.mark.asyncio
+async def test_debug_keeps_gateway_mode_when_routing_diagnostics_are_unavailable(
+    monkeypatch,
+):
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    class Repository:
+        def load_routing_diagnostics(self, *_args):
+            raise RuntimeError('database unavailable')
+
+    async def snapshot(**_kwargs):
+        return {}
+
+    monkeypatch.setattr(registry, 'read_runtime_snapshot', snapshot)
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    token = 'mas_' + 'd' * 54
+    APIKeyManager.add_key(
+        {
+            'name': 'debug',
+            'api_key': token,
+            'scopes': ['runtime-observability'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    app = FastAPI()
+    add_runtime_routes(
+        app,
+        lambda: 'a',
+        lambda: Repository(),
+        gateway_debug=lambda: {
+            'llm_dispatch': {'enabled': False, 'mode': 'direct-batch'}
+        },
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.get(
+            '/api/debug?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {token}'},
+        )
+
+    assert response.status_code == 503
+    assert response.json()['gateway'] == {
+        'llm_dispatch': {'enabled': False, 'mode': 'direct-batch'}
+    }
 
 
 @pytest.mark.asyncio
@@ -114,6 +244,19 @@ async def test_routing_policy_routes_require_admin_scope(monkeypatch):
             return SimpleNamespace(
                 fabric_group_id=fabric_group_id,
                 generation=4,
+                policy_digest='d' * 64,
+                activated_by=actor_id,
+            )
+
+        def activate_policy_revision(
+            self, fabric_group_id, generation, actor_id, *, expected_generation
+        ):
+            calls.append(
+                ('revision', fabric_group_id, generation, actor_id, expected_generation)
+            )
+            return SimpleNamespace(
+                fabric_group_id=fabric_group_id,
+                generation=generation,
                 policy_digest='d' * 64,
                 activated_by=actor_id,
             )
@@ -174,7 +317,24 @@ async def test_routing_policy_routes_require_admin_scope(monkeypatch):
         )
         assert response.status_code == 200
         assert response.json()['result']['generation'] == 4
-    assert calls == [('preview', 'a'), ('activate', 'a', 'routing-admin')]
+        response = await client.post(
+            '/api/llm-dispatch/policy/activate?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {observer}'},
+            json={'generation': 3, 'expected_generation': 4},
+        )
+        assert response.status_code == 403
+        response = await client.post(
+            '/api/llm-dispatch/policy/activate?fabric_group_id=a',
+            headers={'Authorization': f'Bearer {admin}'},
+            json={'generation': 3, 'expected_generation': 4},
+        )
+        assert response.status_code == 200
+        assert response.json()['result']['generation'] == 3
+    assert calls == [
+        ('preview', 'a'),
+        ('activate', 'a', 'routing-admin'),
+        ('revision', 'a', 3, 'routing-admin', 4),
+    ]
 
 
 @pytest.mark.asyncio
@@ -322,14 +482,13 @@ async def test_runtime_joins_exact_fabric_database_diagnostics(monkeypatch):
         def load_routing_diagnostics(self, fabric_group_id, limit):
             assert (fabric_group_id, limit) == ('a', 25)
             return {
+                'scheduler_config': {'generation': 5, 'policy': 'drr', 'pools': []},
                 'policy': {
-                    'admission_mode': 'shadow',
                     'desired_generation': 5,
                     'desired_digest': 'b' * 64,
                 },
                 'routing': {
                     'projection_pending_count': 2,
-                    'shadow': {'match_count': 8, 'disagreement_count': 1},
                     'matched': {'automatic': 9},
                     'rejected': {'routing_facts_missing': 2},
                 },
@@ -411,8 +570,8 @@ async def test_runtime_joins_exact_fabric_database_diagnostics(monkeypatch):
     assert result['policy']['desired_generation'] == 5
     assert result['policy']['observed_generation'] == 4
     assert result['policy']['synchronized'] is False
+    assert result['scheduler_config'] == {'generation': 5, 'policy': 'drr', 'pools': []}
     assert result['routing']['projection_pending_count'] == 2
-    assert result['routing']['shadow']['disagreement_count'] == 1
     assert result['pools'][0]['accepted'] == 11
     assert result['pools'][0]['state_counts']['running'] == 1
     assert result['pools'][0]['drain_references'] == {

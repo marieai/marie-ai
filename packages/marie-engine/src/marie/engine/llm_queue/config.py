@@ -5,11 +5,15 @@ import socket
 import uuid
 import warnings
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import Optional
 from urllib.parse import urlsplit
 
 DEFAULT_MAX_INLINE_PAYLOAD_BYTES = 16 * 1024 * 1024
 INTERNAL_LEGACY_POOL_ID = "default"
+
+
+def llm_queue_enabled() -> bool:
+    return _to_bool(os.getenv("LLM_QUEUE_ENABLED"), False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,11 +41,7 @@ class LlmQueueProducerConfig:
     ) -> "LlmQueueProducerConfig":
         alive_ttl = int(os.getenv("LLM_QUEUE_PRODUCER_TTL_SECONDS", "30"))
         return cls(
-            enabled=(
-                _to_bool(os.getenv("LLM_QUEUE_ENABLED"), False)
-                if enabled is None
-                else enabled
-            ),
+            enabled=(llm_queue_enabled() if enabled is None else enabled),
             queue_url=_resolve_queue_url(
                 queue_url,
                 valkey_url,
@@ -72,19 +72,6 @@ class LlmQueueProducerConfig:
                 )
             ),
         )
-
-
-def route_behavior(
-    admission_mode: str,
-) -> Literal["legacy-read-only", "compare-without-binding", "manifest-required"]:
-    try:
-        return {
-            "off": "legacy-read-only",
-            "shadow": "compare-without-binding",
-            "enforce": "manifest-required",
-        }[admission_mode]
-    except KeyError:
-        raise ValueError("Invalid LLM admission mode") from None
 
 
 @dataclass(frozen=True, init=False)
@@ -206,11 +193,7 @@ class LlmQueueRuntimeConfig:
             queue_contract_version=resolve_queue_contract_version(
                 queue_contract_version, os.getenv("LLM_QUEUE_CONTRACT_VERSION")
             ),
-            enabled=(
-                _to_bool(os.getenv("LLM_QUEUE_ENABLED"), False)
-                if enabled is None
-                else enabled
-            ),
+            enabled=(llm_queue_enabled() if enabled is None else enabled),
             queue_url=_resolve_queue_url(
                 queue_url,
                 valkey_url,

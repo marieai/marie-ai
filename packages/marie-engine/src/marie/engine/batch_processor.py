@@ -15,9 +15,12 @@ from marie.engine.circuit_breaker import (
 from marie.engine.completion_contract import (
     CompletionCallParams,
     RequestContext,
+    apply_repetition_recovery,
     build_completion_call,
     completion_finish_reason,
     extract_completion_text,
+    has_terminal_repetition,
+    recover_complete_json,
 )
 from marie.engine.exceptions import (
     BatchExecutionError,
@@ -96,6 +99,8 @@ def _should_retry(exc: BaseException) -> bool:
         timeout_source = "connection pool" if _is_pool_timeout(exc) else "request"
         logger.warning("%s timeout detected; skipping retry", timeout_source)
         return False
+    if isinstance(exc, RepetitionError):
+        return exc.retryable
     return True
 
 
@@ -110,7 +115,6 @@ def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
         wait=wait_exponential(multiplier=1, min=min_seconds, max=max_seconds),
         retry=(
             retry_if_exception_type(RepetitionError)
-            | retry_if_exception_type(MaxTokensExceededError)
             | retry_if_exception_type(APIError)
             | retry_if_exception_type(APIConnectionError)
             | retry_if_exception_type(APITimeoutError)
@@ -377,20 +381,37 @@ class BatchProcessor:
                     raise AuthenticationError(MISSING_API_KEY_ERROR_MESSAGE)
                 completion = await execute_completion_call(self.client, call)
                 finish_reason = completion_finish_reason(completion)
+                recovered_text = None
                 if finish_reason == "length":
                     _, extracted_text = self.extract_text_from_response(completion)
-                    await self.save_debug_msg(
-                        extracted_text or "", task_id, "max_tokens"
+                    recovered_text = (
+                        recover_complete_json(extracted_text or "")
+                        if (call.response_format or {}).get("type")
+                        in ("json_object", "json_schema")
+                        or (call.extra_body or {}).get("guided_json") is not None
+                        else None
                     )
-                    raise MaxTokensExceededError()
+                    if recovered_text is None:
+                        if has_terminal_repetition(extracted_text or ""):
+                            await self.save_debug_msg(
+                                extracted_text or "", task_id, "repetition"
+                            )
+                            raise RepetitionError()
+                        await self.save_debug_msg(
+                            extracted_text or "", task_id, "max_tokens"
+                        )
+                        raise MaxTokensExceededError()
 
                 total_time = time.time() - start
                 self.logger.info(
                     f"Request {request_id} - Task {task_id} - Completed in {total_time:.2f}s"
                 )
-                reasoning_content, extracted_text = self.extract_text_from_response(
-                    completion
-                )
+                if recovered_text is None:
+                    reasoning_content, extracted_text = self.extract_text_from_response(
+                        completion
+                    )
+                else:
+                    reasoning_content, extracted_text = None, recovered_text
 
                 set_llm_io(span, output_messages=extracted_text)
                 span.set_attribute(MarieSpanAttributes.LATENCY_SECONDS, total_time)
@@ -462,8 +483,11 @@ class BatchProcessor:
     ):
         try:
             retry_decorator = _create_retry_decorator(max_retries=max_retries)
+            current_call = call
+            repetition_retry_used = False
 
             async def completion_attempt() -> Any:
+                nonlocal current_call, repetition_retry_used
                 reserved_half_open = False
                 async with self._get_gate_lock():
                     if not self._circuit_breaker.is_available(self.backend_address):
@@ -478,12 +502,21 @@ class BatchProcessor:
                         reserved_half_open = True
 
                 try:
-                    return await self.completion_non_streaming_call(
-                        call=call,
-                        task_id=task_id,
-                        request_id=request_id,
-                        metadata=metadata,
-                    )
+                    try:
+                        return await self.completion_non_streaming_call(
+                            call=current_call,
+                            task_id=task_id,
+                            request_id=request_id,
+                            metadata=metadata,
+                        )
+                    except RepetitionError as exc:
+                        recovered_call = apply_repetition_recovery(current_call)
+                        if repetition_retry_used or recovered_call is None:
+                            exc.retryable = False
+                        else:
+                            current_call = recovered_call
+                            repetition_retry_used = True
+                        raise
                 except (
                     APIError,
                     APIConnectionError,

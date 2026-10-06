@@ -114,6 +114,7 @@ class LLMAnnotator(DocumentAnnotator):
         self.expect_output = self.model_config.get("expect_output", None)
         self.temperature = self.model_config.get("temperature", 0.0)
         self.extra_body = self.model_config.get("extra_body", None)
+        self.repetition_recovery = self.model_config.get("repetition_recovery")
         self.min_pixels = self.model_config.get("min_pixels", 512 * 28 * 28)
         self.max_pixels = self.model_config.get("max_pixels", 2048 * 28 * 28)
         self.mini_batch_size = self.model_config.get("mini_batch_size", 16)
@@ -133,6 +134,10 @@ class LLMAnnotator(DocumentAnnotator):
             self.completion_params["max_tokens"] = self.max_tokens
         if self.extra_body is not None:
             self.completion_params["extra_body"] = self.extra_body
+        if self.repetition_recovery is not None:
+            self.completion_params["repetition_recovery"] = dict(
+                self.repetition_recovery
+            )
 
         self.mm_processor_kwargs = {
             "min_pixels": self.min_pixels,

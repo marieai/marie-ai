@@ -201,6 +201,7 @@ def _make_annotator(
     pass_models: Optional[List[str]] = None,
     refinement_validation: Optional[dict] = None,
     max_tokens: Optional[int] = None,
+    repetition_recovery: Optional[dict[str, Any]] = None,
     **annotator_kwargs: Any,
 ):
     """Create a minimal LLMAnnotator with mocked dependencies."""
@@ -230,6 +231,8 @@ def _make_annotator(
         model_config["refinement_validation"] = refinement_validation
     if max_tokens is not None:
         model_config["max_tokens"] = max_tokens
+    if repetition_recovery is not None:
+        model_config["repetition_recovery"] = repetition_recovery
 
     annotator_conf = {
         "name": "test-ann",
@@ -911,6 +914,17 @@ class TestCompletionParamsForPass:
         ann = _make_annotator(tmp_path, refine_passes=1, max_tokens=8192)
         assert ann._completion_params_for_pass(0)["max_tokens"] == 8192
         assert ann._completion_params_for_pass(1)["max_tokens"] == 8192
+
+    def test_repetition_recovery_is_forwarded_to_every_pass(self, tmp_path):
+        recovery = {"temperature": 0.7, "top_p": 0.8}
+        ann = _make_annotator(
+            tmp_path,
+            refine_passes=1,
+            repetition_recovery=recovery,
+        )
+
+        assert ann._completion_params_for_pass(0)["repetition_recovery"] == recovery
+        assert ann._completion_params_for_pass(1)["repetition_recovery"] == recovery
 
     def test_per_pass_temperature_override(self, tmp_path):
         ann = _make_annotator(tmp_path, refine_passes=1, pass_temperatures=[0.3])

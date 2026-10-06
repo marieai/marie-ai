@@ -81,6 +81,11 @@ try:
 except ImportError as exc:
     IMPORT_ERRORS["marie.utils.asset_util"] = exc
 
+try:
+    from marie.utils.docs import document_page_count_from_uri
+except ImportError as exc:
+    IMPORT_ERRORS["marie.utils.docs"] = exc
+
 if "StorageManager" not in globals():
 
     class StorageManager:  # type: ignore[no-redef]
@@ -113,6 +118,14 @@ if "s3_asset_path" not in globals():
         if include_filename:
             return f"{root}/{filename}"
         return root
+
+
+if "document_page_count_from_uri" not in globals():
+
+    def document_page_count_from_uri(
+        uri: str, max_bytes: int, timeout_seconds: float
+    ) -> int:
+        raise RuntimeError("Marie document dependencies are unavailable")
 
 
 logging.basicConfig(
@@ -170,6 +183,38 @@ def _parse_csv_values(raw: Optional[str]) -> List[str]:
         return []
     values = [item.strip() for item in raw.split(",")]
     return [item for item in values if item]
+
+
+def _parse_input_counts(raw: str) -> List[int]:
+    try:
+        counts = [int(value.strip()) for value in raw.split(",")]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "input counts must be comma-separated integers"
+        ) from exc
+    if not counts or any(count < 0 for count in counts):
+        raise argparse.ArgumentTypeError(
+            "input counts must be greater than or equal to zero"
+        )
+    if sum(counts) == 0:
+        raise argparse.ArgumentTypeError("input counts must include at least one job")
+    return counts
+
+
+def _build_input_schedule(counts: Sequence[int]) -> List[int]:
+    total = sum(counts)
+    remaining = list(counts)
+    credit = [0] * len(counts)
+    schedule: List[int] = []
+    for _ in range(total):
+        available = [index for index, count in enumerate(remaining) if count > 0]
+        for index in available:
+            credit[index] += counts[index]
+        selected = max(available, key=lambda index: (credit[index], -index))
+        credit[selected] -= total
+        remaining[selected] -= 1
+        schedule.append(selected)
+    return schedule
 
 
 class PreflightError(RuntimeError):
@@ -284,6 +329,7 @@ class InputAsset:
     source_path: str
     local_path: Optional[Path] = None
     existing_s3_uri: Optional[str] = None
+    page_count: Optional[int] = None
 
 
 def _render_template_value(value: Any, template_vars: Dict[str, str]) -> Any:
@@ -492,6 +538,7 @@ def _build_input_assets(
                 source_name=path.name,
                 source_path=str(path),
                 local_path=path,
+                page_count=document_page_count_from_uri(str(path), 512 * 1024**2, 10.0),
             )
         )
     for uri in remote_inputs:
@@ -617,6 +664,7 @@ class JobRun:
     planner: str
     job_name: str
     fault_profile: str
+    page_count: Optional[int] = None
     stress_run_id: Optional[str] = None
     required_executors: List[str] = field(default_factory=list)
     mock_process_time: Optional[float] = None
@@ -641,6 +689,7 @@ class JobRun:
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
     failed_at: Optional[float] = None
+    event_timeout_at: Optional[float] = None
     failure_reason: Optional[str] = None
     raw_events: List[str] = field(default_factory=list)
     event_order_errors: List[str] = field(default_factory=list)
@@ -857,6 +906,18 @@ def _build_debug_snapshot(
         queues = {}
     if not isinstance(llm_dispatch, dict):
         llm_dispatch = None
+    dispatch_summary = (
+        llm_dispatch.get("runtime_summary") if llm_dispatch is not None else None
+    )
+    if not isinstance(dispatch_summary, dict):
+        dispatch_summary = {}
+    registered_dispatchers = dispatch_summary.get("registered_dispatchers")
+    running_dispatchers = dispatch_summary.get("running_dispatchers")
+    if llm_dispatch is not None:
+        if registered_dispatchers is None:
+            registered_dispatchers = llm_dispatch.get("registered_dispatchers")
+        if running_dispatchers is None:
+            running_dispatchers = llm_dispatch.get("running_dispatchers")
 
     return DebugSnapshot(
         stage=stage,
@@ -893,15 +954,72 @@ def _build_debug_snapshot(
         ),
         llm_dispatch=llm_dispatch,
         llm_dispatch_registered_dispatchers=(
-            int(llm_dispatch.get("registered_dispatchers"))
-            if llm_dispatch and llm_dispatch.get("registered_dispatchers") is not None
-            else None
+            int(registered_dispatchers) if registered_dispatchers is not None else None
         ),
         llm_dispatch_running_dispatchers=(
-            int(llm_dispatch.get("running_dispatchers"))
-            if llm_dispatch and llm_dispatch.get("running_dispatchers") is not None
-            else None
+            int(running_dispatchers) if running_dispatchers is not None else None
         ),
+    )
+
+
+def _routing_counters_settled(
+    samples: Sequence[DebugSnapshot],
+    *,
+    expected_accepted: int,
+    expected_completed: int,
+) -> bool:
+    usable = [
+        sample
+        for sample in samples
+        if sample.ok and isinstance(sample.llm_dispatch, dict)
+    ]
+    start = next((sample for sample in usable if sample.stage == "start"), None)
+    if start is None or not usable:
+        return False
+
+    def totals(sample: DebugSnapshot) -> tuple[int, int] | None:
+        assert sample.llm_dispatch is not None
+        pools = sample.llm_dispatch.get("pools")
+        if not isinstance(pools, list):
+            return None
+        accepted = 0
+        completed = 0
+        for pool in pools:
+            if not isinstance(pool, dict):
+                return None
+            pool_accepted = pool.get("accepted")
+            pool_completed = pool.get("completed")
+            if type(pool_accepted) is not int or type(pool_completed) is not int:
+                return None
+            accepted += pool_accepted
+            completed += pool_completed
+        return accepted, completed
+
+    baseline = totals(start)
+    current = totals(usable[-1])
+    if baseline is None or current is None:
+        return False
+
+    latest = usable[-1].llm_dispatch
+    assert latest is not None
+    runtime = latest.get("runtime_summary")
+    routing = latest.get("routing")
+    if not isinstance(runtime, dict) or not isinstance(routing, dict):
+        return False
+    pending = runtime.get("pending_request_count")
+    inflight = runtime.get("inflight_request_count")
+    projection_pending = routing.get("projection_pending_count")
+    if type(pending) is not int or type(inflight) is not int:
+        return False
+    if type(projection_pending) is not int:
+        return False
+
+    return (
+        current[0] - baseline[0] >= expected_accepted
+        and current[1] - baseline[1] >= expected_completed
+        and pending == 0
+        and inflight == 0
+        and projection_pending == 0
     )
 
 
@@ -1001,8 +1119,23 @@ def _routing_qualification(
             }
         return result
 
+    def dispatcher_totals(snapshot: Dict[str, Any]) -> Dict[str, int]:
+        totals: Dict[str, int] = {}
+        for dispatcher in snapshot.get("dispatchers") or []:
+            if not isinstance(dispatcher, dict):
+                continue
+            counters = dispatcher.get("counters")
+            if not isinstance(counters, dict):
+                continue
+            for name, value in counters.items():
+                if isinstance(name, str) and type(value) is int:
+                    totals[name] = totals.get(name, 0) + value
+        return totals
+
     before = pool_totals(first)
     after = pool_totals(last)
+    dispatcher_before = dispatcher_totals(first)
+    dispatcher_after = dispatcher_totals(last)
     pool_ids = sorted(before.keys() | after.keys())
     policy = last.get("policy") if isinstance(last.get("policy"), dict) else {}
     routing = last.get("routing") if isinstance(last.get("routing"), dict) else {}
@@ -1014,7 +1147,6 @@ def _routing_qualification(
         "available": True,
         "source": requested_source,
         "policy": {
-            "admission_mode": policy.get("admission_mode"),
             "desired_generation": policy.get("desired_generation"),
             "desired_digest": policy.get("desired_digest"),
             "observed_generation": policy.get("observed_generation"),
@@ -1045,6 +1177,14 @@ def _routing_qualification(
             }
             for pool_id in pool_ids
         },
+        "dispatcher_counters": {
+            "before": dispatcher_before,
+            "after": dispatcher_after,
+            "delta": {
+                name: dispatcher_after.get(name, 0) - dispatcher_before.get(name, 0)
+                for name in dispatcher_before.keys() | dispatcher_after.keys()
+            },
+        },
         "charges": sorted(
             charges_by_attempt.values(), key=lambda charge: charge["attempt_id"]
         ),
@@ -1074,7 +1214,7 @@ class SchedulerEventConsumer:
         self.stop_event.clear()
         self._thread = threading.Thread(
             target=self._run,
-            name=f"gateway-e2e-events-{self.api_key[:8]}",
+            name="gateway-e2e-events",
             daemon=True,
         )
         self._thread.start()
@@ -1107,7 +1247,7 @@ class SchedulerEventConsumer:
                 parameters.socket_timeout = 15
                 parameters.blocked_connection_timeout = 300
                 parameters.client_properties = {
-                    "connection_name": f"{self.api_key}-gateway-e2e-stresser"
+                    "connection_name": "gateway-e2e-stresser"
                 }
 
                 connection = pika.BlockingConnection(parameters)
@@ -1124,7 +1264,7 @@ class SchedulerEventConsumer:
 
                 retry_count = 0
                 backoff = 1.0
-                self.logger.info("Connected to scheduler events exchange %s", exchange)
+                self.logger.info("Connected to scheduler events")
 
                 def on_message(ch, method_frame, _header_frame, body):
                     try:
@@ -1224,6 +1364,7 @@ class GatewayE2EStresser:
         upload_companion_meta: bool = True,
         batch_size: int = 1,
         debug_sample_interval: float = 0.0,
+        routing_settle_timeout: float = 0.0,
         dry_run_preview_count: int = 3,
         progress_interval: float = 5.0,
         live_report_path: Optional[str] = None,
@@ -1251,6 +1392,7 @@ class GatewayE2EStresser:
         correctness_report_path: Optional[str] = None,
         trace_mode: Optional[str] = None,
         query_budget_deltas: Optional[Dict[str, Any]] = None,
+        input_counts: Optional[List[int]] = None,
     ) -> None:
         self.gateway_host = gateway_host
         self.gateway_port = gateway_port
@@ -1266,6 +1408,7 @@ class GatewayE2EStresser:
         self.planner = planner
         self.input_assets = input_assets
         self.job_count = job_count if job_count and job_count > 0 else None
+        self.input_counts = list(input_counts) if input_counts is not None else None
         self.run_time_seconds = (
             float(run_time_seconds)
             if run_time_seconds is not None and run_time_seconds > 0
@@ -1315,6 +1458,7 @@ class GatewayE2EStresser:
         self.upload_companion_meta = upload_companion_meta
         self.batch_size = batch_size
         self.debug_sample_interval = max(0.0, debug_sample_interval)
+        self.routing_settle_timeout = max(0.0, routing_settle_timeout)
         self.dry_run_preview_count = max(1, dry_run_preview_count)
         self.progress_interval = progress_interval
         self.live_report_path = live_report_path
@@ -1369,6 +1513,19 @@ class GatewayE2EStresser:
             raise ValueError("Either job_count or run_time_seconds must be provided")
         if self.job_count is not None and self.run_time_seconds is not None:
             raise ValueError("job_count and run_time_seconds are mutually exclusive")
+        if self.input_counts is not None:
+            if self.run_time_seconds is not None:
+                raise ValueError("--input-counts requires --job-count")
+            if any(type(count) is not int or count < 0 for count in self.input_counts):
+                raise ValueError(
+                    "--input-counts values must be greater than or equal to zero"
+                )
+            if len(self.input_counts) != len(self.input_assets):
+                raise ValueError(
+                    "--input-counts must contain one count per resolved input"
+                )
+            if sum(self.input_counts) != self.job_count:
+                raise ValueError("--input-counts must sum to --job-count")
         if self.submit_rate <= 0:
             raise ValueError("--submit-rate must be greater than zero")
         if (
@@ -1465,6 +1622,16 @@ class GatewayE2EStresser:
         self._state_lock = threading.Lock()
         self._http_session: Optional[aiohttp.ClientSession] = None
         self._event_consumer: Optional[SchedulerEventConsumer] = None
+        self._input_schedule = (
+            _build_input_schedule(self.input_counts)
+            if self.input_counts is not None
+            else None
+        )
+
+    def _input_asset_for_job(self, job_index: int) -> InputAsset:
+        if self._input_schedule is None:
+            return self.input_assets[job_index % len(self.input_assets)]
+        return self.input_assets[self._input_schedule[job_index]]
 
     @property
     def verification_errors(self) -> List[str]:
@@ -1616,17 +1783,16 @@ class GatewayE2EStresser:
             if run.terminal_status == "completed":
                 completed += 1
             elif run.terminal_status == "failed":
-                if run.failure_reason == "terminal event timeout":
-                    event_timeout += 1
-                else:
-                    failed += 1
+                failed += 1
             elif run.terminal_status == "submit_failed":
                 submit_failed += 1
             elif run.job_id is None and run.submit_error_type is None:
                 pending_submit += 1
+            if run.event_timeout_at is not None:
+                event_timeout += 1
 
-        inflight_jobs = max(submitted - completed - failed - event_timeout, 0)
-        terminal_jobs = completed + failed + submit_failed + event_timeout
+        inflight_jobs = max(submitted - completed - failed, 0)
+        terminal_jobs = completed + failed + submit_failed
         open_jobs = max(created - terminal_jobs, 0)
         submit_acceptance_pct = (submitted / created) * 100.0 if created > 0 else None
         terminal_success_pct = (
@@ -1875,7 +2041,7 @@ class GatewayE2EStresser:
         submissions: List[Dict[str, Any]] = []
         preview_job_count = self._dry_run_submission_count()
         for job_index in range(preview_job_count):
-            asset = self.input_assets[job_index % len(self.input_assets)]
+            asset = self._input_asset_for_job(job_index)
             run = self._build_run(asset, job_index)
             run.upload_started_at = generated_at
             run.upload_finished_at = generated_at
@@ -1967,6 +2133,7 @@ class GatewayE2EStresser:
             "estimated_job_count": self.estimated_job_count,
             "preview_job_count": preview_job_count,
             "input_assets_resolved": len(self.input_assets),
+            "input_counts": self.input_counts,
             "protocol": self.protocol,
             "endpoint": self.endpoint,
             "planner": self.planner,
@@ -2013,6 +2180,18 @@ class GatewayE2EStresser:
     def _append_debug_snapshot(self, snapshot: DebugSnapshot) -> None:
         with self._state_lock:
             self._debug_samples.append(snapshot)
+
+    def _routing_counter_expectations(self) -> tuple[int, int]:
+        with self._state_lock:
+            runs = list(self._runs_by_request_id.values())
+            archived = self._archived_metrics
+            submitted = archived.submitted_jobs + sum(
+                run.job_id is not None for run in runs
+            )
+            completed = archived.completed_jobs + sum(
+                run.terminal_status == "completed" for run in runs
+            )
+        return submitted, completed
 
     def _debug_path(self) -> str:
         return f"/api/debug?{urlencode({'fabric_group_id': self.fabric_group_id})}"
@@ -2083,6 +2262,31 @@ class GatewayE2EStresser:
         finally:
             if owns_session:
                 await session.close()
+
+    async def _wait_for_routing_counters(self) -> None:
+        if self.routing_settle_timeout <= 0 or self.debug_sample_interval <= 0:
+            return
+
+        expected_accepted, expected_completed = self._routing_counter_expectations()
+        deadline = time.monotonic() + self.routing_settle_timeout
+        while True:
+            await self._capture_debug_snapshot("routing_settle")
+            with self._state_lock:
+                samples = list(self._debug_samples)
+            if _routing_counters_settled(
+                samples,
+                expected_accepted=expected_accepted,
+                expected_completed=expected_completed,
+            ):
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._logger.warning(
+                    "LLM routing counters did not settle within %.1fs",
+                    self.routing_settle_timeout,
+                )
+                return
+            await asyncio.sleep(min(0.5, remaining))
 
     async def _fetch_gateway_json(self, path: str) -> Tuple[int, Dict[str, Any]]:
         if self.http_port is None:
@@ -2494,6 +2698,8 @@ class GatewayE2EStresser:
             "started_at": run.started_at,
             "completed_at": run.completed_at,
             "failed_at": run.failed_at,
+            "event_timeout_at": run.event_timeout_at,
+            "event_timeout": run.event_timeout_at is not None,
             "submit_latency_ms": run.submit_latency_ms,
             "scheduling_ms": run.scheduling_ms,
             "queue_wait_ms": run.queue_wait_ms,
@@ -2578,6 +2784,7 @@ class GatewayE2EStresser:
             planner=self.planner,
             job_name=self.queue_name,
             fault_profile=self.fault_profile,
+            page_count=asset.page_count,
             stress_run_id=self.run_id,
             required_executors=list(self.required_executors),
             mock_process_time=self.mock_process_time,
@@ -2679,6 +2886,8 @@ class GatewayE2EStresser:
             metadata["stress_queue"] = self.queue_name
             metadata["stress_required_executors"] = list(self.required_executors)
         metadata["uri"] = run.s3_uri
+        if run.page_count is not None:
+            metadata["page_count"] = run.page_count
         if run.mock_process_time is not None:
             metadata["process_time"] = run.mock_process_time
         metadata.update(self._build_failure_metadata(run))
@@ -2994,9 +3203,7 @@ class GatewayE2EStresser:
         with self._state_lock:
             for run in list(self._runs_by_request_id.values()):
                 if run.terminal_status is None:
-                    run.failed_at = run.failed_at or _now()
-                    if run.failure_reason is None:
-                        run.failure_reason = "terminal event timeout"
+                    run.event_timeout_at = run.event_timeout_at or _now()
                     self._stream_job_record_locked(run)
             self._enforce_retention_locked()
 
@@ -3022,13 +3229,12 @@ class GatewayE2EStresser:
                 self._append_metric_sample(values, value)
 
         status = run.terminal_status
+        if run.event_timeout_at is not None:
+            metrics.event_timeout_jobs += 1
         if status == "completed":
             metrics.completed_jobs += 1
         elif status == "failed":
-            if run.failure_reason == "terminal event timeout":
-                metrics.event_timeout_jobs += 1
-            else:
-                metrics.failed_jobs += 1
+            metrics.failed_jobs += 1
             reason = run.failure_reason or "unknown failure"
             metrics.failure_reasons[reason] = metrics.failure_reasons.get(reason, 0) + 1
         elif status == "submit_failed":
@@ -3395,7 +3601,7 @@ class GatewayE2EStresser:
                 now_monotonic = time.monotonic()
                 if deadline is not None and now_monotonic >= deadline:
                     break
-                asset = self.input_assets[job_index % len(self.input_assets)]
+                asset = self._input_asset_for_job(job_index)
                 run = self._build_run(asset, job_index)
                 self._register_run(run)
                 tasks.append(asyncio.create_task(self._submit_run(run, semaphore)))
@@ -3407,6 +3613,7 @@ class GatewayE2EStresser:
 
             await asyncio.gather(*tasks)
             await self._wait_for_terminal_states()
+            await self._wait_for_routing_counters()
         finally:
             self.metrics.end_time = _now()
             reporter.cancel()
@@ -3426,9 +3633,10 @@ class GatewayE2EStresser:
         self._finalize_metrics()
         await self._run_correctness_verifier()
         if self.live_report_path:
+            final_status = "failed" if self._verification_errors else "completed"
             await asyncio.to_thread(
                 self._write_live_report_payload,
-                self._build_live_status_payload("completed"),
+                self._build_live_status_payload(final_status),
             )
         return self.metrics
 
@@ -3619,6 +3827,22 @@ class GatewayE2EStresser:
                 "operator-override" if self.routing_override_pool_id else "automatic"
             ),
         )
+        routing_qualification["counters_settled"] = _routing_counters_settled(
+            debug_samples,
+            expected_accepted=self.metrics.submitted_jobs,
+            expected_completed=self.metrics.completed_jobs,
+        )
+        latest_debug_sample = debug_samples[-1] if debug_samples else None
+        routing_qualification["latest_observation"] = (
+            {
+                "stage": latest_debug_sample.stage,
+                "captured_at": latest_debug_sample.captured_at,
+                "ok": latest_debug_sample.ok,
+                "error": latest_debug_sample.error,
+            }
+            if latest_debug_sample is not None
+            else None
+        )
 
         return {
             "run_identity": {
@@ -3628,6 +3852,7 @@ class GatewayE2EStresser:
                 "planner": self.planner,
                 "queue": self.queue_name,
                 "required_executors": list(self.required_executors),
+                "input_counts": self.input_counts,
             },
             "summary": {
                 "report_generated_at": _format_epoch_seconds(_now()),
@@ -3802,6 +4027,8 @@ class GatewayE2EStresser:
                     "mock_failure_mode": run.mock_failure_mode,
                     "force_fail": run.force_fail,
                     "terminal_status": run.terminal_status,
+                    "event_timeout_at": run.event_timeout_at,
+                    "event_timeout": run.event_timeout_at is not None,
                     "sla_bucket_index": run.sla_bucket_index,
                     "soft_sla_offset_seconds": run.soft_sla_offset_seconds,
                     "hard_sla_offset_seconds": run.hard_sla_offset_seconds,
@@ -4010,6 +4237,11 @@ Examples:
         help="Run duration for rate-controlled submission, for example 30s, 2m, or 1h",
     )
     parser.add_argument(
+        "--input-counts",
+        type=_parse_input_counts,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--job-name",
         type=str,
         required=False,
@@ -4021,7 +4253,17 @@ Examples:
     )
     parser.add_argument(
         "--fault-profile",
-        choices=["normal", "timeout", "error", "chaos"],
+        choices=[
+            "normal",
+            "timeout",
+            "error",
+            "transient_error",
+            "terminal_error",
+            "max_tokens",
+            "repetition",
+            "persistent_repetition",
+            "chaos",
+        ],
         default="normal",
         help="Logical fault profile label for this run; combine with AIMock config/admin control when using mock backends",
     )
@@ -4336,6 +4578,12 @@ Examples:
         type=float,
         default=0.0,
         help="Optional /api/debug sampling interval in seconds (0 disables sampling)",
+    )
+    parser.add_argument(
+        "--routing-settle-timeout",
+        type=float,
+        default=0.0,
+        help="Wait for durable LLM routing counters after terminal job events",
     )
     parser.add_argument(
         "--request-template",
@@ -4719,6 +4967,7 @@ async def main() -> None:
         live_report_path=args.live_report,
         live_report_format=args.live_report_format,
         debug_sample_interval=args.debug_sample_interval,
+        routing_settle_timeout=args.routing_settle_timeout,
         dry_run_preview_count=args.dry_run_preview_count,
         run_id=run_id,
         seed=args.seed,
@@ -4743,6 +4992,7 @@ async def main() -> None:
         correctness_report_path=args.correctness_report,
         trace_mode=args.trace_mode,
         query_budget_deltas=query_budget_deltas,
+        input_counts=args.input_counts,
     )
 
     if args.dry_run:

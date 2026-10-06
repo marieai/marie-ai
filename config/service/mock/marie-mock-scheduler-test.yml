@@ -163,6 +163,11 @@ with:
   metrics_exporter_port: 4317
   event_tracking: True
 
+  llm_queue:
+    fabric_group_id: default
+    llm_dispatch:
+      policy_source: database
+
   expose_endpoints:
     /document/process:
       methods: ["POST"]
@@ -237,9 +242,6 @@ executors:
       OPENAI_API_BASE: ${{ ENV.OPENAI_API_BASE }}
       LLM_QUEUE_ENABLED: ${{ ENV.LLM_QUEUE_ENABLED }}
       LLM_QUEUE_URL: ${{ ENV.LLM_QUEUE_URL }}
-      LLM_QUEUE_CONTRACT_VERSION: ${{ ENV.LLM_QUEUE_CONTRACT_VERSION }}
-      LLM_QUEUE_VALKEY_URL: ${{ ENV.LLM_QUEUE_VALKEY_URL }}
-      LLM_QUEUE_POOL_ID: document-small
 
   - name: plugin_daemon_executor          # MUST equal the scheme: plugin_daemon_executor://
     uses:
@@ -447,6 +449,8 @@ auth:
       api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
       enabled : True
       roles : [admin, user]
+      scopes : [runtime-observability, runtime-routing-admin]
+      allowed_fabrics : [default]
 
     - name : service-B
       api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ

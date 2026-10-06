@@ -68,6 +68,7 @@ _FIELDS = frozenset(
     """contract_version fabric_group_id pool_id request_id attempt_id
 endpoint_id config_revision dispatcher_id gateway_id model lifecycle_stage state_source
 submitted_at admitted_at_ms oldest_pending_admitted_at_ms popped_at expires_at_ms payload_bytes cost execution_seq next_eligible
+state_updated_at queue_wait_age_seconds inflight_age_seconds
 running draining role owner_generation enabled scheduler_policy quantum deficit inflight
 min_concurrent max_concurrent max_burst_per_visit request_queue_depth oldest_pending_at
 head_cost_units processed_batches processed_items last_processed_at last_batch_size
@@ -77,25 +78,26 @@ total_concurrent_dispatch sampling_available metadata_unavailable
 reserved_items reserved_bytes failures circuit next_probe probe_successes category open_until probe claim_id execution_limit
 execution_bytes protected_slots borrowed_slots config_generation waiting_reason last_error last_error_at_ms request_queue_depth_error transport_failures
 observed_at_ms policy_generation policy_digest endpoint_group_id revision replica_id group_id selected_replica_id
-charged_cost refunded_cost committed_charge drain_references oldest_pending_age_seconds gate processing_truncated""".split()
-    + """ charge_sequence refund_state endpoint_count endpoint_group_count details_truncated""".split()
+charged_cost refunded_cost committed_charge accepted completed drain_references oldest_pending_age_seconds gate processing_truncated""".split()
+    + """ charge_sequence refund_state endpoint_count endpoint_group_count details_truncated port""".split()
 )
 _ERRORS = frozenset(
     """connect_refused connect_timeout timeout outcome_unknown
 store_unavailable invalid_response response_too_large endpoint_policy request_rejected
-rate_limited authentication call_timeout connect_error invalid_request protocol_error provider_rejected read_error read_timeout route_or_model transport_unknown write_error write_timeout connect_unknown pool_pressure provider_unavailable v3_start_failed owner_lost cancelled expired queue_unavailable dispatch_error owner_uncertain start_unconfirmed policy_refresh_unavailable binding_conflict binding_migration_required""".split()
+rate_limited authentication call_timeout connect_error invalid_request protocol_error provider_rejected read_error read_timeout route_or_model transport_unknown write_error write_timeout connect_unknown pool_pressure provider_unavailable provider_5xx replica_unavailable unsupported_streaming v3_start_failed owner_lost cancelled expired queue_unavailable dispatch_error owner_uncertain start_unconfirmed policy_refresh_unavailable binding_conflict binding_migration_required""".split()
 )
 
 _NUMBER_FIELDS = frozenset(
     """submitted_at admitted_at_ms oldest_pending_admitted_at_ms popped_at
+state_updated_at queue_wait_age_seconds inflight_age_seconds
 expires_at_ms payload_bytes cost execution_seq next_eligible owner_generation quantum deficit inflight
 min_concurrent max_concurrent max_burst_per_visit request_queue_depth oldest_pending_at head_cost_units
 processed_batches processed_items last_processed_at last_batch_size execution_failures transport_failures
 malformed_requests_dropped offline_producer_requests_dropped offline_producer_replies_dropped
 inflight_request_count pool_count total_concurrent_dispatch metadata_unavailable reserved_items
 reserved_bytes protected_slots borrowed_slots config_generation failures next_probe probe_successes open_until execution_limit execution_bytes last_error_at_ms""".split()
-    + """ observed_at_ms policy_generation charged_cost refunded_cost committed_charge charge_sequence drain_references oldest_pending_age_seconds""".split()
-    + """ endpoint_count endpoint_group_count""".split()
+    + """ observed_at_ms policy_generation charged_cost refunded_cost committed_charge accepted completed charge_sequence drain_references oldest_pending_age_seconds""".split()
+    + """ endpoint_count endpoint_group_count port""".split()
 )
 
 _STATE_NAMES = frozenset({"ready", "claimed", "executing", "outcome_unknown"})

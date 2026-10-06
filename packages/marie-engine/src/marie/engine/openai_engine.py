@@ -32,44 +32,6 @@ https://platform.openai.com/account/api-keys
 INVALID_API_KEY_ERROR_MESSAGE = """Invalid LLM API key."""
 
 
-# TODO: FIX DEFAULT_SYSTEM_PROMPT messages
-
-
-def _check_repetition(
-    text: str, min_repeats: int = 3, min_ngram_size: int = 1, max_ngram_size: int = 20
-) -> bool:
-    """
-    Return True if any n-gram of size between min_ngram_size and max_ngram_size
-    repeats at least min_repeats times consecutively at the very end of text.
-    """
-    tokens = text.split()
-    L = len(tokens)
-    # the largest n we could possibly repeat min_repeats times
-    possible_max_n = L // min_repeats
-    # clamp our n-gram window
-    start_n = max(1, min_ngram_size)
-    end_n = min(max_ngram_size, possible_max_n)
-
-    if start_n > end_n:
-        return False
-
-    for n in range(start_n, end_n + 1):
-        tail = tokens[-n:]
-        repeats = 1
-        # look back to see if the same tail appears min_repeats times
-        for k in range(2, min_repeats + 1):
-            start = -k * n
-            end = -(k - 1) * n
-            if tokens[start:end] == tail:
-                repeats += 1
-            else:
-                break
-        if repeats >= min_repeats:
-            return True
-
-    return False
-
-
 class OpenAIEngine(EngineLM):
     """
     OpenAIEngine is a wrapper around the OpenAI API.

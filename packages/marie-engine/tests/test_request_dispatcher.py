@@ -212,7 +212,16 @@ async def http_endpoint():
                     await releases[body['model']].wait()
                 response = json.dumps(
                     {
-                        'choices': [{'message': {'content': body['model']}}],
+                        'choices': [
+                            {
+                                'message': {'content': body['model']},
+                                'finish_reason': (
+                                    'length'
+                                    if body['model'] == 'max-tokens'
+                                    else 'stop'
+                                ),
+                            }
+                        ],
                         'usage': {'total_tokens': 1},
                     }
                 ).encode()
@@ -338,6 +347,69 @@ def dispatcher_for(store, url, *, retry_429=False, **kwargs):
     )
 
 
+async def test_completed_request_wakes_dispatcher_before_poll_timeout(store):
+    from marie.engine.llm_queue.endpoint import (
+        ExecutionOutcome,
+        RegisteredEndpoint,
+    )
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    first_release = asyncio.Event()
+    second_started = asyncio.Event()
+    starts = []
+
+    class Client:
+        def __init__(self, endpoint):
+            pass
+
+        async def execute(self, call, **kwargs):
+            starts.append(time.monotonic())
+            if len(starts) == 1:
+                await first_release.wait()
+            else:
+                second_started.set()
+            return ExecutionOutcome(
+                response={'choices': []},
+                remote_settled=True,
+                availability_success=True,
+            )
+
+        async def close(self):
+            pass
+
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[
+            RegisteredEndpoint(
+                'endpoint',
+                'https://example.com/v1',
+                execution_limit=1,
+            )
+        ],
+        lanes=[DispatchLane('pool', 'endpoint', execution_limit=1)],
+        client_factory=Client,
+        poll_seconds=1.0,
+        total_concurrent_dispatch=1,
+    )
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        admit_request(store)
+        admit_request(store)
+        await eventually(lambda: len(starts) == 1, seconds=2)
+
+        completed_at = time.monotonic()
+        first_release.set()
+        await asyncio.wait_for(second_started.wait(), timeout=0.5)
+
+        assert starts[1] - completed_at < 0.5
+    finally:
+        await runtime.stop()
+
+
 async def test_prewrite_failure_moves_to_second_replica_without_rerouting(store):
     from marie.engine.llm_queue.endpoint import (
         ExecutionOutcome,
@@ -417,7 +489,7 @@ async def test_prewrite_failure_moves_to_second_replica_without_rerouting(store)
         await runtime.stop()
 
 
-async def test_uncertain_send_never_moves_to_second_replica(store):
+async def test_uncertain_send_fails_without_moving_to_second_replica(store):
     from marie.engine.llm_queue.endpoint import (
         ExecutionOutcome,
         RegisteredEndpointGroup,
@@ -472,14 +544,240 @@ async def test_uncertain_send_never_moves_to_second_replica(store):
     try:
         await eventually(lambda: store.resolve_route('pool'))
         req = admit_request(store, endpoint_id='document-llm')
-        await eventually(
-            lambda: store.metadata(req.attempt_id).state == 'outcome_unknown'
-        )
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'failed')
 
         assert calls == ['replica-a']
-        assert store.endpoint_status('replica-a')['reserved_items'] == '1'
+        assert store.endpoint_status('replica-a')['reserved_items'] == '0'
         assert int(store.endpoint_status('replica-b')['reserved_items'] or 0) == 0
+        assert store.usage()['reserved_items'] == 0
+        assert store.read_result(req.producer_id, req.attempt_id) == {
+            'error': 'remote_outcome_unknown',
+            'category': 'read_timeout',
+        }
         assert store.charge_totals('pool') == {'charged': 1, 'refunded': 0}
+    finally:
+        await runtime.stop()
+
+
+async def test_repetitive_length_response_retries_once_on_same_replica(store):
+    from marie.engine.completion_contract import CompletionCallParams
+    from marie.engine.llm_queue.endpoint import ExecutionOutcome, RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    calls = []
+
+    class Client:
+        def __init__(self, endpoint):
+            self.replica_id = endpoint.endpoint_id
+
+        async def execute(self, call, **kwargs):
+            calls.append(call)
+            if len(calls) == 1:
+                return ExecutionOutcome(
+                    response={
+                        'choices': [
+                            {
+                                'message': {'content': '{"value":"' + 'loop ' * 20},
+                                'finish_reason': 'length',
+                            }
+                        ]
+                    },
+                    remote_settled=True,
+                    availability_success=True,
+                )
+            return ExecutionOutcome(
+                response={
+                    'choices': [
+                        {
+                            'message': {'content': '{"value":"recovered"}'},
+                            'finish_reason': 'stop',
+                        }
+                    ]
+                },
+                remote_settled=True,
+                availability_success=True,
+            )
+
+        async def close(self):
+            pass
+
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[
+            RegisteredEndpoint('endpoint', 'https://example.com/v1', execution_limit=1)
+        ],
+        lanes=[DispatchLane('pool', 'endpoint')],
+        client_factory=Client,
+        poll_seconds=0.01,
+    )
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        req = admit_request(
+            store,
+            call=CompletionCallParams(
+                model='qwen',
+                messages=[{'role': 'user', 'content': 'extract'}],
+                temperature=0.0,
+                top_p=1.0,
+                repetition_recovery={'temperature': 0.7, 'top_p': 0.8},
+            ),
+        )
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'succeeded')
+
+        assert [call.temperature for call in calls] == [0.0, 0.7]
+        assert [call.top_p for call in calls] == [1.0, 0.8]
+        result = store.read_result(req.producer_id, req.attempt_id)
+        assert result['choices'][0]['message']['content'] == '{"value":"recovered"}'
+        counters = runtime.health()['counters']
+        assert counters['provider_starts'] == 2
+        assert counters['repetition_retries'] == 1
+        assert counters.get('retries', 0) == 0
+        assert store.endpoint_status('endpoint')['circuit'] == 'closed'
+    finally:
+        await runtime.stop()
+
+
+async def test_length_response_recovers_complete_json_without_second_call(store):
+    from marie.engine.completion_contract import CompletionCallParams
+    from marie.engine.llm_queue.endpoint import ExecutionOutcome, RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    calls = []
+
+    class Client:
+        def __init__(self, endpoint):
+            pass
+
+        async def execute(self, call, **kwargs):
+            calls.append(call)
+            return ExecutionOutcome(
+                response={
+                    'choices': [
+                        {
+                            'message': {'content': '{"document_type":"invoice"}'},
+                            'finish_reason': 'length',
+                        }
+                    ]
+                },
+                remote_settled=True,
+                availability_success=True,
+            )
+
+        async def close(self):
+            pass
+
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[RegisteredEndpoint('endpoint', 'https://example.com/v1')],
+        lanes=[DispatchLane('pool', 'endpoint')],
+        client_factory=Client,
+        poll_seconds=0.01,
+    )
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        req = admit_request(
+            store,
+            call=CompletionCallParams(model='qwen', messages=[]),
+        )
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'succeeded')
+
+        result = store.read_result(req.producer_id, req.attempt_id)
+        assert len(calls) == 1
+        assert result['choices'][0]['finish_reason'] == 'stop'
+        assert result['marie_recovery'] == {
+            'method': 'complete_json',
+            'reason': 'missing_eos',
+        }
+        assert runtime.health()['counters']['missing_eos_recovered'] == 1
+    finally:
+        await runtime.stop()
+
+
+async def test_persistent_repetition_fails_without_circuit_or_durable_retry(
+    store, monkeypatch
+):
+    from marie.engine.completion_contract import CompletionCallParams
+    from marie.engine.llm_queue.endpoint import ExecutionOutcome, RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    calls = []
+    history = []
+    monkeypatch.setattr(
+        'marie.engine.llm_queue.request_dispatcher._emit_execution_history',
+        lambda attributes, outcome, *_args: history.append(
+            (
+                attributes['marie.llm_dispatch.request_id'],
+                outcome.category,
+                outcome.response is not None,
+            )
+        ),
+    )
+
+    class Client:
+        def __init__(self, endpoint):
+            pass
+
+        async def execute(self, call, **kwargs):
+            calls.append(call)
+            return ExecutionOutcome(
+                response={
+                    'choices': [
+                        {
+                            'message': {'content': '{"value":"' + 'loop ' * 20},
+                            'finish_reason': 'length',
+                        }
+                    ]
+                },
+                remote_settled=True,
+                availability_success=True,
+            )
+
+        async def close(self):
+            pass
+
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[RegisteredEndpoint('endpoint', 'https://example.com/v1')],
+        lanes=[DispatchLane('pool', 'endpoint')],
+        client_factory=Client,
+        poll_seconds=0.01,
+    )
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        req = admit_request(
+            store,
+            call=CompletionCallParams(
+                model='qwen',
+                messages=[],
+                repetition_recovery={'temperature': 0.7, 'top_p': 0.8},
+            ),
+        )
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'failed')
+
+        assert len(calls) == 2
+        assert store.read_result(req.producer_id, req.attempt_id) == {
+            'error': 'repetition'
+        }
+        counters = runtime.health()['counters']
+        assert counters['repetition_retries'] == 1
+        assert counters.get('retries', 0) == 0
+        assert history == [
+            (req.attempt_id, 'repetition', True),
+            (req.attempt_id, 'repetition', True),
+        ]
+        assert store.endpoint_status('endpoint')['circuit'] == 'closed'
     finally:
         await runtime.stop()
 
@@ -501,6 +799,50 @@ async def test_http_429_is_terminal_by_default(http_response_endpoint):
         assert len(received) == 1
     finally:
         await client.close()
+
+
+async def test_http_503_is_retryable_after_provider_rejects_request(
+    http_response_endpoint,
+):
+    from marie.engine.completion_contract import CompletionCallParams
+    from marie.engine.llm_queue.endpoint import EndpointClient, RegisteredEndpoint
+
+    url, received, responses = http_response_endpoint
+    responses.append((503, None))
+    client = EndpointClient(RegisteredEndpoint('endpoint', url, allow_loopback=True))
+    try:
+        outcome = await client.execute(
+            CompletionCallParams(model='model', messages=[]), timeout_seconds=1
+        )
+        assert outcome.category == 'provider_unavailable'
+        assert outcome.retryable and outcome.remote_settled
+        assert outcome.request_started
+        assert len(received) == 1
+    finally:
+        await client.close()
+
+
+async def test_http_503_retries_the_same_logical_attempt(store, http_response_endpoint):
+    url, received, responses = http_response_endpoint
+    responses.extend([(503, None), (200, None)])
+    runtime = dispatcher_for(store, url, retry_min_ms=5, retry_max_ms=5)
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        req = admit_request(store, deadline_ms=2000)
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'succeeded')
+        await eventually(lambda: runtime.health()['counters'].get('completed') == 1)
+
+        metadata = store.metadata(req.attempt_id)
+        assert metadata.attempt_id == req.attempt_id
+        assert metadata.execution_seq == 2
+        assert len(received) == 2
+        assert runtime.health()['counters']['retries'] == 1
+        assert store.usage()['reserved_items'] == 0
+        assert store.route_status('pool')['reserved_items'] == 0
+        assert store.endpoint_status('endpoint')['reserved_items'] == '0'
+    finally:
+        await runtime.stop()
 
 
 @pytest.mark.parametrize(
@@ -715,9 +1057,7 @@ async def test_persistent_calls_commit_independently_and_preserve_images(
     await runtime.stop()
 
 
-async def test_post_send_timeout_never_retries_or_releases_unknown(
-    store, http_endpoint
-):
+async def test_post_send_timeout_fails_without_retry_and_releases(store, http_endpoint):
     from marie.engine.completion_contract import CompletionCallParams
     from marie.engine.llm_queue.endpoint import RegisteredEndpoint
     from marie.engine.llm_queue.request_dispatcher import (
@@ -741,16 +1081,16 @@ async def test_post_send_timeout_never_retries_or_releases_unknown(
     try:
         await eventually(lambda: store.resolve_route('pool'))
         req = admit_request(store, call=CompletionCallParams(model='slow', messages=[]))
-        await eventually(
-            lambda: store.metadata(req.attempt_id).state == 'outcome_unknown'
-        )
-        await asyncio.sleep(
-            0.3
-        )  # Store default uncertainty is deliberately NOT remote proof.
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'failed')
+        await asyncio.sleep(0.3)
         assert len(received) == 1
-        assert store.usage()['reserved_items'] == 1
+        assert store.usage()['reserved_items'] == 0
+        assert store.read_result(req.producer_id, req.attempt_id) == {
+            'error': 'remote_outcome_unknown',
+            'category': 'call_timeout',
+        }
         store.cancel_or_expire(req.producer_id, req.attempt_id)
-        assert store.usage()['reserved_items'] == 1
+        assert store.usage()['reserved_items'] == 0
         releases['slow'].set()
     finally:
         await runtime.stop()
@@ -831,9 +1171,15 @@ async def test_two_owners_and_lost_start_ack_never_send(store, http_endpoint):
     second = dispatcher_for(other_store, url)
     original = store.authorize_start
 
+    lose_reply = True
+
     def lose_start(*args, **kwargs):
-        original(*args, **kwargs)
-        raise StoreUnavailable('lost start acknowledgement')
+        nonlocal lose_reply
+        result = original(*args, **kwargs)
+        if lose_reply:
+            lose_reply = False
+            raise StoreUnavailable('lost start acknowledgement')
+        return result
 
     store.authorize_start = lose_start
     await first.start()
@@ -841,23 +1187,23 @@ async def test_two_owners_and_lost_start_ack_never_send(store, http_endpoint):
         await eventually(lambda: store.resolve_route('pool'))
         await second.start()
         req = admit_request(store)
-        await eventually(
-            lambda: store.metadata(req.attempt_id).state == 'outcome_unknown'
-        )
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'failed')
         assert first.owner and second.owner is None
         assert received == []
-        assert store.usage()['reserved_items'] == 1
+        assert store.usage()['reserved_items'] == 0
         await first.stop()
         await eventually(lambda: second.owner is not None)
         assert second.owner.generation > 1
         assert received == []
-        assert store.usage()['reserved_items'] == 1
+        assert store.usage()['reserved_items'] == 0
     finally:
         await first.stop()
         await second.stop()
 
 
-async def test_producer_death_drops_body_then_completion_settles(store, http_endpoint):
+async def test_producer_death_cancels_local_call_and_preserves_remote_reservation(
+    store, http_endpoint
+):
     from marie.engine.completion_contract import CompletionCallParams
 
     url, received, releases, _ = http_endpoint
@@ -870,7 +1216,6 @@ async def test_producer_death_drops_body_then_completion_settles(store, http_end
         await eventually(lambda: received)
         store.close_producer(req.producer_id)
         await eventually(lambda: store.metadata(req.attempt_id).state == 'abandoned')
-        assert store.client.hget(store.keys.request(req.attempt_id), 'payload') is None
         assert store.usage()['reserved_items'] == 1
         await eventually(lambda: not runtime._tasks)
         assert store.usage()['reserved_items'] == 1
@@ -1345,6 +1690,23 @@ async def test_graceful_drain_keeps_lease_until_result_commit(store, http_endpoi
     await eventually(lambda: store.resolve_route('pool'))
     req = admit_request(store, call=CompletionCallParams(model='slow', messages=[]))
     await eventually(lambda: received)
+    inflight = runtime.inflight_requests_snapshot()
+    assert len(inflight) == 1
+    assert inflight[0]['request_id'] == req.attempt_id
+    assert inflight[0]['pool_id'] == 'pool'
+    assert inflight[0]['endpoint_id'] == 'endpoint'
+    assert inflight[0]['endpoint_group_id'] == 'endpoint'
+    assert inflight[0]['model'] == 'slow'
+    assert inflight[0]['config_revision'] == 'r1'
+    assert inflight[0]['payload_bytes'] > 0
+    assert inflight[0]['cost'] == req.estimated_cost_units
+    assert inflight[0]['admitted_at_ms'] > 0
+    assert inflight[0]['submitted_at'] == inflight[0]['admitted_at_ms'] / 1000
+    assert inflight[0]['expires_at_ms'] == req.expires_at_ms
+    assert inflight[0]['popped_at'] > inflight[0]['submitted_at']
+    assert inflight[0]['queue_wait_age_seconds'] >= 0
+    assert inflight[0]['inflight_age_seconds'] >= 0
+    assert inflight[0]['dispatcher_id'] == runtime.dispatcher_id
     stopping = asyncio.create_task(runtime.stop())
     await asyncio.sleep(0.4)
     assert runtime.health()['draining']
@@ -1712,7 +2074,7 @@ def test_compound_maintenance_stops_between_real_transitions(store, operation):
     assert len(transitions) == 1
 
 
-async def test_retired_sent_reservation_keeps_original_endpoint_and_deadline(
+async def test_retired_sent_failure_releases_original_endpoint_reservation(
     store, http_endpoint
 ):
     from marie.engine.llm_queue.store import StaleOwner
@@ -1762,20 +2124,17 @@ async def test_retired_sent_reservation_keeps_original_endpoint_and_deadline(
         await eventually(lambda: store.metadata(waiting.attempt_id).state == 'expired')
         await eventually(lambda: store.usage()['ready_ids'] == 0)
         metadata = store.metadata(sent.attempt_id)
-        assert (
-            metadata.endpoint_id == 'old-endpoint'
-            and metadata.state == 'outcome_unknown'
-        )
+        assert metadata.endpoint_id == 'old-endpoint' and metadata.state == 'failed'
         assert (
             store.client.hget(store.keys.endpoint('old-endpoint'), 'reserved_items')
-            == '1'
+            == '0'
         )
-        assert store.usage()['reserved_items'] == 1
+        assert store.usage()['reserved_items'] == 0
         current = admit_request(store)
         await eventually(
             lambda: store.metadata(current.attempt_id).state == 'succeeded'
         )
-        assert len(received) == 1 and store.usage()['reserved_items'] == 1
+        assert len(received) == 1 and store.usage()['reserved_items'] == 0
         with pytest.raises(StaleOwner):
             store.disable_route(owner, 'pool')
     finally:
@@ -1869,7 +2228,9 @@ async def test_stop_interrupts_running_producer_cleanup_batch(store, http_endpoi
         await runtime.stop()
 
 
-async def test_oversized_response_abort_keeps_unknown_reservation(store, http_endpoint):
+async def test_oversized_response_abort_fails_and_releases_reservation(
+    store, http_endpoint
+):
     from marie.engine.llm_queue.endpoint import RegisteredEndpoint
     from marie.engine.llm_queue.request_dispatcher import (
         DispatchLane,
@@ -1891,11 +2252,12 @@ async def test_oversized_response_abort_keeps_unknown_reservation(store, http_en
     try:
         await eventually(lambda: store.resolve_route('pool'))
         req = admit_request(store)
-        await eventually(
-            lambda: store.metadata(req.attempt_id).state == 'outcome_unknown'
-        )
-        assert store.usage()['reserved_items'] == 1
-        assert store.read_result(req.producer_id, req.attempt_id) is None
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'failed')
+        assert store.usage()['reserved_items'] == 0
+        assert store.read_result(req.producer_id, req.attempt_id) == {
+            'error': 'remote_outcome_unknown',
+            'category': 'response_too_large',
+        }
         assert len(received) == 1
     finally:
         await runtime.stop()
