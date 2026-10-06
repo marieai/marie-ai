@@ -544,12 +544,7 @@ class RecordBackedMatchSectionPopulationVisitor(BaseProcessingVisitor):
                     )
                     field_def["name"] = field_name
                     if col_def.get("derived_defaults"):
-                        faux_line = LineWithMeta(
-                            line="",
-                            metadata=LineMetadata(page_id, None, None),
-                            annotations=[],
-                        )
-                        row_fields.extend(_create_fields(field_def, "", "", faux_line))
+                        row_fields.extend(_create_fields(field_def, "", "", page_id))
                         continue
                     stub = Field(
                         field_name=field_name,
