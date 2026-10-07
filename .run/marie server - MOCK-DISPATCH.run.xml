@@ -1,12 +1,11 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="marie server - MOCK-DISPATCH" type="PythonConfigurationType" factoryName="Python" folderName="Executors" singleton="false">
     <output_file path="$USER_HOME$/tmp/executor-mock.log" is_save="true" />
-    <module name="marie-ai@1" />
+    <module name="marie-ai" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
-      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="CUDA_VISIBLE_DEVICES" value="0" />
       <env name="GRPC_VERBOSITY" value="debug" />
@@ -22,10 +21,12 @@
       <env name="MARIE_SCHEDULER_TRACE_PROFILE" value="full" />
       <env name="OPENAI_API_BASE" value="http://0.0.0.0:4000" />
       <env name="OPENAI_API_KEY" value="EMPTY" />
+      <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
+    <option name="SDK_NAME" value="Python 3.12 virtualenv at ~/dev/marieai/marie-ai/.venv" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
-    <option name="IS_MODULE_SDK" value="true" />
+    <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="false" />
     <option name="ADD_SOURCE_ROOTS" value="false" />
     <option name="DEBUG_JUST_MY_CODE" value="true" />
