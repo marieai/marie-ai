@@ -1,7 +1,9 @@
 import asyncio
+import json
 import threading
 import time
 from copy import deepcopy
+from dataclasses import asdict, replace
 from unittest import mock
 
 import pytest
@@ -24,11 +26,25 @@ from marie.engine.llm_queue.adapters.openai_compatible import (
 from marie.engine.llm_queue.config import (
     DEFAULT_MAX_INLINE_PAYLOAD_BYTES,
     LlmQueueConfig,
+    LlmQueueProducerConfig,
 )
 from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
+from marie.engine.llm_queue.endpoint import (
+    RegisteredEndpointGroup,
+    RegisteredReplica,
+)
+from marie.engine.llm_queue.producer import V3Producer
 from marie.engine.llm_queue.queue_io import (
     InMemoryListQueueClient,
-    ValkeyListQueueClient,
+    StoreListQueueClient,
+)
+from marie.engine.llm_queue.queue_keys import (
+    QueueKeys,
+    producer_alive_key,
+    queue_namespace,
+    reply_queue_key,
+    request_queue_key,
+    validate_identifier,
 )
 from marie.engine.llm_queue.registry import (
     dispatch_runtime_live_state,
@@ -37,17 +53,21 @@ from marie.engine.llm_queue.registry import (
     unregister_dispatcher,
 )
 from marie.engine.llm_queue.result_types import BatchResult
+from marie.engine.llm_queue.store import (
+    AdmissionConflict,
+    ClaimRecord,
+    OwnerToken,
+    PreparedAdmission,
+    RequestStore,
+    RoutingManifestProjection,
+    StoreLimits,
+    StoreReply,
+)
 from marie.engine.llm_queue.submitter import (
     QueuedBatchExecutor,
     _reply_to_batch_result,
-    _resolve_queue_pool_id,
 )
-from marie.engine.llm_queue.valkey_keys import (
-    producer_alive_key,
-    queue_namespace,
-    reply_queue_key,
-    request_queue_key,
-)
+from marie.engine.openai_engine import OpenAIEngine
 
 
 class _Logger:
@@ -62,6 +82,469 @@ class _Logger:
 
     def debug(self, *args, **kwargs):
         pass
+
+
+def test_endpoint_status_defaults_uninitialized_circuit_to_closed() -> None:
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+    store._read = mock.Mock(
+        return_value=["open", None, "0", None, None, "0", None, "0", "0"]
+    )
+
+    status = store.endpoint_status("endpoint")
+
+    assert status["circuit"] == "closed"
+    assert status["waiting_reason"] is None
+
+
+def test_execution_history_marks_semantic_failure_as_error(monkeypatch) -> None:
+    from marie.engine.llm_queue import request_dispatcher
+    from marie.engine.llm_queue.endpoint import ExecutionOutcome
+
+    class Span:
+        def set_status(self, status):
+            self.status = status
+
+        def end(self):
+            pass
+
+    span = Span()
+    monkeypatch.setattr(
+        request_dispatcher._tracer,
+        "start_span",
+        lambda *_args, **_kwargs: span,
+    )
+    attributes = {"marie.llm_dispatch.queue_wait_ms": 5}
+
+    request_dispatcher._emit_execution_history(
+        attributes,
+        ExecutionOutcome(
+            response={"usage": {"total_tokens": 192}},
+            category="repetition",
+            remote_settled=True,
+            availability_success=True,
+        ),
+        time.time_ns(),
+        time.monotonic(),
+    )
+
+    assert attributes["marie.llm_dispatch.status"] == "error"
+    assert attributes["marie.llm_dispatch.error_type"] == "repetition"
+    assert attributes["llm.token_count.total"] == 192
+
+
+def test_endpoint_group_requires_compatible_unique_replicas() -> None:
+    first = RegisteredReplica(
+        replica_id="replica-a",
+        base_url="https://a.example/v1",
+        credential_env="REPLICA_A_TOKEN",
+        capability_digest="a" * 64,
+    )
+    second = RegisteredReplica(
+        replica_id="replica-b",
+        base_url="https://b.example/v1",
+        capability_digest="a" * 64,
+    )
+
+    group = RegisteredEndpointGroup(
+        group_id="document-llm", revision="r1", replicas=(first, second)
+    )
+
+    assert tuple(replica.replica_id for replica in group.replicas) == (
+        "replica-a",
+        "replica-b",
+    )
+    assert "REPLICA_A_TOKEN" not in repr(group)
+    with pytest.raises(ValueError, match="capability"):
+        RegisteredEndpointGroup(
+            group_id="document-llm",
+            revision="r1",
+            replicas=(
+                first,
+                replace(second, capability_digest="b" * 64),
+            ),
+        )
+
+
+@pytest.mark.asyncio
+async def test_replica_selection_skips_unavailable_and_saturated_targets() -> None:
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    replicas = (
+        RegisteredReplica(
+            replica_id="replica-a",
+            base_url="https://a.example/v1",
+            capability_digest="a" * 64,
+            execution_limit=2,
+        ),
+        RegisteredReplica(
+            replica_id="replica-b",
+            base_url="https://b.example/v1",
+            capability_digest="a" * 64,
+            execution_limit=2,
+        ),
+    )
+    group = RegisteredEndpointGroup("document-llm", "r1", replicas)
+    statuses = {
+        "replica-a": {
+            "gate": "open",
+            "circuit": "open",
+            "next_probe": 0,
+            "probe_claim": None,
+            "reserved_items": 0,
+            "reserved_bytes": 0,
+        },
+        "replica-b": {
+            "gate": "open",
+            "circuit": "closed",
+            "next_probe": 0,
+            "probe_claim": None,
+            "reserved_items": 1,
+            "reserved_bytes": 10,
+        },
+    }
+    store = mock.Mock()
+    store.limits = StoreLimits()
+    store.metadata.return_value = mock.Mock(payload_bytes=1)
+    store.server_time_ms.return_value = 1
+    store.endpoint_status.side_effect = statuses.__getitem__
+    dispatcher = RequestDispatcher(
+        store=store,
+        endpoint_groups=[group],
+        lanes=[DispatchLane("document-small", endpoint_group_id="document-llm")],
+    )
+    claim = ClaimRecord(
+        attempt_id="attempt-1",
+        claim_id="claim-1",
+        execution_sequence=0,
+        owner_generation=1,
+        pool_id="document-small",
+        endpoint_group_id="document-llm",
+        charged_cost=1,
+        charge_sequence=1,
+        refund_state="not_refunded",
+    )
+    try:
+        selected = await dispatcher.select_replica(claim)
+        assert selected.replica_id == "replica-b"
+        assert claim.endpoint_group_id == "document-llm"
+        statuses["replica-a"]["circuit"] = "closed"
+        selected = await dispatcher.select_replica(claim)
+        assert selected.replica_id == "replica-a"
+    finally:
+        dispatcher._store_workers.shutdown()
+        dispatcher._lease_worker.shutdown()
+        dispatcher._refresh_worker.shutdown()
+
+
+def test_routing_manifest_projection_is_idempotent_and_conflict_safe() -> None:
+    records = {}
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys('default')
+    store._client_error = RuntimeError
+
+    def script(*, keys, args):
+        import json
+
+        payload = json.loads(args[0])
+        prior = records.get(keys[0])
+        if prior is not None:
+            disposition = (
+                'existing'
+                if prior['route_digest'] == payload['route_digest']
+                else 'conflict'
+            )
+            return json.dumps({'disposition': disposition})
+        records[keys[0]] = payload
+        return json.dumps({'disposition': 'projected'})
+
+    store._script = script
+    projection = RoutingManifestProjection(
+        job_id='job-1',
+        work_unit_id='node-1',
+        fabric_group_id='default',
+        policy_generation=1,
+        route_digest='a' * 64,
+        pool_id='document-small',
+        endpoint_group_id='primary',
+        endpoint_revision='r1',
+    )
+
+    assert store.project_routing_manifest(projection).disposition == 'projected'
+    assert store.project_routing_manifest(projection).disposition == 'existing'
+    with pytest.raises(AdmissionConflict, match='routing_binding_conflict'):
+        store.project_routing_manifest(replace(projection, route_digest='b' * 64))
+
+
+def test_routing_manifest_keys_share_the_fabric_slot() -> None:
+    keys = QueueKeys('Default')
+
+    assert keys.routing_manifest('job-1', 'node-1').startswith(keys.prefix)
+    assert keys.routing_manifests.startswith(keys.prefix)
+
+
+def test_routing_manifest_rejects_unsafe_policy_generation() -> None:
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys('default')
+    projection = RoutingManifestProjection(
+        job_id='job-1',
+        work_unit_id='node-1',
+        fabric_group_id='default',
+        policy_generation=2**53,
+        route_digest='a' * 64,
+        pool_id='document-small',
+        endpoint_group_id='primary',
+        endpoint_revision='r1',
+    )
+
+    with pytest.raises(ValueError, match='policy generation'):
+        store.project_routing_manifest(projection)
+
+
+def test_manifest_admission_uses_projected_pool_without_pool_metadata() -> None:
+    projection = RoutingManifestProjection(
+        job_id="job-1",
+        work_unit_id="node-1",
+        fabric_group_id="default",
+        policy_generation=1,
+        route_digest="a" * 64,
+        pool_id="document-small",
+        endpoint_group_id="primary",
+        endpoint_revision="r1",
+    )
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+    store.limits = StoreLimits()
+    store._limits_json = json.dumps(
+        asdict(store.limits),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    store._client_error = RuntimeError
+    store.resolve_routing_manifest = lambda *_args: projection
+    captured = {}
+
+    def script(*, keys, args):
+        import json
+
+        captured["keys"] = keys
+        captured["payload"] = json.loads(args[0])
+        return json.dumps({"disposition": "admitted"})
+
+    store._script = script
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+    request = PreparedAdmission.create(
+        fabric_group_id="default",
+        producer_id="producer-1",
+        attempt_id="attempt-1",
+        job_id="job-1",
+        work_unit_id="node-1",
+        logical_batch_id="batch-1",
+        logical_task_id="task-1",
+        item_index=0,
+        expires_at_ms=1000,
+        call=call,
+        estimated_cost_units=1,
+    )
+
+    assert store.admit_from_manifest(request).disposition == "admitted"
+    assert captured["keys"][3] == store.keys.ready("document-small")
+    assert captured["payload"]["pool_id"] == "document-small"
+    assert captured["payload"]["job_id"] == "job-1"
+    assert captured["payload"]["work_unit_id"] == "node-1"
+
+
+def test_manifest_admission_rejects_tampered_content_digest() -> None:
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+    request = PreparedAdmission.create(
+        fabric_group_id="default",
+        producer_id="producer-1",
+        attempt_id="attempt-1",
+        job_id="job-1",
+        work_unit_id="node-1",
+        logical_batch_id="batch-1",
+        logical_task_id="task-1",
+        item_index=0,
+        expires_at_ms=1000,
+        call=call,
+        estimated_cost_units=1,
+    )
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+
+    with pytest.raises(ValueError, match="content digest"):
+        store.admit_from_manifest(replace(request, content_digest="b" * 64))
+
+
+def test_manifest_admission_rejects_missing_route() -> None:
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+    request = PreparedAdmission.create(
+        fabric_group_id="default",
+        producer_id="producer-1",
+        attempt_id="attempt-1",
+        job_id="job-1",
+        work_unit_id="node-1",
+        logical_batch_id="batch-1",
+        logical_task_id="task-1",
+        item_index=0,
+        expires_at_ms=1000,
+        call=call,
+        estimated_cost_units=1,
+    )
+    store = object.__new__(RequestStore)
+    store.keys = QueueKeys("default")
+    store.resolve_routing_manifest = lambda *_args: None
+
+    assert store.admit_from_manifest(request).disposition == "routing_manifest_missing"
+
+
+def test_v3_producer_submits_durable_provenance_without_pool_metadata() -> None:
+    producer = V3Producer(
+        config=_queue_config(
+            queue_url="redis://unused:6379/0",
+            fabric_group_id="default",
+            queue_contract_version="v3",
+        )
+    )
+    producer.producer_id = "producer-1"
+    captured = []
+
+    class Store:
+        @staticmethod
+        def server_time_ms():
+            return 1000
+
+        @staticmethod
+        def admit_from_manifest(request):
+            captured.append(request)
+            producer._pending[request.attempt_id].result = BatchResult(
+                request.logical_task_id, "done", None
+            )
+            return StoreReply(disposition="admitted")
+
+    producer._start = lambda *_args: Store()
+    producer._check = lambda: None
+    call = _call(
+        [{"role": "user", "content": "route me"}],
+        context=RequestContext(job_id="job-1", work_unit_id="node-1"),
+    )
+
+    results = producer.execute(
+        calls=[call],
+        batch_request_id="batch-1",
+        batch_timeout=1,
+        metadata={},
+    )
+
+    assert [result.response for result in results] == ["done"]
+    assert captured[0].job_id == "job-1"
+    assert captured[0].work_unit_id == "node-1"
+    assert not hasattr(captured[0], "pool_id")
+
+
+def test_request_context_round_trip_preserves_durable_provenance() -> None:
+    context = RequestContext(
+        job_id="job-1",
+        work_unit_id="node-1",
+        ref_id="doc-1",
+        ref_type="stress",
+    )
+
+    assert RequestContext.from_dict(context.to_dict()) == context
+
+
+def test_claim_and_charge_returns_durable_accounting_record() -> None:
+    store = object.__new__(RequestStore)
+    store.metadata = lambda _attempt: None
+    captured = {}
+
+    def invoke(op, **kwargs):
+        captured.update(op=op, **kwargs)
+        return {
+            "disposition": "claimed",
+            "attempt_id": "attempt-1",
+            "claim_id": "claim-1",
+            "execution_seq": 0,
+            "owner_generation": 7,
+            "pool_id": "document-small",
+            "endpoint_group_id": "primary",
+            "charged_cost": 4,
+            "charge_sequence": 11,
+            "refund_state": "not_refunded",
+        }
+
+    store._invoke = invoke
+    owner = OwnerToken("gateway", 7)
+
+    claim = store.claim_and_charge(
+        owner,
+        "document-small",
+        expected_attempt="attempt-1",
+        expected_cost=4,
+        claim_id="claim-1",
+    )
+
+    assert claim == ClaimRecord(
+        attempt_id="attempt-1",
+        claim_id="claim-1",
+        execution_sequence=0,
+        owner_generation=7,
+        pool_id="document-small",
+        endpoint_group_id="primary",
+        charged_cost=4,
+        charge_sequence=11,
+        refund_state="not_refunded",
+    )
+    assert captured["op"] == "claim"
+    assert captured["expected_cost"] == 4
+
+
+def test_return_untransmitted_and_refund_is_bound_to_claim_record() -> None:
+    store = object.__new__(RequestStore)
+    captured = {}
+    store._change = lambda op, **kwargs: captured.update(op=op, **kwargs) or StoreReply(
+        disposition="returned",
+        charged_cost=4,
+        refunded_cost=4,
+        charge_sequence=11,
+        refund_state="refunded",
+    )
+    claim = ClaimRecord(
+        attempt_id="attempt-1",
+        claim_id="claim-1",
+        execution_sequence=0,
+        owner_generation=7,
+        pool_id="document-small",
+        endpoint_group_id="primary",
+        charged_cost=4,
+        charge_sequence=11,
+        refund_state="not_refunded",
+    )
+
+    reply = store.return_untransmitted_and_refund(OwnerToken("gateway", 8), claim)
+
+    assert reply.disposition == "returned"
+    assert reply.refund_state == "refunded"
+    assert captured == {
+        "op": "return_untransmitted",
+        "owner": OwnerToken("gateway", 8),
+        "attempt_id": "attempt-1",
+        "claim_id": "claim-1",
+        "charge_sequence": 11,
+        "execution_sequence": 0,
+    }
 
 
 def _queue_config(**overrides) -> LlmQueueConfig:
@@ -155,14 +638,17 @@ class _FakeSyncQueueBackend:
         self.pipeline_exec_count = 0
         self.closed = False
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
 
     def rpush(self, key, value):
-        with self._lock:
+        with self._condition:
             self.lists.setdefault(key, []).append(value)
+            self._condition.notify_all()
 
     def lpush(self, key, value):
-        with self._lock:
+        with self._condition:
             self.lists.setdefault(key, []).insert(0, value)
+            self._condition.notify_all()
 
     def lpop(self, key):
         with self._lock:
@@ -179,12 +665,18 @@ class _FakeSyncQueueBackend:
             return values[index]
 
     def blpop(self, key, timeout):
-        with self._lock:
+        deadline = time.monotonic() + timeout
+        with self._condition:
             self.blpop_calls.append((key, timeout))
-        value = self.lpop(key)
-        if value is None:
-            return None
-        return (key, value)
+            while not self.closed:
+                values = self.lists.get(key, [])
+                if values:
+                    return key, values.pop(0)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._condition.wait(remaining)
+        return None
 
     def pipeline(self):
         return _FakePipeline(self)
@@ -222,8 +714,9 @@ class _FakeSyncQueueBackend:
             self.expiry.pop(key, None)
 
     def close(self):
-        with self._lock:
+        with self._condition:
             self.closed = True
+            self._condition.notify_all()
 
 
 def _build_processor(
@@ -301,7 +794,7 @@ def test_queued_batch_executor_demultiplexes_replies_from_same_producer():
     ]
 
 
-def test_queued_batch_executor_routes_request_to_metadata_pool():
+def test_legacy_executor_does_not_accept_metadata_pool_override():
     queue_client = InMemoryListQueueClient()
     executor = QueuedBatchExecutor(
         queue_client=queue_client,
@@ -310,17 +803,16 @@ def test_queued_batch_executor_routes_request_to_metadata_pool():
     )
 
     def worker():
-        request = queue_client.pop_request("document-small", timeout=1.0)
+        request = queue_client.pop_request("default", timeout=1.0)
         assert request is not None
-        assert request.pool_id == "document-small"
-        assert request.metadata == {"pool_id": "document-small"}
+        assert request.pool_id == "default"
         queue_client.push_reply(
             CompletionReplyEnvelope(
                 request_id=request.request_id,
                 producer_id=request.producer_id,
                 pool_id=request.pool_id,
                 status="ok",
-                completion=_completion_payload("resp:document-small"),
+                completion=_completion_payload("response"),
                 completed_at=time.time(),
             ),
             ttl_seconds=60,
@@ -328,24 +820,41 @@ def test_queued_batch_executor_routes_request_to_metadata_pool():
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
-
     results = executor.execute(
-        calls=[_call([{"role": "user", "content": "small document"}])],
-        batch_request_id="batch-document-small",
+        calls=[_call([{"role": "user", "content": "document"}])],
+        batch_request_id="legacy-no-override",
         batch_timeout=2.0,
-        metadata={"pool_id": "document-small"},
+        metadata={"pool_id": "document-medium"},
     )
 
-    assert [result.response for result in results] == ["resp:document-small"]
-    assert queue_client.try_pop_request("default") is None
+    assert [result.response for result in results] == ["response"]
+    assert queue_client.try_pop_request("document-medium") is None
 
 
-def test_resolve_queue_pool_id_accepts_metadata_pool_id():
-    assert (
-        _resolve_queue_pool_id("default", {"pool_id": "document-medium"})
-        == "document-medium"
-    )
-    assert _resolve_queue_pool_id("default", {"pool_id": " "}) == "default"
+def test_producer_config_ignores_removed_pool_and_version_environment(monkeypatch):
+    monkeypatch.setenv("LLM_QUEUE_POOL_ID", "document-small")
+    monkeypatch.setenv("LLM_QUEUE_CONTRACT_VERSION", "v2")
+
+    config = LlmQueueProducerConfig.from_env(enabled=True)
+
+    assert not hasattr(config, "pool_id")
+    assert not hasattr(config, "queue_contract_version")
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        "pool_id",
+        "queue_pool_id",
+        "llm_queue_pool_id",
+        "queue_contract_version",
+        "llm_queue_contract_version",
+        "queue_producer_id",
+    ],
+)
+def test_openai_engine_rejects_legacy_caller_queue_selectors(selector):
+    with pytest.raises(ValueError, match="caller_pool_forbidden"):
+        OpenAIEngine(model_name="mock", **{selector: "caller-value"})
 
 
 def test_queued_batch_executor_skips_malformed_reply_and_keeps_waiting():
@@ -455,11 +964,34 @@ def test_queue_keyspace_is_versioned():
     assert producer_alive_key("producer-A") == "key:llm:v2:producer:producer-A:alive"
 
 
-def test_valkey_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
-    backend = _FakeSyncQueueBackend()
-    monkeypatch.setattr(queue_io_module, "_build_sync_client", lambda url: backend)
+def test_queue_keys_preserve_v3_bytes_and_validate_generic_identifiers():
+    keys = QueueKeys('Fabric-A')
+    assert keys.fabric_id == 'fabric-a'
+    assert keys.prefix == 'llm:v3:{fabric:fabric-a}:'
+    assert keys.owner == 'llm:v3:{fabric:fabric-a}:owner'
+    assert keys.request('attempt-1') == 'llm:v3:{fabric:fabric-a}:request:attempt-1'
+    assert keys.ready('pool-1') == 'llm:v3:{fabric:fabric-a}:ready:pool-1'
+    assert (
+        keys.alive('producer-1') == 'llm:v3:{fabric:fabric-a}:producer:producer-1:alive'
+    )
+    assert (
+        keys.members('producer-1')
+        == 'llm:v3:{fabric:fabric-a}:producer:producer-1:requests'
+    )
+    assert keys.route('pool-1') == 'llm:v3:{fabric:fabric-a}:route:pool-1'
+    assert keys.endpoint('endpoint-1') == 'llm:v3:{fabric:fabric-a}:endpoint:endpoint-1'
+    assert validate_identifier('pool_1') == 'pool_1'
+    with pytest.raises(ValueError, match='Identifiers must contain'):
+        validate_identifier('bad:{identifier}')
 
-    queue_client = ValkeyListQueueClient("valkey://unit-test")
+
+def test_store_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
+    backend = _FakeSyncQueueBackend()
+    monkeypatch.setattr(
+        queue_io_module, "_build_sync_client", lambda url, **kwargs: backend
+    )
+
+    queue_client = StoreListQueueClient("valkey://unit-test")
     request = QueuedCompletionEnvelope(
         request_id="req-1",
         producer_id="producer-A",
@@ -487,7 +1019,7 @@ def test_valkey_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
     restored_request = queue_client.pop_request("default", timeout=0.1)
     assert restored_request is not None
     assert restored_request.request_id == "req-1"
-    assert backend.blpop_calls[-1] == (request_queue_key("default"), 1)
+    assert backend.blpop_calls[-1] == (request_queue_key("default"), 0.1)
 
     queue_client.push_request_front(request)
     assert queue_client.try_pop_request("default").request_id == "req-1"
@@ -511,11 +1043,13 @@ def test_valkey_list_queue_client_round_trip_and_pipeline_ttl(monkeypatch):
     assert backend.closed is True
 
 
-def test_valkey_queue_runtime_end_to_end_with_dispatcher_thread(monkeypatch):
+def test_store_queue_runtime_end_to_end_with_dispatcher_thread(monkeypatch):
     backend = _FakeSyncQueueBackend()
-    monkeypatch.setattr(queue_io_module, "_build_sync_client", lambda url: backend)
+    monkeypatch.setattr(
+        queue_io_module, "_build_sync_client", lambda url, **kwargs: backend
+    )
 
-    queue_client = ValkeyListQueueClient("valkey://unit-test")
+    queue_client = StoreListQueueClient("valkey://unit-test")
 
     class _Completions:
         async def create(self, **kwargs):
@@ -723,7 +1257,7 @@ def test_dispatcher_skips_malformed_request_and_processes_next_live_one():
     assert completion_payload_to_text(reply.completion) == "done:keep"
 
 
-def test_dispatcher_records_openinference_input_and_output(monkeypatch):
+def test_dispatcher_omits_openinference_input_and_output(monkeypatch):
     queue_client = InMemoryListQueueClient()
     config = _queue_config(producer_id="producer-live")
     adapter = _FakeAdapter()
@@ -750,7 +1284,7 @@ def test_dispatcher_records_openinference_input_and_output(monkeypatch):
             }
         )
 
-    monkeypatch.setattr(dispatcher_module, "set_llm_io", record_llm_io)
+    monkeypatch.setattr(dispatcher_module, "set_llm_io", record_llm_io, raising=False)
     queue_client.set_producer_alive("producer-live", "producer-live", 5)
     queue_client.push_request(
         QueuedCompletionEnvelope(
@@ -763,18 +1297,7 @@ def test_dispatcher_records_openinference_input_and_output(monkeypatch):
     )
 
     assert dispatcher.run_once() == 1
-    assert recorded_io == [
-        {
-            "input_messages": messages,
-            "output_messages": None,
-            "context": context,
-        },
-        {
-            "input_messages": None,
-            "output_messages": "done:keep",
-            "context": None,
-        },
-    ]
+    assert recorded_io == []
 
 
 def test_batch_processor_uses_queued_executor_when_enabled(monkeypatch):
@@ -992,24 +1515,21 @@ def test_dispatch_runtime_live_state_merges_pending_and_inflight_requests():
         pool_config = runtime_state["pool_config"]
 
         assert summary["pending_request_count"] == 1
-        assert summary["pending_request_sample_count"] == 1
+        assert summary["pending_request_sample_count"] == 0
         assert summary["inflight_request_count"] == 1
-        assert summary["live_request_sample_limit_per_pool"] == 10
+        assert summary["live_request_sample_limit"] == 10
         assert pool_config[0]["scheduler_policy"] == "fifo"
         assert pool_config[0]["pool_id"] == "default"
         assert pool_config[0]["request_queue_depth"] == 1
 
         by_id = {item["request_id"]: item for item in live_requests}
-        assert by_id["req-pending"]["state_source"] == "valkey"
-        assert by_id["req-pending"]["lifecycle_stage"] == "pending"
-        assert by_id["req-pending"]["dispatcher_id"] is None
-        assert by_id["req-pending"]["estimated_cost_units"] == 1
-        assert by_id["req-pending"]["request_summary"] == "user: second prompt"
-
+        assert 'req-pending' not in by_id
+        assert summary['sampling_available'] is False
+        assert 'second prompt' not in str(runtime_state)
         assert by_id["req-inflight"]["state_source"] == "dispatcher"
         assert by_id["req-inflight"]["lifecycle_stage"] == "executing"
         assert by_id["req-inflight"]["dispatcher_id"] == dispatcher.dispatcher_id
-        assert by_id["req-inflight"]["inflight_age_seconds"] is not None
+        assert "request_summary" not in by_id["req-inflight"]
     finally:
         release.set()
         dispatcher.stop()
@@ -1080,10 +1600,10 @@ def test_dispatch_runtime_live_state_reports_full_pending_depth_with_sample_cap(
         summary = runtime_state["runtime_summary"]
 
         assert summary["pending_request_count"] == 3
-        assert summary["pending_request_sample_count"] == 1
-        assert summary["live_request_sample_limit_per_pool"] == 1
-        assert len(runtime_state["live_requests"]) == 1
-        assert runtime_state["live_requests"][0]["state_source"] == "valkey"
+        assert summary["pending_request_sample_count"] == 0
+        assert summary["live_request_sample_limit"] == 1
+        assert len(runtime_state["live_requests"]) == 0
+        assert summary["sampling_available"] is False
     finally:
         unregister_dispatcher(dispatcher.dispatcher_id)
 

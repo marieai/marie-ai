@@ -1,0 +1,40 @@
+{
+  "artifacts": {
+    "blueprint.yaml": "f7520ecf49703eccb3f420fe53bf22d03226638d4d5093d408a8670fe7539639",
+    "extraction/config.yml": "3148aeafeb794e5e4a014c76107fb5d1a1a249e424ec1f43fca6343ab9be9b15",
+    "extraction/prompts/document-config-extract.j2": "e6c621b924f5093a51f333a8d9d31959435f551e36946a6600aa86493e624bc6",
+    "qualification/conversion-report.json": "4122694ff19fb34fc74f3a9b30b460d21763984a04d5e59ddce7b497a317f714",
+    "sample-data/input.pdf": "cc297be0c3667367bbcbd01dcf0adc824483cb81cfb6af4f54b24fa6e2229736",
+    "sample-data/thumbnail.png": "ac57685f99a47689fa4d84d49f4f9714da407785e6aecfc8f57c26748e178192",
+    "schemas/output.json": "7883baca423938efc73e558046e05032ab6f31c1d2f86ce52e1ebe67fc07c349",
+    "THIRD_PARTY_NOTICES.md": "1d87de2dd7b124b9798d4a7339b77c8d875e29fbdea1fa1ad733e74887f64d94",
+    "workflows/query-plan.json": "383232ddd384a20a923d917eedadb8ee20d1048577e15effc2409f13b8a71f8e"
+  },
+  "blueprintId": "bp.document-config.financial-services-bank-statements-ai-generalized-single-account-statement",
+  "configurationId": "document-config.financial-services-bank-statements-ai-generalized-single-account-statement",
+  "converterVersion": "0.1.0",
+  "findings": [
+    {
+      "code": "multiple-extraction-candidates",
+      "fieldPath": "start_date",
+      "message": "2 source extraction candidates target the same output field",
+      "severity": "info"
+    },
+    {
+      "code": "multiple-extraction-candidates",
+      "fieldPath": "end_date",
+      "message": "2 source extraction candidates target the same output field",
+      "severity": "info"
+    },
+    {
+      "code": "multiple-extraction-candidates",
+      "fieldPath": "beginning_balance",
+      "message": "2 source extraction candidates target the same output field",
+      "severity": "info"
+    }
+  ],
+  "readiness": "candidate",
+  "schemaVersion": 1,
+  "sourceLockSha256": "ff635ba525169647730975df8e18f64ac7ae0a68bd2a77b1f3bd4568ddc98e53",
+  "sourceRevision": "829aa3d0d2cc1b478eac0371a053dccb85257eec"
+}

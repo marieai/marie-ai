@@ -7,7 +7,13 @@ from typing import Any, Dict, Iterator, Optional
 from uuid_extensions import uuid7str
 
 from marie._core.utils import run_background_task
-from marie.job.common import ActorHandle, JobInfo, JobInfoStorageClient, JobStatus
+from marie.job.common import (
+    ActorHandle,
+    DuplicateJobSubmissionError,
+    JobInfo,
+    JobInfoStorageClient,
+    JobStatus,
+)
 from marie.job.desired_state_executor import DesiredStateExecutor
 from marie.job.event_publisher import EventPublisher
 from marie.job.job_distributor import JobDistributor
@@ -202,13 +208,22 @@ class JobManager:
         self._published_terminal_events[job_id] = signature
         published = False
         try:
+            jobinfo_replace_kwargs: dict[str, Any] | bool = False
+            if status == JobStatus.FAILED:
+                current_info = await self._job_info_client.get_info(job_id)
+                if current_info is not None and isinstance(
+                    current_info.runtime_env, dict
+                ):
+                    error = current_info.runtime_env.get('error')
+                    if isinstance(error, dict):
+                        jobinfo_replace_kwargs = {'runtime_env': {'error': dict(error)}}
             await self.event_publisher.publish(
                 status,
                 {
                     'job_id': job_id,
                     'status': status,
                     'message': f'Job {job_id} completed with status {status}.',
-                    'jobinfo_replace_kwargs': False,
+                    'jobinfo_replace_kwargs': jobinfo_replace_kwargs,
                     'run_owner': run_owner,
                     'run_attempt_id': run_attempt_id,
                     'source': source,
@@ -558,10 +573,6 @@ class JobManager:
         """
         if submission_id is None:
             submission_id = generate_job_id()
-        self._published_terminal_events.pop(submission_id, None)
-        self._committed_terminal_events.pop(submission_id, None)
-        self._terminal_notifications.pop(submission_id, None)
-        self._active_run_attempts[submission_id] = run_attempt_id
 
         entrypoint_num_cpus = 1
         entrypoint_num_gpus = 1
@@ -589,10 +600,11 @@ class JobManager:
             submission_id, job_info, overwrite=is_retry
         )
         if not new_key_added and not is_retry:
-            raise ValueError(
-                f"Job with submission_id {submission_id} already exists. "
-                "Please use a different submission_id."
-            )
+            raise DuplicateJobSubmissionError(submission_id)
+        self._published_terminal_events.pop(submission_id, None)
+        self._committed_terminal_events.pop(submission_id, None)
+        self._terminal_notifications.pop(submission_id, None)
+        self._active_run_attempts[submission_id] = run_attempt_id
 
         # Wait for the actor to start up asynchronously so this call always
         # returns immediately and we can catch errors with the actor starting

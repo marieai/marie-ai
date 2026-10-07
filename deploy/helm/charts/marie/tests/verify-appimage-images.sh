@@ -45,6 +45,7 @@ verify_platform() {
 
   awk '$1 == "image:" { gsub(/"/, "", $2); print $2 }' "$rendered" | sort -u >"$actual"
   cat >"$expected" <<'EOF'
+docker.hyperdx.io/hyperdx/hyperdx@sha256:0f88ad527e43f8352f7decc44381c8741c4d5e0122429e95986e14340b98f3dc
 docker.io/clickhouse/clickhouse-server@sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8
 docker.io/gitea/gitea@sha256:fd917399b5bbde18348d52eda18b3690d75ae1c108630c6dc3a2bf10a3e0c353
 docker.io/library/rabbitmq@sha256:3c498e636fd64462480c5f9ff842eb224ab84160a8ada1ded5375e9569e9230c
@@ -52,7 +53,9 @@ docker.io/marieai/marie-gateway@sha256:e65a1a3b2b7f3e2999229f2b1c898d0b83fa2a1f6
 docker.io/marieai/marie@sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
 docker.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
 docker.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+docker.io/otel/opentelemetry-collector-contrib@sha256:54312b4534a545f052b5d8232754c5329f7ac8779a4e9af167955d9f2bb657d1
 docker.io/valkey/valkey@sha256:3fe38a705227d29534a199e876b38d5474dec4d3baca980ac6894df539416562
+ghcr.io/ferretdb/ferretdb@sha256:5d8966f7ec1267d35fc61acc56fd9f3f62f22b4baf65ecb6c331b63b86a52aac
 ghcr.io/ferretdb/postgres-documentdb@sha256:c2bd151a4ba2227d2f2a4c50406a104def04aef8780495505e6e1fcf6b8b2d8e
 quay.io/coreos/etcd@sha256:893a99e64e181fede58348cc824cdfae956ea8b64e0e008f7105e950d9cb3f33
 EOF

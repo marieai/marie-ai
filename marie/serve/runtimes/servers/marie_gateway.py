@@ -19,6 +19,7 @@ from docarray.documents import TextDoc
 from fastapi import FastAPI, Request
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 from marie.engine.llm_queue.registry import (
+    SnapshotUnavailable,
     dispatch_runtime_live_state,
     dispatch_runtime_snapshot,
 )
@@ -52,6 +53,11 @@ from marie.messaging.grpc_event_broker import GrpcEventBroker
 from marie.proto import jina_pb2, jina_pb2_grpc
 from marie.sandbox.blueprints.gateway_routes import register_blueprint_routes
 from marie.scheduler import PostgreSQLJobScheduler
+from marie.scheduler.llm_routing import (
+    RoutingSubmissionError,
+    TrustedRoutingOverride,
+    reject_external_routing_selectors,
+)
 from marie.scheduler.models import DEFAULT_RETRY_POLICY, JobSubmissionModel, WorkInfo
 from marie.scheduler.state import WorkState
 from marie.serve.discovery import JsonAddress
@@ -67,6 +73,9 @@ from marie.serve.networking.balancer.load_balancer import LoadBalancerType
 from marie.serve.networking.utils import get_grpc_channel
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
     GatewayLlmDispatchRuntime,
+)
+from marie.serve.runtimes.gateway.marie.operator_routes import (
+    read_operator_runtime_snapshot,
 )
 from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
@@ -219,7 +228,27 @@ LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S = 5.0
 
 
 def _llm_dispatch_runtime_event_fingerprint(snapshot: dict[str, Any]) -> str:
-    return json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
+    def stable(value):
+        if isinstance(value, dict):
+            return {
+                key: stable(item)
+                for key, item in value.items()
+                if key
+                not in {
+                    'observed_at',
+                    'snapshot_at',
+                    'inflight_age_seconds',
+                    'oldest_pending_age_seconds',
+                    'pending_age_seconds',
+                }
+            }
+        if isinstance(value, list):
+            return [stable(item) for item in value]
+        return value
+
+    return json.dumps(
+        stable(snapshot), sort_keys=True, separators=(",", ":"), default=str
+    )
 
 
 def _llm_dispatch_runtime_event_result(snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -584,6 +613,7 @@ class MarieServerGateway(CompositeServer):
             async def http_exception_handler(request: Request, exc: HTTPException):
                 return JSONResponse(
                     status_code=exc.status_code,
+                    headers=exc.headers,
                     content={"status": "error", "message": exc.detail},
                 )
 
@@ -597,54 +627,33 @@ class MarieServerGateway(CompositeServer):
                 self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
                 return {"result": "ok"}
 
-            @app.api_route(
-                path="/api/debug",
-                methods=["GET"],
-                summary="Get scheduler debug information /api/debug",
+            from marie.serve.runtimes.gateway.marie.operator_routes import (
+                add_runtime_routes,
             )
-            async def get_debug_info():
-                """
-                Get debug information from the job scheduler.
-                :return:
-                """
-                self.logger.info(
-                    f"Debug info requested at {datetime.now(timezone.utc)}"
-                )
-                try:
-                    debug_data = await self.job_scheduler.debug_info()
-                    debug_data["llm_dispatch"] = dispatch_runtime_live_state(
-                        limit_per_pool=50
-                    )
-                    return {"status": "OK", "result": debug_data}
-                except Exception as e:
-                    self.logger.error(f"Error getting debug info: {str(e)}")
-                    return {
-                        "status": "error",
-                        "result": f"Failed to get debug info: {str(e)}",
-                    }
 
-            @app.api_route(
-                path="/api/llm-dispatch/runtime",
-                methods=["GET"],
-                summary="Get live LLM dispatch runtime information /api/llm-dispatch/runtime",
-            )
-            async def get_llm_dispatch_runtime(
-                limit: int = Query(default=50, ge=1, le=250),
-            ):
-                self.logger.info(
-                    f"LLM dispatch runtime requested at {datetime.now(timezone.utc)}"
-                )
-                try:
-                    runtime_data = dispatch_runtime_live_state(limit_per_pool=limit)
-                    return {"status": "OK", "result": runtime_data}
-                except Exception as e:
-                    self.logger.error(
-                        f"Error getting LLM dispatch runtime info: {str(e)}"
-                    )
-                    return {
-                        "status": "error",
-                        "result": f"Failed to get LLM dispatch runtime info: {str(e)}",
+            add_runtime_routes(
+                app,
+                lambda: self.llm_dispatch_runtime.config.fabric_group_id,
+                lambda: getattr(
+                    getattr(
+                        self.llm_dispatch_runtime,
+                        '_scheduler_config_source',
+                        None,
+                    ),
+                    'repository',
+                    None,
+                ),
+                getattr(self, '_submit_operator_routing_override', None),
+                gateway_debug=lambda: {
+                    'llm_dispatch': {
+                        'enabled': self.llm_dispatch_runtime.enabled,
+                        'mode': self.llm_dispatch_runtime.mode,
                     }
+                },
+                failure_report_reader=lambda job_id, history_id: (
+                    self.job_scheduler.diagnostics.failure_report(job_id, history_id)
+                ),
+            )
 
             @app.api_route(
                 path="/api/debug/reset-dags",
@@ -1166,7 +1175,6 @@ class MarieServerGateway(CompositeServer):
                 request: Request, token: str = Depends(TokenBearer())
             ):
                 self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
-                self.logger.debug(f"Token : {token}")
 
                 metric_labels = {"endpoint": "/api/v1/invoke", "status": "success"}
 
@@ -1746,7 +1754,12 @@ class MarieServerGateway(CompositeServer):
         else:
             yield self.error_response(f"Action not recognized : {action}")
 
-    async def handle_job_submit_command(self, message: Dict[str, Any]) -> Request:
+    async def handle_job_submit_command(
+        self,
+        message: Dict[str, Any],
+        *,
+        routing_override: TrustedRoutingOverride | None = None,
+    ) -> Request:
         """
         Handle job submission command.
 
@@ -1758,6 +1771,11 @@ class MarieServerGateway(CompositeServer):
         silence_exceptions = strtobool(
             os.environ.get("MARIE_SILENCE_EXCEPTIONS", False)
         )
+
+        try:
+            reject_external_routing_selectors(message)
+        except RoutingSubmissionError as exc:
+            return self.error_response(exc.category, None, silence_exceptions)
 
         api_key = message["api_key"]
 
@@ -1823,6 +1841,11 @@ class MarieServerGateway(CompositeServer):
             policy=submission_policy,
             soft_sla=soft_sla,
             hard_sla=hard_sla,
+            routing_fabric_group_id=self.llm_dispatch_runtime.config.fabric_group_id,
+            routing_request_source=(
+                'operator' if routing_override is not None else 'gateway-job-api'
+            ),
+            routing_override=routing_override,
         )
 
         try:
@@ -1908,6 +1931,7 @@ class MarieServerGateway(CompositeServer):
             )
             if scheduler_owns_failure_notification:
                 return response
+
             try:
                 exc_msg = response.parameters.get("exception", "Unknown error")
                 job_key = f"failed/{ref_type}/{ref_id}"
@@ -1928,6 +1952,26 @@ class MarieServerGateway(CompositeServer):
         finally:
             elapsed_time = time.time() - start_time
             self.logger.debug(f"Job submission completed in {elapsed_time:.2f} seconds")
+
+    async def _submit_operator_routing_override(
+        self,
+        submission: dict[str, Any],
+        fabric_group_id: str,
+        pool_id: str,
+        actor: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        if fabric_group_id != self.llm_dispatch_runtime.config.fabric_group_id:
+            raise RoutingSubmissionError('routing_override_fabric_invalid')
+        response = await self.handle_job_submit_command(
+            submission,
+            routing_override=TrustedRoutingOverride(
+                pool_id=pool_id,
+                actor=actor,
+                reason=reason,
+            ),
+        )
+        return dict(response.parameters)
 
     @staticmethod
     def _parse_priority(raw: Any) -> int:
@@ -2047,6 +2091,15 @@ class MarieServerGateway(CompositeServer):
 
     async def _start_gateway_background_runtimes(self) -> None:
         await self.llm_dispatch_runtime.start()
+        self.logger.info(f"LLM execution mode: {self.llm_dispatch_runtime.mode}")
+        runtime_config = getattr(self.llm_dispatch_runtime, "config", None)
+        if (
+            getattr(runtime_config, "queue_contract_version", None) == 'v3'
+            and self.llm_dispatch_runtime._queue_client is not None
+        ):
+            self.job_scheduler.start_llm_routing_projection(
+                self.llm_dispatch_runtime._queue_client
+            )
 
     async def _stop_control_plane_tasks(self) -> None:
         tasks = {task for task in self._control_plane_tasks if not task.done()}
@@ -2310,7 +2363,16 @@ class MarieServerGateway(CompositeServer):
         *,
         unchanged_interval_s: float = LLM_DISPATCH_RUNTIME_IDLE_SNAPSHOT_INTERVAL_S,
     ) -> None:
-        snapshot = dispatch_runtime_live_state(limit_per_pool=50)
+        repository = getattr(
+            getattr(self.llm_dispatch_runtime, '_scheduler_config_source', None),
+            'repository',
+            None,
+        )
+        snapshot = await read_operator_runtime_snapshot(
+            fabric_group_id=self.llm_dispatch_runtime.config.fabric_group_id,
+            limit=50,
+            policy_repository=repository,
+        )
         fingerprint = _llm_dispatch_runtime_event_fingerprint(snapshot)
         now = time.monotonic()
         if not _should_publish_llm_dispatch_runtime_event(
@@ -2340,11 +2402,15 @@ class MarieServerGateway(CompositeServer):
         while True:
             try:
                 await self._publish_llm_dispatch_runtime_event()
+            except SnapshotUnavailable as exc:
+                self.logger.error(
+                    "LLM dispatch broadcast unavailable: %s",
+                    str(exc) or "runtime_snapshot_unavailable",
+                )
             except Exception as exc:
                 self.logger.error(
-                    "LLM dispatch broadcast error: %s",
-                    exc,
-                    exc_info=True,
+                    "LLM dispatch broadcast unavailable: %s",
+                    type(exc).__name__,
                 )
             await asyncio.sleep(interval_s)
 

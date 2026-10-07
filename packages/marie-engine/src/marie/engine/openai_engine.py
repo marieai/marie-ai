@@ -13,6 +13,7 @@ from marie.engine.completion_contract import (
     build_completion_call,
 )
 from marie.engine.engine_utils import (
+    check_image_preparation_budget,
     convert_openai_to_transformers_format,
     extract_text_info,
     is_batched_request,
@@ -29,44 +30,6 @@ API keys can be found or created at \
 https://platform.openai.com/account/api-keys
 """
 INVALID_API_KEY_ERROR_MESSAGE = """Invalid LLM API key."""
-
-
-# TODO: FIX DEFAULT_SYSTEM_PROMPT messages
-
-
-def _check_repetition(
-    text: str, min_repeats: int = 3, min_ngram_size: int = 1, max_ngram_size: int = 20
-) -> bool:
-    """
-    Return True if any n-gram of size between min_ngram_size and max_ngram_size
-    repeats at least min_repeats times consecutively at the very end of text.
-    """
-    tokens = text.split()
-    L = len(tokens)
-    # the largest n we could possibly repeat min_repeats times
-    possible_max_n = L // min_repeats
-    # clamp our n-gram window
-    start_n = max(1, min_ngram_size)
-    end_n = min(max_ngram_size, possible_max_n)
-
-    if start_n > end_n:
-        return False
-
-    for n in range(start_n, end_n + 1):
-        tail = tokens[-n:]
-        repeats = 1
-        # look back to see if the same tail appears min_repeats times
-        for k in range(2, min_repeats + 1):
-            start = -k * n
-            end = -(k - 1) * n
-            if tokens[start:end] == tail:
-                repeats += 1
-            else:
-                break
-        if repeats >= min_repeats:
-            return True
-
-    return False
 
 
 class OpenAIEngine(EngineLM):
@@ -89,6 +52,18 @@ class OpenAIEngine(EngineLM):
         batch_timeout: Optional[float] = None,
         **kwargs,
     ):
+        if any(
+            kwargs.get(name) is not None
+            for name in (
+                "pool_id",
+                "queue_pool_id",
+                "llm_queue_pool_id",
+                "queue_contract_version",
+                "llm_queue_contract_version",
+                "queue_producer_id",
+            )
+        ):
+            raise ValueError("caller_pool_forbidden")
         self.validate()
         super().__init__(
             model_string=model_name,
@@ -116,9 +91,9 @@ class OpenAIEngine(EngineLM):
             backend_address=backend_address,
             queue_enabled=kwargs.get("queue_enabled"),
             queue_client=kwargs.get("queue_client"),
-            queue_pool_id=kwargs.get("queue_pool_id"),
-            queue_producer_id=kwargs.get("queue_producer_id"),
+            queue_url=kwargs.get("queue_url"),
             queue_valkey_url=kwargs.get("queue_valkey_url"),
+            queue_fabric_group_id=kwargs.get("queue_fabric_group_id"),
         )
 
     def validate(self) -> None:
@@ -217,6 +192,10 @@ class OpenAIEngine(EngineLM):
         guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ):
+        if self.batch_processor.uses_v3_queue:
+            kwargs.setdefault(
+                "queue_deadline", time.monotonic() + self.batch_processor.batch_timeout
+            )
         return self.generate(
             content,
             guided_json=guided_json,
@@ -287,17 +266,66 @@ class OpenAIEngine(EngineLM):
 
         :return: A list of generated outputs corresponding to each input in batch_content.
         """
-        calls = self._build_completion_calls(
-            batch_content=batch_content,
-            system_prompt=system_prompt,
-            guided_json=guided_json,
-            **kwargs,
-        )
+        queue_deadline = kwargs.pop("queue_deadline", None)
+        cancellation = kwargs.pop("cancellation", None)
+        if self.batch_processor.uses_v3_queue:
+            from marie.engine.llm_queue.producer import PreparedCalls
+
+            queue_deadline = (
+                queue_deadline or time.monotonic() + self.batch_processor.batch_timeout
+            )
+            contexts = kwargs.get("request_contexts")
+            if contexts is not None and len(contexts) != len(batch_content):
+                contexts = None
+            item_kwargs = {
+                key: value for key, value in kwargs.items() if key != "request_contexts"
+            }
+
+            if self.is_multimodal:
+                for content in batch_content:
+                    check_image_preparation_budget(
+                        [item for item in content if isinstance(item, Image.Image)]
+                    )
+
+            def prepare(index: int) -> CompletionCallParams:
+                return self._build_completion_calls(
+                    batch_content=[batch_content[index]],
+                    system_prompt=system_prompt,
+                    guided_json=guided_json,
+                    request_contexts=(
+                        [contexts[index]] if contexts is not None else None
+                    ),
+                    **item_kwargs,
+                )[0]
+
+            calls = PreparedCalls(
+                len(batch_content),
+                prepare,
+                build_completion_call(
+                    model=self.model_string,
+                    messages=[],
+                    default_completion_params=self.batch_processor.default_completion_params,
+                    completion_params=kwargs.get("completion_params"),
+                    guided_json=guided_json,
+                    stream=False,
+                ),
+            )
+        else:
+            calls = self._build_completion_calls(
+                batch_content=batch_content,
+                system_prompt=system_prompt,
+                guided_json=guided_json,
+                **kwargs,
+            )
 
         self.logger.info(f"Initiating batch inference with {len(calls)} requests.")
         start_time = time.time()
         try:
             bp_kwargs = {}
+            if self.batch_processor.uses_v3_queue:
+                bp_kwargs.update(
+                    queue_deadline=queue_deadline, cancellation=cancellation
+                )
             if "metadata" in kwargs:
                 bp_kwargs["metadata"] = kwargs["metadata"]
 

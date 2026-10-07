@@ -16,6 +16,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, Optional, Set
 
+from marie.auth.api_key_manager import APIKeyManager
 from marie.messaging.events import EventMessage
 from marie.utils.utils import current_milli_time
 
@@ -69,6 +70,7 @@ class ConnectionState:
     """Per-connection state with event queue."""
 
     connection_id: str
+    api_key: str | None = field(default=None, repr=False)
     subscriptions: Dict[str, SubscriptionState] = field(default_factory=dict)
     event_queue: asyncio.Queue = field(
         default_factory=lambda: asyncio.Queue(maxsize=1024)
@@ -141,10 +143,12 @@ class GrpcEventBroker:
     # Connection lifecycle
     # ===================
 
-    async def register_connection(self, connection_id: str) -> asyncio.Queue:
+    async def register_connection(
+        self, connection_id: str, *, api_key: str | None = None
+    ) -> asyncio.Queue:
         """Register new connection, returns event queue."""
         async with self._lock:
-            conn = ConnectionState(connection_id=connection_id)
+            conn = ConnectionState(connection_id=connection_id, api_key=api_key)
             self._connections[connection_id] = conn
             logger.info(f"Connection registered: {connection_id}")
             return conn.event_queue
@@ -223,9 +227,9 @@ class GrpcEventBroker:
 
             logger.info(
                 f"Subscription created: {subscription_id} "
-                f"topics={sub.topics} events={sub.events} "
+                f"topic_count={len(sub.topics)} event_count={len(sub.events)} "
                 f"connection_id={connection_id} "
-                f"total_topic_subscribers={dict((t, len(s)) for t, s in self._topic_subscribers.items())}"
+                f"topic_count={len(self._topic_subscribers)}"
             )
             return replay_from, current_head
 
@@ -247,7 +251,11 @@ class GrpcEventBroker:
 
         count = 0
         for stored in ts.events:
-            if stored.sequence_num > from_seq and count < max_events:
+            if (
+                stored.sequence_num > from_seq
+                and count < max_events
+                and self._can_deliver(conn, sub, stored.event)
+            ):
                 envelope = self._create_envelope(sub, topic, stored)
                 try:
                     conn.event_queue.put_nowait(envelope)
@@ -259,7 +267,7 @@ class GrpcEventBroker:
                     break
 
         logger.debug(
-            f"Replayed {count} events to {sub.subscription_id} for topic {topic}"
+            f"Replayed {count} events to {sub.subscription_id} for selected topic"
         )
 
     async def unsubscribe(self, subscription_id: str) -> None:
@@ -324,7 +332,7 @@ class GrpcEventBroker:
             topic_subs = self._topic_subscribers.get(topic, set())
             wildcard_subs = self._topic_subscribers.get("*", set())
             logger.debug(
-                f"Publishing event: topic={topic}, event={msg.event}, seq={seq}, "
+                f"Publishing event: seq={seq}, "
                 f"topic_subs={len(topic_subs)}, wildcard_subs={len(wildcard_subs)}, "
                 f"total_connections={len(self._connections)}"
             )
@@ -333,6 +341,32 @@ class GrpcEventBroker:
             await self._dispatch_event(topic, seq, msg)
 
             return msg.id
+
+    @staticmethod
+    def _runtime_allowed(api_key: str | None, msg: EventMessage) -> bool:
+        payload = msg.payload if isinstance(msg.payload, dict) else {}
+        runtime = (
+            msg.event == 'llm.dispatch.runtime.snapshot'
+            or payload.get('event_type') == 'llm.dispatch.runtime.snapshot'
+            or payload.get('component') == 'llm_dispatch_runtime'
+        )
+        return not runtime or APIKeyManager.can_observe_runtime(
+            api_key, payload.get('fabric_group_id'), payload.get('tenant_id')
+        )
+
+    def _can_deliver(
+        self, conn: ConnectionState, sub: SubscriptionState, msg: EventMessage
+    ) -> bool:
+        return (
+            self._runtime_allowed(conn.api_key, msg)
+            and (not sub.events or msg.event in sub.events)
+            and self._matches_filter(msg, sub.filter_config)
+        )
+
+    def can_deliver_envelope(self, connection_id: str, envelope: EventEnvelope) -> bool:
+        conn = self._connections.get(connection_id)
+        sub = conn.subscriptions.get(envelope.subscription_id) if conn else None
+        return bool(conn and sub and self._can_deliver(conn, sub, envelope.event))
 
     async def _dispatch_event(self, topic: str, seq: int, msg: EventMessage) -> None:
         """Dispatch event to all matching subscriptions."""
@@ -358,6 +392,9 @@ class GrpcEventBroker:
             sub = conn.subscriptions.get(sub_id)
             if not sub:
                 logger.debug(f"Subscription {sub_id} not in connection {conn_id}")
+                continue
+
+            if not self._can_deliver(conn, sub, msg):
                 continue
 
             # Check event name filter
@@ -522,6 +559,8 @@ class GrpcEventBroker:
         topic: str,
         from_seq: int,
         max_events: int,
+        *,
+        api_key: str | None = None,
     ) -> tuple:
         """Get events from replay buffer. Returns (events, head, has_more)."""
         async with self._lock:
@@ -531,7 +570,11 @@ class GrpcEventBroker:
 
             events = []
             for stored in ts.events:
-                if stored.sequence_num > from_seq and len(events) < max_events:
+                if (
+                    stored.sequence_num > from_seq
+                    and len(events) < max_events
+                    and self._runtime_allowed(api_key, stored.event)
+                ):
                     events.append(stored)
 
             has_more = len(events) == max_events
@@ -569,6 +612,9 @@ class GrpcEventBroker:
 
                     for sub in conn.subscriptions.values():
                         for ack_id, in_flight in list(sub.pending_ack.items()):
+                            if not self._can_deliver(conn, sub, in_flight.event):
+                                sub.pending_ack.pop(ack_id)
+                                continue
                             age = now - in_flight.sent_at
 
                             if age > self._ack_timeout_s:

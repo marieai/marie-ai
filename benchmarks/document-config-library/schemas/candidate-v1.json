@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:marie:document-config-library:candidate:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "converterVersion",
+    "configurationId",
+    "blueprintId",
+    "sourceLockSha256",
+    "sourceRevision",
+    "readiness",
+    "findings",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "converterVersion": { "type": "string", "minLength": 1 },
+    "configurationId": {
+      "type": "string",
+      "pattern": "^document-config\\.[a-z0-9][a-z0-9.-]*$"
+    },
+    "blueprintId": {
+      "type": "string",
+      "pattern": "^bp\\.document-config\\.[a-z0-9][a-z0-9.-]*$"
+    },
+    "sourceLockSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "sourceRevision": { "type": "string", "minLength": 1 },
+    "readiness": { "const": "candidate" },
+    "findings": { "type": "array" },
+    "artifacts": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    }
+  }
+}

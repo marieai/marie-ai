@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Protocol
 
-from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
+from marie.engine.llm_queue.config import INTERNAL_LEGACY_POOL_ID
 from marie.engine.llm_queue.scheduler import DrrLaneConfig
 
 
@@ -79,10 +79,17 @@ def scheduler_config_from_mapping(
 def ensure_default_pool(
     config: LlmQueueSchedulerConfig,
     *,
-    default_pool_id: str = DEFAULT_LLM_QUEUE_POOL_ID,
+    default_pool_id: str = INTERNAL_LEGACY_POOL_ID,
 ) -> LlmQueueSchedulerConfig:
+    ids = [lane.pool_id for lane in config.lanes]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Duplicate lane identity")
     if not config.is_drr:
         return config
+    if any(
+        lane.pool_id == default_pool_id and not lane.enabled for lane in config.lanes
+    ):
+        raise ValueError("Disabled default lane requires an explicit routing policy")
     if any(lane.pool_id == default_pool_id and lane.enabled for lane in config.lanes):
         return config
     return LlmQueueSchedulerConfig(
@@ -106,10 +113,10 @@ def _lane_from_item(item: Any) -> DrrLaneConfig:
         raise ValueError("LLM queue scheduler lane entries must be strings or objects")
     return DrrLaneConfig(
         pool_id=str(item["pool_id"]),
-        quantum=int(item.get("quantum", 1)),
-        min_concurrent=int(item.get("min_concurrent", 0)),
-        max_concurrent=_optional_int(item.get("max_concurrent")),
-        max_burst_per_visit=_optional_int(item.get("max_burst_per_visit")),
+        quantum=item.get("quantum", 1),
+        min_concurrent=item.get("min_concurrent", 0),
+        max_concurrent=item.get("max_concurrent"),
+        max_burst_per_visit=item.get("max_burst_per_visit"),
         display_name=_optional_str(item.get("display_name")),
         endpoint_url=_optional_str(item.get("endpoint_url")),
         enabled=_to_bool(item.get("enabled"), True),
@@ -133,4 +140,4 @@ def _to_bool(value: object, default: bool) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+    raise ValueError("enabled must be a boolean")

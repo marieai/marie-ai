@@ -27,6 +27,9 @@ infrastructure=(
   lifecycle-proof-valkey
   lifecycle-proof-minio
   lifecycle-proof-clickhouse
+  lifecycle-proof-otel-collector
+  lifecycle-proof-ferretdb
+  lifecycle-proof-hyperdx
 )
 
 for phase in infrastructure migrating active suspended; do
@@ -60,9 +63,9 @@ for phase in infrastructure migrating active suspended; do
   if [[ "${phase}" == suspended ]]; then
     test "${provisioning_jobs}" -eq 0
   elif [[ "${phase}" == migrating ]]; then
-    test "${provisioning_jobs}" -eq 2
+    test "${provisioning_jobs}" -eq 3
   else
-    test "${provisioning_jobs}" -eq 1
+    test "${provisioning_jobs}" -eq 2
   fi
 done
 

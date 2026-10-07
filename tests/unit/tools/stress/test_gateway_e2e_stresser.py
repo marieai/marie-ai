@@ -28,7 +28,10 @@ from tools.stress.gateway_e2e_stresser import (
     _resolve_inputs,
     _resolve_runtime_config,
     _resolve_s3_inputs,
+    _routing_counters_settled,
+    _routing_qualification,
     _sanitize_report_value,
+    parse_args,
 )
 
 VALID_FAKE_API_KEY = "mau_" + ("A" * 54)
@@ -273,9 +276,15 @@ def test_parse_duration_seconds_supports_suffixes() -> None:
     assert _parse_duration_seconds("1.5m") == 90.0
 
 
-def test_build_input_assets_supports_existing_s3_mode(tmp_path: Path) -> None:
+def test_build_input_assets_supports_existing_s3_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     asset_path = tmp_path / "sample.tif"
     asset_path.write_text("x")
+    monkeypatch.setattr(
+        "tools.stress.gateway_e2e_stresser.document_page_count_from_uri",
+        lambda *_: 1,
+    )
 
     assets = _build_input_assets(
         input_glob=None,
@@ -300,6 +309,7 @@ def test_build_input_assets_supports_existing_s3_mode(tmp_path: Path) -> None:
     assert len(local_assets) == 1
     assert local_assets[0].local_path == asset_path.resolve()
     assert local_assets[0].existing_s3_uri is None
+    assert local_assets[0].page_count == 1
 
 
 def test_build_dry_run_plan_includes_resolved_payload_for_local_input(
@@ -324,6 +334,7 @@ def test_build_dry_run_plan_includes_resolved_payload_for_local_input(
                 source_name=asset_path.name,
                 source_path=str(asset_path),
                 local_path=asset_path.resolve(),
+                page_count=1,
             )
         ],
         job_count=1,
@@ -351,6 +362,7 @@ def test_build_dry_run_plan_includes_resolved_payload_for_local_input(
     assert submission["upload_companion_meta_planned"] is True
     assert submission["s3_uri"].startswith("s3://stress-bucket/extract/")
     assert submission["metadata"]["uri"] == submission["s3_uri"]
+    assert submission["metadata"]["page_count"] == 1
     assert (
         submission["request_payload"]["parameters"]["invoke_action"]["metadata"]["uri"]
         == submission["s3_uri"]
@@ -923,7 +935,7 @@ def test_build_metadata_injects_mock_failure_controls() -> None:
     assert second_run.force_fail is True
 
 
-def test_build_metadata_injects_fixed_llm_pool_controls() -> None:
+def test_normal_stress_request_contains_no_routing_selector() -> None:
     stresser = GatewayE2EStresser(
         gateway_host="localhost",
         gateway_port=51000,
@@ -951,17 +963,102 @@ def test_build_metadata_injects_fixed_llm_pool_controls() -> None:
         metadata_template={"source": "unit-test"},
         template_job_name=None,
         fault_profile="normal",
-        llm_pool_id="document-small",
     )
     run = stresser._build_run(stresser.input_assets[0], 0)
 
     metadata = stresser._build_metadata(run, sla_anchor_at=1000.0)
+    request = stresser._build_submit_request(run, metadata)
+    encoded = json.dumps(request)
 
-    assert run.llm_pool_id == "document-small"
-    assert metadata["pool_id"] == "document-small"
+    assert "pool_id" not in encoded
+    assert "LLM_QUEUE_CONTRACT_VERSION" not in encoded
 
 
-def test_build_metadata_cycles_llm_pool_controls() -> None:
+def test_removed_pool_selection_options_are_rejected() -> None:
+    common = [
+        "--s3-uri",
+        "s3://marie/sample.tif",
+        "--job-count",
+        "1",
+        "--planner",
+        "extract",
+    ]
+    for option in ("--llm-pool-id", "--llm-pool-cycle"):
+        with pytest.raises(SystemExit):
+            parse_args([*common, option, "document-small"])
+
+
+def test_input_counts_are_parsed_for_fixed_count_runs() -> None:
+    args = parse_args(
+        [
+            "--s3-uri-manifest",
+            "inputs.txt",
+            "--job-count",
+            "100",
+            "--input-counts",
+            "80,15,5",
+            "--planner",
+            "extract",
+        ]
+    )
+
+    assert args.input_counts == [80, 15, 5]
+
+
+@pytest.mark.parametrize(
+    "profile", ["max_tokens", "repetition", "persistent_repetition"]
+)
+def test_llm_output_fault_profile_is_accepted(profile: str) -> None:
+    args = parse_args(
+        [
+            "--s3-uri",
+            "s3://marie/sample.tif",
+            "--job-count",
+            "1",
+            "--planner",
+            "extract",
+            "--fault-profile",
+            profile,
+        ]
+    )
+
+    assert args.fault_profile == profile
+
+
+def test_operator_override_requires_admin_token_and_reason() -> None:
+    common = [
+        "--s3-uri",
+        "s3://marie/sample.tif",
+        "--job-count",
+        "1",
+        "--planner",
+        "extract",
+        "--routing-override-pool-id",
+        "document-small",
+    ]
+    with pytest.raises(SystemExit):
+        parse_args(common)
+    with pytest.raises(SystemExit):
+        parse_args([*common, "--routing-override-reason", "qualification"])
+
+    args = parse_args(
+        [
+            *common,
+            "--routing-override-reason",
+            "qualification",
+            "--routing-admin-token-env",
+            "TEST_ROUTING_ADMIN_TOKEN",
+        ],
+        environ={"TEST_ROUTING_ADMIN_TOKEN": VALID_FAKE_API_KEY},
+    )
+
+    assert args.routing_override_pool_id == "document-small"
+    assert args.routing_override_reason == "qualification"
+    assert args.routing_admin_token == VALID_FAKE_API_KEY
+
+
+def test_operator_override_uses_separate_admin_request_path() -> None:
+    admin_token = "mas_" + ("R" * 54)
     stresser = GatewayE2EStresser(
         gateway_host="localhost",
         gateway_port=51000,
@@ -978,7 +1075,7 @@ def test_build_metadata_cycles_llm_pool_controls() -> None:
                 existing_s3_uri="s3://marie/sample.tif",
             )
         ],
-        job_count=3,
+        job_count=1,
         run_time_seconds=None,
         submit_concurrency=1,
         submit_rate=1.0,
@@ -989,22 +1086,234 @@ def test_build_metadata_cycles_llm_pool_controls() -> None:
         metadata_template=None,
         template_job_name=None,
         fault_profile="normal",
-        llm_pool_cycle=["document-small", "document-medium"],
+        routing_override_pool_id="document-small",
+        routing_override_reason="qualification replay",
+        routing_admin_token=admin_token,
     )
-    runs = [stresser._build_run(stresser.input_assets[0], index) for index in range(3)]
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    payload = stresser._build_submit_request(
+        run, stresser._build_metadata(run, sla_anchor_at=1000.0)
+    )
 
-    metadata = [stresser._build_metadata(run, sla_anchor_at=1000.0) for run in runs]
+    request, path, token = stresser._operator_override_request(payload)
 
-    assert [run.llm_pool_id for run in runs] == [
-        "document-small",
-        "document-medium",
-        "document-small",
-    ]
-    assert [item["pool_id"] for item in metadata] == [
-        "document-small",
-        "document-medium",
-        "document-small",
-    ]
+    assert path == "/api/llm-dispatch/routing/override?fabric_group_id=default"
+    assert token == admin_token
+    assert request["pool_id"] == "document-small"
+    assert request["reason"] == "qualification replay"
+    assert request["submission"]["metadata"].get("pool_id") is None
+
+
+def test_routing_qualification_captures_route_policy_charge_and_replica() -> None:
+    first = _build_debug_snapshot(
+        stage="start",
+        payload={
+            "llm_dispatch": {
+                "dispatchers": [
+                    {
+                        "dispatcher_id": "dispatcher-a",
+                        "counters": {"retries": 4, "completed": 9},
+                    }
+                ],
+                "policy": {
+                    "desired_generation": 7,
+                    "desired_digest": "a" * 64,
+                    "observed_generation": 7,
+                    "observed_digest": "a" * 64,
+                    "synchronized": True,
+                },
+                "routing": {"projection_pending_count": 0},
+                "pools": [
+                    {
+                        "pool_id": "document-small",
+                        "accepted": 10,
+                        "completed": 9,
+                        "charged_cost": 40,
+                        "refunded_cost": 2,
+                        "committed_charge": 0,
+                    }
+                ],
+            }
+        },
+    )
+    last = _build_debug_snapshot(
+        stage="end",
+        payload={
+            "llm_dispatch": {
+                "dispatchers": [
+                    {
+                        "dispatcher_id": "dispatcher-a",
+                        "counters": {"retries": 7, "completed": 10},
+                    }
+                ],
+                "policy": {
+                    "desired_generation": 7,
+                    "desired_digest": "a" * 64,
+                    "observed_generation": 7,
+                    "observed_digest": "a" * 64,
+                    "synchronized": True,
+                },
+                "routing": {
+                    "projection_pending_count": 0,
+                    "matched": {"automatic": 11, "operator_override": 0},
+                },
+                "recent_routes": [
+                    {
+                        "job_id": "job-1",
+                        "work_unit_id": "work-1",
+                        "policy_generation": 7,
+                        "policy_digest": "a" * 64,
+                        "rule_digest": "b" * 64,
+                        "effective_page_count": 4,
+                        "pool_id": "document-small",
+                        "endpoint_group_id": "primary",
+                        "endpoint_revision": "r1",
+                        "routing_source": "automatic",
+                        "projection_state": "projected",
+                    }
+                ],
+                "pools": [
+                    {
+                        "pool_id": "document-small",
+                        "accepted": 11,
+                        "completed": 10,
+                        "charged_cost": 44,
+                        "refunded_cost": 2,
+                        "committed_charge": 0,
+                    }
+                ],
+                "live_requests": [
+                    {
+                        "attempt_id": "attempt-1",
+                        "pool_id": "document-small",
+                        "charge_sequence": 12,
+                        "charged_cost": 4,
+                        "refund_state": "not_refunded",
+                        "endpoint_group_id": "primary",
+                        "replica_id": "primary-a",
+                    }
+                ],
+                "endpoint_groups": [{"group_id": "primary", "revision": "r1"}],
+            }
+        },
+    )
+
+    result = _routing_qualification(
+        [first, last], job_ids={"job-1"}, requested_source="automatic"
+    )
+
+    assert result["available"] is True
+    assert result["policy"]["desired_generation"] == 7
+    assert result["routes"][0]["rule_digest"] == "b" * 64
+    assert result["routes"][0]["observed_pool_id"] == "document-small"
+    assert result["projection"]["current_run_projected"] is True
+    assert result["drr"]["document-small"]["delta"] == {
+        "accepted": 1,
+        "completed": 1,
+        "charged_cost": 4,
+        "refunded_cost": 0,
+        "committed_charge": 0,
+    }
+    assert result["dispatcher_counters"] == {
+        "before": {"completed": 9, "retries": 4},
+        "after": {"completed": 10, "retries": 7},
+        "delta": {"completed": 1, "retries": 3},
+    }
+    assert result["charges"][0]["charge_sequence"] == 12
+    assert result["charges"][0]["replica_id"] == "primary-a"
+
+
+def test_routing_counters_wait_for_completed_store_commit() -> None:
+    def snapshot(
+        stage: str, *, accepted: int, completed: int, inflight: int
+    ) -> object:
+        return _build_debug_snapshot(
+            stage=stage,
+            payload={
+                "llm_dispatch": {
+                    "runtime_summary": {
+                        "pending_request_count": 0,
+                        "inflight_request_count": inflight,
+                    },
+                    "routing": {"projection_pending_count": 0},
+                    "pools": [
+                        {
+                            "pool_id": "document-large",
+                            "accepted": accepted,
+                            "completed": completed,
+                        }
+                    ],
+                }
+            },
+        )
+
+    start = snapshot("start", accepted=10, completed=10, inflight=0)
+    before_commit = snapshot("settle", accepted=12, completed=11, inflight=1)
+    unavailable = _build_debug_snapshot(stage="settle", error="HTTP 503")
+    after_commit = snapshot("settle", accepted=12, completed=12, inflight=0)
+
+    assert not _routing_counters_settled(
+        [start, before_commit, unavailable],
+        expected_accepted=2,
+        expected_completed=2,
+    )
+    assert _routing_counters_settled(
+        [start, before_commit, unavailable, after_commit],
+        expected_accepted=2,
+        expected_completed=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_routing_counter_wait_uses_live_job_counts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stresser = make_gateway_correctness_stresser(
+        debug_sample_interval=1,
+        routing_settle_timeout=1,
+    )
+    for index in range(2):
+        run = stresser._build_run(stresser.input_assets[0], index)
+        run.job_id = f"job-{index}"
+        run.completed_at = 100.0 + index
+        stresser._register_run(run)
+
+    def snapshot(stage: str, *, accepted: int, completed: int) -> object:
+        return _build_debug_snapshot(
+            stage=stage,
+            payload={
+                "llm_dispatch": {
+                    "runtime_summary": {
+                        "pending_request_count": 0,
+                        "inflight_request_count": 0,
+                    },
+                    "routing": {"projection_pending_count": 0},
+                    "pools": [
+                        {
+                            "pool_id": "document-large",
+                            "accepted": accepted,
+                            "completed": completed,
+                        }
+                    ],
+                }
+            },
+        )
+
+    stresser._debug_samples.append(snapshot("start", accepted=0, completed=0))
+    captures = 0
+
+    async def capture(stage: str) -> None:
+        nonlocal captures
+        captures += 1
+        stresser._debug_samples.append(
+            snapshot(stage, accepted=2, completed=min(captures, 2))
+        )
+
+    monkeypatch.setattr(stresser, "_capture_debug_snapshot", capture)
+
+    await stresser._wait_for_routing_counters()
+
+    assert captures == 2
 
 
 def test_build_metadata_injects_purge_annotators_feature_for_mock_llm() -> None:
@@ -1200,6 +1509,24 @@ def test_build_debug_snapshot_extracts_scheduler_fields() -> None:
     assert snapshot.llm_dispatch_running_dispatchers == 1
 
 
+def test_build_debug_snapshot_extracts_current_dispatcher_summary() -> None:
+    snapshot = _build_debug_snapshot(
+        stage="periodic",
+        status_code=200,
+        payload={
+            "llm_dispatch": {
+                "runtime_summary": {
+                    "registered_dispatchers": 1,
+                    "running_dispatchers": 1,
+                }
+            }
+        },
+    )
+
+    assert snapshot.llm_dispatch_registered_dispatchers == 1
+    assert snapshot.llm_dispatch_running_dispatchers == 1
+
+
 @pytest.mark.asyncio
 async def test_capture_debug_snapshot_records_gateway_debug_state() -> None:
     stresser = GatewayE2EStresser(
@@ -1265,7 +1592,10 @@ async def test_capture_debug_snapshot_records_gateway_debug_state() -> None:
     assert snapshot.event_queue_size == 0
     assert snapshot.llm_dispatch_registered_dispatchers == 1
     assert snapshot.llm_dispatch_running_dispatchers == 1
-    assert stresser._http_session.last_url == "http://localhost:51000/api/debug"
+    assert (
+        stresser._http_session.last_url
+        == "http://localhost:51000/api/debug?fabric_group_id=default"
+    )
 
 
 def test_write_json_report_includes_debug_samples(tmp_path: Path) -> None:
@@ -1441,6 +1771,55 @@ def make_gateway_correctness_stresser(**overrides: Any) -> GatewayE2EStresser:
     return GatewayE2EStresser(**arguments)
 
 
+def test_input_counts_create_an_exact_mixed_submission_schedule() -> None:
+    assets = [
+        InputAsset(
+            source_name=f"input-{index}.tif",
+            source_path=f"s3://marie/input-{index}.tif",
+            existing_s3_uri=f"s3://marie/input-{index}.tif",
+        )
+        for index in range(3)
+    ]
+    stresser = make_gateway_correctness_stresser(
+        input_assets=assets,
+        job_count=100,
+        input_counts=[80, 15, 5],
+    )
+
+    selected = [stresser._input_asset_for_job(index) for index in range(100)]
+
+    assert [selected.count(asset) for asset in assets] == [80, 15, 5]
+    assert {asset.source_name for asset in selected[:10]} == {
+        "input-0.tif",
+        "input-1.tif",
+        "input-2.tif",
+    }
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_timeout_remains_unresolved() -> None:
+    stresser = make_gateway_correctness_stresser(
+        max_event_timeout_jobs=0,
+        max_open_jobs=0,
+    )
+    run = stresser._build_run(stresser.input_assets[0], 0)
+    run.job_id = "job-1"
+    run.submit_started_at = 100.0
+    run.submit_finished_at = 101.0
+    stresser._register_run(run)
+
+    await stresser._wait_for_terminal_states()
+    stresser._finalize_metrics()
+    report = stresser.build_report_payload()
+
+    assert run.terminal_status is None
+    assert run.event_timeout_at is not None
+    assert run.end_to_end_ms is None
+    assert stresser.metrics.event_timeout_jobs == 1
+    assert report["reliability"]["observed"]["open_jobs"] == 1
+    assert report["jobs"][0]["event_timeout"] is True
+
+
 def test_mock_process_time_must_be_positive() -> None:
     with pytest.raises(ValueError, match="--mock-process-time must be greater"):
         make_gateway_correctness_stresser(mock_process_time=0)
@@ -1544,7 +1923,7 @@ async def test_preflight_allows_queue_created_during_submission(
     )
 
     async def fetch(path: str) -> tuple[int, dict[str, Any]]:
-        if path == "/api/debug":
+        if path == "/api/debug?fabric_group_id=default":
             return 200, {"scheduler_info": {"known_queues": []}}
         return 200, {
             "api_key": VALID_FAKE_API_KEY,
@@ -1579,7 +1958,7 @@ async def test_preflight_proceeds_when_executor_has_no_available_capacity(
     )
 
     async def fetch(path: str) -> tuple[int, dict[str, Any]]:
-        if path == "/api/debug":
+        if path == "/api/debug?fabric_group_id=default":
             return 200, {"scheduler_info": {"known_queues": []}}
         return 200, {
             "slots": [
@@ -1615,7 +1994,7 @@ async def test_preflight_proceeds_when_capacity_endpoint_is_unavailable(
     )
 
     async def fetch(path: str) -> tuple[int, dict[str, Any]]:
-        if path == "/api/debug":
+        if path == "/api/debug?fabric_group_id=default":
             return 200, {"scheduler_info": {"known_queues": []}}
         raise OSError("capacity endpoint unavailable")
 

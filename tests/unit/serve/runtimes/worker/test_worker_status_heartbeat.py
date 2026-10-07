@@ -1,12 +1,128 @@
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 
 from marie.serve.discovery.base import ConnectionState
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned_error", [False, True])
+async def test_failed_job_metadata_omits_diagnostics_by_default(
+    monkeypatch, returned_error: bool
+) -> None:
+    monkeypatch.delenv("MARIE_SILENCE_EXCEPTIONS", raising=False)
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MagicMock()
+    handler._deployment = "annotator_llm"
+    handler.is_dry_run = MagicMock(return_value=False)
+    handler._sem_untrack = MagicMock(return_value=None)
+    handler._request_attributes = MagicMock(return_value={})
+    handler._schedule_deployment_ready_after_terminal = MagicMock()
+    handler._job_info_client = SimpleNamespace(put_status=AsyncMock())
+
+    try:
+        raise RuntimeError("request failed")
+    except RuntimeError as error:
+        await handler._record_failed_job(
+            "job-1",
+            [],
+            None if returned_error else error,
+            {},
+            return_data={
+                "error_details": {
+                    "type": "RuntimeError",
+                    "message": "request failed",
+                    "filename": "/internal/worker/task.py",
+                    "traceback": "internal traceback",
+                    "cause": {"message": "internal downstream details"},
+                }
+            },
+        )
+
+    handler._job_info_client.put_status.assert_awaited_once()
+    runtime_env = handler._job_info_client.put_status.call_args.kwargs[
+        "jobinfo_replace_kwargs"
+    ]["runtime_env"]
+    assert set(runtime_env["error"]) == {
+        "type",
+        "message",
+        "filename",
+        "name",
+        "line_no",
+    }
+    assert "/internal/" not in runtime_env["error"]["filename"]
+
+
+def test_worker_status_updates_include_executor_details() -> None:
+    handler = object.__new__(WorkerRequestHandler)
+    handler._node = "worker-1:5000"
+    handler._deployment = "annotator_llm"
+    handler._worker_id = "annotator_llm/rep-0@worker-1:5000"
+    handler._status_store = MagicMock()
+    handler._status_store.set_not_serving.return_value = None
+    handler._status_store.set_serving.return_value = None
+    details = {"feature": {"mode": "enabled"}}
+    handler._executor = SimpleNamespace(
+        deployment_status_details=MagicMock(return_value=details)
+    )
+    handler._claim_and_mark = MagicMock(
+        side_effect=lambda **kwargs: kwargs["final_apply"]() or True
+    )
+
+    assert handler._claim_and_mark_ready() is True
+    handler._status_store.set_not_serving.assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        details=details,
+    )
+
+    assert handler._claim_and_mark_serving() is True
+    handler._status_store.set_serving.assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        details=details,
+    )
+    assert handler._executor.deployment_status_details.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("transition", "status_method"),
+    [
+        ("_claim_and_mark_ready", "set_not_serving"),
+        ("_claim_and_mark_serving", "set_serving"),
+    ],
+)
+def test_worker_status_transition_survives_executor_metadata_failure(
+    transition: str, status_method: str
+) -> None:
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MagicMock()
+    handler._node = "worker-1:5000"
+    handler._deployment = "annotator_llm"
+    handler._worker_id = "annotator_llm/rep-0@worker-1:5000"
+    handler._desired_store = MagicMock()
+    handler._desired_store.get.return_value = SimpleNamespace(
+        phase="SCHEDULED", epoch=1
+    )
+    handler._status_store = MagicMock()
+    handler._status_store.claim.return_value = True
+    handler._executor = SimpleNamespace(
+        deployment_status_details=MagicMock(side_effect=RuntimeError("metadata failed"))
+    )
+
+    assert getattr(handler, transition)() is True
+    getattr(handler._status_store, status_method).assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        details={},
+    )
 
 
 def _handler(connection_state: ConnectionState) -> WorkerRequestHandler:

@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable
 
 from marie.logging_core.logger import MarieLogger
 from marie.messaging import mark_as_failed as mark_as_failed_toast
 from marie.messaging import mark_as_scheduled as mark_as_scheduled_toast
+from marie.query_planner.base import QueryPlan
+from marie.scheduler.llm_routing import (
+    PlannedLlmRoute,
+    RoutingSubmissionError,
+    TrustedRoutingContext,
+    admission_routing_metrics,
+    normalize_routing_facts,
+    plan_llm_routes,
+    reject_external_routing_selectors,
+)
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
 from marie.scheduler.planner_util import query_plan_work_items
 from marie.scheduler.repository import JobRepository
+from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
 
@@ -85,6 +97,25 @@ class DagSubmissionService:
         for dag_work_info in dag_nodes:
             dag_work_info.dag_id = submission_id
 
+        try:
+            llm_routes = await self._plan_llm_routes(work_info, plan, dag_nodes)
+        except RoutingSubmissionError as exc:
+            routing_context = work_info.routing_context
+            fabric_group_id = work_info.routing_fabric_group_id
+            if fabric_group_id is None and routing_context is not None:
+                fabric_group_id = routing_context.policy.fabric_group_id
+            if fabric_group_id:
+                admission_routing_metrics.record_rejection(
+                    fabric_group_id=fabric_group_id,
+                    category=exc.category,
+                )
+            raise
+        for route in llm_routes:
+            admission_routing_metrics.record_match(
+                fabric_group_id=route.fabric_group_id,
+                category=route.routing_source.replace('-', '_'),
+            )
+
         scheduler_trace(
             'dag_persist_start',
             job_id=submission_id,
@@ -97,6 +128,7 @@ class DagSubmissionService:
             plan=plan,
             dag_nodes=dag_nodes,
             work_info=work_info,
+            llm_routes=llm_routes,
         )
         if not new_key_added:
             raise ValueError(
@@ -132,6 +164,101 @@ class DagSubmissionService:
                 f'Failed to notify scheduler for durable DAG {submission_id}: {error}'
             )
         return submission_id
+
+    async def _plan_llm_routes(
+        self,
+        work_info: WorkInfo,
+        plan: QueryPlan,
+        dag_nodes: list[WorkInfo],
+    ) -> tuple[PlannedLlmRoute, ...]:
+        if not any(str(node.definition.method).upper() == 'LLM' for node in plan.nodes):
+            return ()
+        reject_external_routing_selectors(work_info.data)
+
+        context = work_info.routing_context
+        if context is None:
+            fabric_group_id = work_info.routing_fabric_group_id
+            if not fabric_group_id:
+                raise RoutingSubmissionError('routing_facts_missing')
+            policy = await self.repository.load_active_admission_policy(fabric_group_id)
+            if policy is None:
+                raise RoutingSubmissionError('routing_policy_unavailable')
+            metadata = work_info.data.get('metadata', {})
+            metadata = metadata if isinstance(metadata, dict) else {}
+            uri = metadata.get('uri')
+            document_id = metadata.get('document_id')
+            if uri is not None and not isinstance(uri, str):
+                raise RoutingSubmissionError('routing_facts_invalid')
+            if document_id is not None and not isinstance(document_id, str):
+                raise RoutingSubmissionError('routing_facts_invalid')
+            document = await self.repository.get_submission_document_for_routing(
+                document_id=document_id,
+                storage_key=uri,
+            )
+            if document_id is not None and document is None:
+                raise RoutingSubmissionError('routing_facts_missing')
+            if document is not None and uri and document.storage_key != uri:
+                raise RoutingSubmissionError('routing_facts_invalid')
+
+            workload_kind = 'document' if document is not None or uri else 'text'
+            page_count = metadata.get('page_count')
+            if (
+                type(page_count) is float
+                and math.isfinite(page_count)
+                and page_count.is_integer()
+            ):
+                page_count = int(page_count)
+            if page_count is not None and (
+                type(page_count) is not int or page_count < 1
+            ):
+                raise RoutingSubmissionError('routing_facts_invalid')
+            if workload_kind == 'document':
+                resolved_uri = document.storage_key if document is not None else uri
+                if not resolved_uri:
+                    raise RoutingSubmissionError('routing_facts_missing')
+                if document is None:
+                    if page_count is None:
+                        raise RoutingSubmissionError('routing_facts_missing')
+                    document = SubmissionDocument(
+                        id='',
+                        submission_id='',
+                        file_name=resolved_uri.rsplit('/', 1)[-1],
+                        file_size=0,
+                        content_type='application/octet-stream',
+                        storage_key=resolved_uri,
+                        page_count=page_count,
+                    )
+                elif document.page_count is None:
+                    if page_count is None:
+                        raise RoutingSubmissionError('routing_facts_missing')
+                    document.page_count = page_count
+                elif page_count is not None and page_count != document.page_count:
+                    raise RoutingSubmissionError('routing_facts_invalid')
+            elif page_count is not None:
+                raise RoutingSubmissionError('routing_facts_invalid')
+            requested_pages = metadata.get('pages')
+            if requested_pages is not None and not isinstance(requested_pages, list):
+                raise RoutingSubmissionError('routing_facts_invalid')
+            facts = normalize_routing_facts(
+                document=document,
+                requested_pages=requested_pages,
+                workload_kind=workload_kind,
+                workload_mode='batch',
+                pipeline_stage=None,
+                request_source=work_info.routing_request_source or 'workflow',
+            )
+            context = TrustedRoutingContext(base_facts=facts, policy=policy)
+            work_info.routing_context = context
+
+        routes = plan_llm_routes(
+            root=work_info,
+            plan=plan,
+            nodes=dag_nodes,
+            policy=context.policy,
+            base_facts=context.base_facts,
+            override=work_info.routing_override,
+        )
+        return routes
 
     async def is_valid_submission(
         self,

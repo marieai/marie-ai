@@ -77,6 +77,7 @@ class DAGManagementService:
         self._admission_task: Optional[asyncio.Task] = None
         self._admission_running = False
         self._admission_source = "startup"
+        self._capacity_deferred_dag_ids: dict[str, None] = {}
 
         # Sync task
         self._sync_task: Optional[asyncio.Task] = None
@@ -167,6 +168,8 @@ class DAGManagementService:
 
     async def request_admission(self, source: str) -> bool:
         """Wake the single durable admission worker."""
+        if source in {"deployment_update", "executor_capacity_released"}:
+            self._capacity_deferred_dag_ids.clear()
         coalesced = self._admission_event.is_set()
         self._admission_source = source
         self._admission_event.set()
@@ -208,10 +211,18 @@ class DAGManagementService:
                 retry_delay = ADMISSION_RETRY_MIN_SECONDS
 
                 while self._admission_running:
+                    capacity_deferred_before = len(self._capacity_deferred_dag_ids)
                     result = await self.admit_durable_candidates(source=source)
                     if result["admitted"] == 0:
                         if result["deferred"] == 0:
                             break
+                        if (
+                            len(self._capacity_deferred_dag_ids)
+                            > capacity_deferred_before
+                        ):
+                            source = "capacity_scan"
+                            retry_delay = ADMISSION_RETRY_MIN_SECONDS
+                            continue
                         try:
                             await asyncio.wait_for(
                                 self._admission_event.wait(), timeout=retry_delay
@@ -282,7 +293,10 @@ class DAGManagementService:
         candidate_rows = await self.repository.discover_admission_candidates(
             limit=candidate_limit,
             sla_interval_seconds=self._sla_priority_interval_seconds,
-            excluded_dag_ids=tuple(self.active_dags),
+            excluded_dag_ids=(
+                *self.active_dags,
+                *self._capacity_deferred_dag_ids,
+            ),
         )
         if not candidate_rows:
             return {"candidates": 0, "admitted": 0, "deferred": 0, "skipped": 0}
@@ -330,6 +344,7 @@ class DAGManagementService:
                 dag_id, dag, nodes, source=f"durable_admission:{source}"
             )
             if was_admitted:
+                self._capacity_deferred_dag_ids.pop(dag_id, None)
                 admitted += 1
                 scheduler_trace(
                     "dag_frontier_added",
@@ -343,6 +358,8 @@ class DAGManagementService:
                     break
             else:
                 deferred += 1
+                if reason == "executor_capacity":
+                    self._capacity_deferred_dag_ids[dag_id] = None
                 scheduler_trace(
                     "dag_frontier_deferred",
                     dag_id=dag_id,
@@ -550,6 +567,7 @@ class DAGManagementService:
             self._job_cache.pop(dag_job.id, None)
 
         removed = self.active_dags.pop(dag_id, None) is not None
+        self._capacity_deferred_dag_ids.pop(dag_id, None)
         self.logger.debug(
             f"Evicted DAG {dag_id} from memory ({reason}); "
             f"removed={removed}, finalize_stats={stats}"
@@ -617,6 +635,7 @@ class DAGManagementService:
             elif op == "UPDATE":
                 new_state = payload.get("state")
                 if new_state == "created":
+                    self._capacity_deferred_dag_ids.pop(dag_id, None)
                     removed = await self.evict_dag(dag_id, "reset to created")
                     await self.request_admission("dag_state_created")
                     admission_requested = True

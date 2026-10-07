@@ -1,0 +1,67 @@
+{{- if and .Values.enabled .Values.schema.enabled (eq (include "marie.lifecycleSuspended" .) "false") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickhouse.fullname" . }}-otel-schema
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+data:
+  otel-schema.sql: |
+{{ .Files.Get "files/otel-schema.sql" | indent 4 }}
+---
+# Applies the observability schema once ClickHouse answers. The SQL is idempotent, so
+# existing installations pick up new tables and columns on upgrade.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "clickhouse.fullname" . }}-otel-schema
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickhouse.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.schema.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.schema.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "clickhouse.name" . }}-schema
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: apply-schema
+          image: {{ include "clickhouse.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: CLICKHOUSE_HOST
+              value: {{ include "clickhouse.fullname" . | quote }}
+            - name: CLICKHOUSE_USER
+              value: {{ .Values.config.defaultUser | quote }}
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ .Values.config.defaultPassword | quote }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until clickhouse-client --host "$CLICKHOUSE_HOST" --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query "SELECT 1" >/dev/null 2>&1; do
+                echo "waiting for ClickHouse at $CLICKHOUSE_HOST"
+                sleep 3
+              done
+              clickhouse-client --host "$CLICKHOUSE_HOST" --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery < /schema/otel-schema.sql
+          volumeMounts:
+            - name: schema
+              mountPath: /schema
+              readOnly: true
+      volumes:
+        - name: schema
+          configMap:
+            name: {{ include "clickhouse.fullname" . }}-otel-schema
+{{- end }}

@@ -1,5 +1,7 @@
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
@@ -130,6 +132,64 @@ def supports_ocr_input(
     except (FileNotFoundError, ValueError):
         return False
     return canonical in OCR_RASTER_FORMATS
+
+
+def document_page_count_from_uri(
+    uri: str, max_bytes: int, timeout_seconds: float
+) -> int:
+    """Read a document container's page count within submission bounds."""
+    if (
+        not isinstance(uri, str)
+        or not uri
+        or type(max_bytes) is not int
+        or max_bytes < 1
+        or not isinstance(timeout_seconds, (int, float))
+        or timeout_seconds <= 0
+    ):
+        raise ValueError('Invalid page-count request')
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='page-count')
+    future = executor.submit(_document_page_count, uri, max_bytes)
+    try:
+        return future.result(timeout=float(timeout_seconds))
+    except FutureTimeoutError as exc:
+        future.cancel()
+        raise TimeoutError('Document page-count deadline exceeded') from exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _document_page_count(uri: str, max_bytes: int) -> int:
+    path = Path(StorageManager.get_local_path(uri))
+    if not path.is_file():
+        raise FileNotFoundError(f'Document not found: {uri}')
+    size = path.stat().st_size
+    if size < 1:
+        raise ValueError('Document is empty')
+    if size > max_bytes:
+        raise DocumentTooLargeError(
+            f'Document has {size} bytes; submission limit is {max_bytes}'
+        )
+
+    try:
+        canonical = get_document_type(str(path))
+    except ValueError as exc:
+        raise UnsupportedOcrInputError(f'Page counting does not support {uri}') from exc
+    if canonical == 'pdf':
+        from PyPDF4 import PdfFileReader
+
+        with path.open('rb') as stream:
+            count = PdfFileReader(stream, strict=False).getNumPages()
+    elif canonical in OCR_RASTER_FORMATS:
+        _register_heif()
+        with Image.open(path) as image:
+            count = int(getattr(image, 'n_frames', 1))
+    else:
+        raise UnsupportedOcrInputError(
+            f'Page counting does not support {canonical or path.suffix}'
+        )
+    if count < 1:
+        raise ValueError('Document has no pages')
+    return count
 
 
 def load_document(

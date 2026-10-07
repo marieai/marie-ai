@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from opentelemetry import metrics as otel_metrics
-
 from marie.engine.llm_queue.registry import dispatch_runtime_snapshot
+from opentelemetry import metrics as otel_metrics
 
 try:  # pragma: no cover - import surface varies by OTel version
     from opentelemetry.metrics import Observation
@@ -99,6 +98,24 @@ class DispatchMetrics:
                 callbacks=[self._observe_lane_oldest_pending_seconds],
                 description="Age of the oldest pending request per DRR lane",
                 unit="s",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_charged_cost_total",
+                callbacks=[self._observe_lane_charged_cost],
+                description="Cumulative durable DRR charge per lane",
+                unit="{cost_units}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_refunded_cost_total",
+                callbacks=[self._observe_lane_refunded_cost],
+                description="Cumulative durable DRR refund per lane",
+                unit="{cost_units}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_replica_reserved_items",
+                callbacks=[self._observe_replica_reserved_items],
+                description="Current reserved calls per physical replica",
+                unit="{requests}",
             )
 
     def record_batch(
@@ -220,6 +237,36 @@ class DispatchMetrics:
 
     def _observe_lane_oldest_pending_seconds(self, _options: Any):
         return self._observe_lane_metric("oldest_pending_age_seconds")
+
+    def _observe_lane_charged_cost(self, _options: Any):
+        return self._observe_lane_metric("charged_cost")
+
+    def _observe_lane_refunded_cost(self, _options: Any):
+        return self._observe_lane_metric("refunded_cost")
+
+    def _observe_replica_reserved_items(self, _options: Any):
+        snapshot = dispatch_runtime_snapshot()
+        observations = []
+        contract_version = str(snapshot.get("contract_version", "unknown"))
+        for dispatcher in snapshot.get("dispatchers", []):
+            for replica_id, replica in (dispatcher.get("endpoints") or {}).items():
+                value = replica.get("reserved_items")
+                if value is None:
+                    continue
+                observations.append(
+                    Observation(
+                        value,
+                        {
+                            "contract_version": contract_version,
+                            "dispatcher_id": str(dispatcher.get("dispatcher_id", "")),
+                            "fabric_group_id": str(
+                                dispatcher.get("fabric_group_id", "")
+                            ),
+                            "replica_id": str(replica_id),
+                        },
+                    )
+                )
+        return observations
 
     def _observe_lane_metric(self, value_key: str):
         snapshot = dispatch_runtime_snapshot()

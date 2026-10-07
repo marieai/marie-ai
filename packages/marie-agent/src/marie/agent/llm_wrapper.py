@@ -224,10 +224,8 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         """
         kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
 
-        # Make API call
         response = self.client.chat.completions.create(**kwargs)
 
-        # Parse response
         choice = response.choices[0]
         message = self._openai_to_message(choice.message)
 
@@ -257,6 +255,43 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
                 max_retries=self._max_retries,
             )
         return self._async_client
+
+    # Generation options forwarded to the API as-is when present in extra_generate_cfg.
+    _PASSTHROUGH_KEYS = (
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "seed",
+        "stop",
+        "response_format",
+        "reasoning_effort",
+        "presence_penalty",
+        "frequency_penalty",
+    )
+
+    @classmethod
+    def _apply_generate_cfg(
+        cls, kwargs: Dict[str, Any], extra_generate_cfg: Optional[Dict[str, Any]]
+    ) -> None:
+        """Map extra_generate_cfg onto chat.completions.create kwargs.
+
+        Known OpenAI parameters are forwarded directly. ``extra_body`` is forwarded as the SDK's
+        ``extra_body`` so server-specific fields reach the endpoint, and ``chat_template_kwargs``
+        (e.g. ``{"enable_thinking": False}`` for Qwen3 on vLLM) is folded into it.
+        """
+        if not extra_generate_cfg:
+            return
+        for key in cls._PASSTHROUGH_KEYS:
+            if key in extra_generate_cfg and extra_generate_cfg[key] is not None:
+                kwargs[key] = extra_generate_cfg[key]
+        extra_body: Dict[str, Any] = dict(extra_generate_cfg.get("extra_body") or {})
+        if extra_generate_cfg.get("chat_template_kwargs"):
+            extra_body["chat_template_kwargs"] = {
+                **extra_body.get("chat_template_kwargs", {}),
+                **extra_generate_cfg["chat_template_kwargs"],
+            }
+        if extra_body:
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
 
     def _build_api_kwargs(
         self,

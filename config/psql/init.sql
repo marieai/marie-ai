@@ -5,6 +5,9 @@ ALTER SYSTEM SET max_connections = 500;
 -- =========================================================
 SET search_path = public, marie_scheduler, pg_catalog;
 
+CREATE EXTENSION IF NOT EXISTS pgstattuple WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pg_repack;
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='pg_stat_statements') THEN

@@ -1,6 +1,7 @@
 import base64
 import io
 import math
+import os
 from typing import List, Union
 
 import torch
@@ -150,6 +151,22 @@ def smart_resize(
     return h_bar, w_bar
 
 
+def check_image_preparation_budget(images: List[Image.Image]) -> None:
+    """Reject an indivisible image group before RGB/formatter allocations."""
+    budget = int(os.getenv('MARIE_LLM_PREPARATION_BYTES', str(128 * 1024 * 1024)))
+    if budget <= 0:
+        raise ValueError('Image preparation budget must be positive')
+    required = sum(
+        image.width * image.height * (max(4, len(image.getbands())) + 8)
+        for image in images
+    )
+    if required > budget:
+        raise ValueError(
+            f'Image preparation requires {required} bytes; '
+            f'MARIE_LLM_PREPARATION_BYTES is {budget}'
+        )
+
+
 def open_ai_like_formatting(
     content: List[Union[str, bytes, Image.Image]], remote: bool = False, **options
 ) -> List[dict]:
@@ -179,8 +196,8 @@ def open_ai_like_formatting(
         if isinstance(item, Image.Image):
             if remote:
                 with io.BytesIO() as buffer:
-                    item.convert("RGB").save(buffer, format="PNG")
-                    # Image.open(item).convert("RGB").save(buffer, format="PNG")
+                    with item.convert("RGB") as rgb:
+                        rgb.save(buffer, format="PNG")
                     bytes_data = buffer.getvalue()
                 image_type = get_image_type_from_bytes(bytes_data)
                 base64_image = base64.b64encode(bytes_data).decode('utf-8')

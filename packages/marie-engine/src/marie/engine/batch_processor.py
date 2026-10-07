@@ -15,9 +15,12 @@ from marie.engine.circuit_breaker import (
 from marie.engine.completion_contract import (
     CompletionCallParams,
     RequestContext,
+    apply_repetition_recovery,
     build_completion_call,
     completion_finish_reason,
     extract_completion_text,
+    has_terminal_repetition,
+    recover_complete_json,
 )
 from marie.engine.exceptions import (
     BatchExecutionError,
@@ -25,8 +28,11 @@ from marie.engine.exceptions import (
     MaxTokensExceededError,
     RepetitionError,
 )
-from marie.engine.llm_queue.config import LlmQueueConfig
-from marie.engine.llm_queue.queue_io import ListQueueClient, ValkeyListQueueClient
+from marie.engine.llm_queue.config import (
+    LlmQueueProducerConfig,
+    LlmQueueRuntimeConfig,
+)
+from marie.engine.llm_queue.queue_io import ListQueueClient, StoreListQueueClient
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.openai_compat import execute_completion_call
 from marie.instrumentation import (
@@ -83,16 +89,6 @@ def _is_pool_timeout(exc: BaseException) -> bool:
         return False
 
 
-def _resolve_effective_queue_pool_id(
-    fallback_pool_id: str, metadata: Optional[Dict[str, Any]]
-) -> str:
-    if isinstance(metadata, dict):
-        value = metadata.get("pool_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return fallback_pool_id
-
-
 def _should_retry(exc: BaseException) -> bool:
     """Return True if the exception is retryable.
 
@@ -103,6 +99,8 @@ def _should_retry(exc: BaseException) -> bool:
         timeout_source = "connection pool" if _is_pool_timeout(exc) else "request"
         logger.warning("%s timeout detected; skipping retry", timeout_source)
         return False
+    if isinstance(exc, RepetitionError):
+        return exc.retryable
     return True
 
 
@@ -117,7 +115,6 @@ def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
         wait=wait_exponential(multiplier=1, min=min_seconds, max=max_seconds),
         retry=(
             retry_if_exception_type(RepetitionError)
-            | retry_if_exception_type(MaxTokensExceededError)
             | retry_if_exception_type(APIError)
             | retry_if_exception_type(APIConnectionError)
             | retry_if_exception_type(APITimeoutError)
@@ -146,9 +143,9 @@ class BatchProcessor:
         backend_address: Optional[str] = None,
         queue_enabled: Optional[bool] = None,
         queue_client: Optional[ListQueueClient] = None,
-        queue_pool_id: Optional[str] = None,
-        queue_producer_id: Optional[str] = None,
+        queue_url: Optional[str] = None,
         queue_valkey_url: Optional[str] = None,
+        queue_fabric_group_id: Optional[str] = None,
     ):
         self.client = client
         self.model_string = model_string
@@ -191,13 +188,22 @@ class BatchProcessor:
         self._gate_lock_loop: Optional[asyncio.AbstractEventLoop] = None
         self._queue_client = queue_client
         self._queued_executor = None
-        self._queue_config = LlmQueueConfig.from_env(
+        self._queued_executor_lock = threading.Lock()
+        self._queue_pid = os.getpid()
+        self._queue_config = LlmQueueProducerConfig.from_env(
             enabled=queue_enabled,
+            queue_url=queue_url,
             valkey_url=queue_valkey_url,
-            pool_id=queue_pool_id,
-            producer_id=queue_producer_id,
+            fabric_group_id=queue_fabric_group_id,
         )
         self._queue_mode_logged = False
+
+    @property
+    def uses_v3_queue(self) -> bool:
+        return self._queue_config.enabled and not (
+            isinstance(self._queue_config, LlmQueueRuntimeConfig)
+            and self._queue_config.queue_contract_version == "v2"
+        )
 
     def _log_queue_mode_once(self) -> None:
         if self._queue_mode_logged:
@@ -205,41 +211,55 @@ class BatchProcessor:
         self._queue_mode_logged = True
         if self._queue_config.enabled:
             self.logger.info(
-                "LLM dispatch queue enabled: pool=%s valkey_configured=%s max_inline_payload_bytes=%s",
-                self._queue_config.pool_id,
-                bool(self._queue_config.valkey_url),
-                self._queue_config.max_inline_payload_bytes,
+                "LLM dispatch queue enabled: queue_configured=%s",
+                bool(self._queue_config.queue_url),
             )
         else:
             env_enabled = os.getenv("LLM_QUEUE_ENABLED")
             self.logger.info(
-                "LLM dispatch queue disabled: env LLM_QUEUE_ENABLED=%r pool=%s",
+                "LLM dispatch queue disabled: env LLM_QUEUE_ENABLED=%r",
                 env_enabled,
-                self._queue_config.pool_id,
             )
 
     def _get_queue_client(self) -> ListQueueClient:
         if self._queue_client is not None:
             return self._queue_client
-        if not self._queue_config.valkey_url:
+        if not self._queue_config.queue_url:
             raise ValueError(
-                "LLM queue is enabled but LLM_QUEUE_VALKEY_URL (or queue_valkey_url) is not configured."
+                "LLM queue is enabled but LLM_QUEUE_URL (or LLM_QUEUE_VALKEY_URL, "
+                "queue_url, or queue_valkey_url) is not configured."
             )
-        self._queue_client = ValkeyListQueueClient(self._queue_config.valkey_url)
+        self._queue_client = StoreListQueueClient(self._queue_config.queue_url)
         return self._queue_client
 
     def _get_queued_executor(self):
-        if self._queued_executor is None:
-            from marie.engine.llm_queue.submitter import QueuedBatchExecutor
+        if (
+            isinstance(self._queue_config, LlmQueueRuntimeConfig)
+            and self._queue_config.queue_contract_version == "v2"
+        ):
+            if self._queued_executor is None:
+                from marie.engine.llm_queue.submitter import QueuedBatchExecutor
 
-            self._queued_executor = QueuedBatchExecutor(
-                queue_client=self._get_queue_client(),
-                config=self._queue_config,
-                logger=self.logger,
-            )
-        return self._queued_executor
+                self._queued_executor = QueuedBatchExecutor(
+                    queue_client=self._get_queue_client(),
+                    config=self._queue_config,
+                    logger=self.logger,
+                )
+            return self._queued_executor
+        if self._queue_pid != os.getpid():
+            self._queue_pid = os.getpid()
+            self._queued_executor = None
+            self._queued_executor_lock = threading.Lock()
+        with self._queued_executor_lock:
+            if self._queued_executor is None:
+                from marie.engine.llm_queue.producer import V3Producer
+
+                self._queued_executor = V3Producer(config=self._queue_config)
+            return self._queued_executor
 
     def build_queue_dispatcher(self):
+        if not isinstance(self._queue_config, LlmQueueRuntimeConfig):
+            raise RuntimeError("LLM queue dispatchers are gateway-owned")
         from marie.engine.llm_queue.adapters.openai_compatible import (
             OpenAICompatibleExecutionAdapter,
         )
@@ -361,20 +381,37 @@ class BatchProcessor:
                     raise AuthenticationError(MISSING_API_KEY_ERROR_MESSAGE)
                 completion = await execute_completion_call(self.client, call)
                 finish_reason = completion_finish_reason(completion)
+                recovered_text = None
                 if finish_reason == "length":
                     _, extracted_text = self.extract_text_from_response(completion)
-                    await self.save_debug_msg(
-                        extracted_text or "", task_id, "max_tokens"
+                    recovered_text = (
+                        recover_complete_json(extracted_text or "")
+                        if (call.response_format or {}).get("type")
+                        in ("json_object", "json_schema")
+                        or (call.extra_body or {}).get("guided_json") is not None
+                        else None
                     )
-                    raise MaxTokensExceededError()
+                    if recovered_text is None:
+                        if has_terminal_repetition(extracted_text or ""):
+                            await self.save_debug_msg(
+                                extracted_text or "", task_id, "repetition"
+                            )
+                            raise RepetitionError()
+                        await self.save_debug_msg(
+                            extracted_text or "", task_id, "max_tokens"
+                        )
+                        raise MaxTokensExceededError()
 
                 total_time = time.time() - start
                 self.logger.info(
                     f"Request {request_id} - Task {task_id} - Completed in {total_time:.2f}s"
                 )
-                reasoning_content, extracted_text = self.extract_text_from_response(
-                    completion
-                )
+                if recovered_text is None:
+                    reasoning_content, extracted_text = self.extract_text_from_response(
+                        completion
+                    )
+                else:
+                    reasoning_content, extracted_text = None, recovered_text
 
                 set_llm_io(span, output_messages=extracted_text)
                 span.set_attribute(MarieSpanAttributes.LATENCY_SECONDS, total_time)
@@ -446,8 +483,11 @@ class BatchProcessor:
     ):
         try:
             retry_decorator = _create_retry_decorator(max_retries=max_retries)
+            current_call = call
+            repetition_retry_used = False
 
             async def completion_attempt() -> Any:
+                nonlocal current_call, repetition_retry_used
                 reserved_half_open = False
                 async with self._get_gate_lock():
                     if not self._circuit_breaker.is_available(self.backend_address):
@@ -462,12 +502,21 @@ class BatchProcessor:
                         reserved_half_open = True
 
                 try:
-                    return await self.completion_non_streaming_call(
-                        call=call,
-                        task_id=task_id,
-                        request_id=request_id,
-                        metadata=metadata,
-                    )
+                    try:
+                        return await self.completion_non_streaming_call(
+                            call=current_call,
+                            task_id=task_id,
+                            request_id=request_id,
+                            metadata=metadata,
+                        )
+                    except RepetitionError as exc:
+                        recovered_call = apply_repetition_recovery(current_call)
+                        if repetition_retry_used or recovered_call is None:
+                            exc.retryable = False
+                        else:
+                            current_call = recovered_call
+                            repetition_retry_used = True
+                        raise
                 except (
                     APIError,
                     APIConnectionError,
@@ -602,6 +651,9 @@ class BatchProcessor:
                 or were rejected by the circuit breaker.
             asyncio.TimeoutError: When the batch exceeds the configured timeout.
         """
+        queue_deadline = kwargs.get("queue_deadline")
+        if self.uses_v3_queue:
+            queue_deadline = queue_deadline or time.monotonic() + self.batch_timeout
         request_id = str(uuid.uuid4())
         self.logger.info(
             f"Request {request_id} - Initiating batch inference with {len(messages_list)} requests."
@@ -641,8 +693,9 @@ class BatchProcessor:
             )
             request_contexts = None
 
-        calls = [
-            build_completion_call(
+        def prepare(index: int) -> CompletionCallParams:
+            messages = messages_list[index]
+            return build_completion_call(
                 model=self.model_string,
                 messages=messages,
                 default_completion_params=self.default_completion_params,
@@ -656,8 +709,24 @@ class BatchProcessor:
                     request_contexts[index] if request_contexts is not None else None
                 ),
             )
-            for index, messages in enumerate(messages_list)
-        ]
+
+        if self.uses_v3_queue:
+            from marie.engine.llm_queue.producer import PreparedCalls
+
+            calls = PreparedCalls(
+                len(messages_list),
+                prepare,
+                build_completion_call(
+                    model=self.model_string,
+                    messages=[],
+                    default_completion_params=self.default_completion_params,
+                    completion_params=completion_params,
+                    guided_json=guided_json,
+                    stream=False,
+                ),
+            )
+        else:
+            calls = [prepare(index) for index in range(len(messages_list))]
         return self.batch_generate_calls(
             calls=calls,
             request_id=request_id,
@@ -665,6 +734,8 @@ class BatchProcessor:
             batch_span=batch_span,
             on_result=on_result,
             metadata=metadata,
+            queue_deadline=queue_deadline,
+            cancellation=kwargs.get("cancellation"),
         )
 
     def batch_generate_calls(
@@ -676,7 +747,15 @@ class BatchProcessor:
         batch_span=None,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        queue_deadline: float | None = None,
+        cancellation: threading.Event | None = None,
     ) -> List[str]:
+        if self.uses_v3_queue and not calls:
+            if batch_span is not None:
+                batch_span.end()
+            return []
+        if self.uses_v3_queue and queue_deadline is None:
+            queue_deadline = time.monotonic() + self.batch_timeout
         request_id = request_id or str(uuid.uuid4())
         start_time = start_time or time.time()
 
@@ -705,20 +784,21 @@ class BatchProcessor:
         try:
             self._log_queue_mode_once()
             if self._queue_config.enabled:
-                effective_pool_id = _resolve_effective_queue_pool_id(
-                    self._queue_config.pool_id,
-                    metadata,
-                )
                 self.logger.info(
-                    "Submitting batch %s to LLM dispatch queue: pool=%s items=%s",
+                    "Submitting batch %s to LLM dispatch queue: items=%s",
                     request_id,
-                    effective_pool_id,
                     len(calls),
                 )
+                controls: dict[str, Any] = {}
+                if self.uses_v3_queue:
+                    controls = dict(
+                        queue_deadline=queue_deadline, cancellation=cancellation
+                    )
                 batch_results = self._get_queued_executor().execute(
                     calls=calls,
                     batch_request_id=request_id,
                     batch_timeout=self.batch_timeout,
+                    **controls,
                     on_result=on_result,
                     metadata=metadata,
                 )
@@ -780,6 +860,11 @@ class BatchProcessor:
                     request_id=request_id,
                     failed_results=failed_results,
                     total=len(calls),
+                    successful_results=[
+                        br
+                        for br in batch_results
+                        if br is not None and br.error is None
+                    ],
                 )
 
             self.logger.info(

@@ -57,7 +57,8 @@ def insert_jobs(schema: str) -> str:
                 dependencies jsonb,
                 job_level integer,
                 soft_sla timestamptz,
-                hard_sla timestamptz
+                hard_sla timestamptz,
+                llm_routing_ready boolean
             )
         )
         INSERT INTO {schema}.job (
@@ -77,7 +78,8 @@ def insert_jobs(schema: str) -> str:
             dependencies,
             job_level,
             soft_sla,
-            hard_sla
+            hard_sla,
+            llm_routing_ready
         )
         SELECT
             job.id,
@@ -109,11 +111,62 @@ def insert_jobs(schema: str) -> str:
             COALESCE(job.dependencies, '[]'::jsonb),
             job.job_level,
             job.soft_sla,
-            job.hard_sla
+            job.hard_sla,
+            COALESCE(job.llm_routing_ready, true)
         FROM jobs job
         JOIN {schema}.queue queue ON job.name = queue.name
         ON CONFLICT DO NOTHING
         RETURNING id
+    """
+
+
+def insert_llm_routes(schema: str) -> str:
+    return f"""
+        WITH routes AS (
+            SELECT *
+            FROM jsonb_to_recordset(%s::jsonb) AS route (
+                work_unit_id uuid,
+                job_id uuid,
+                fabric_group_id text,
+                policy_generation bigint,
+                policy_digest text,
+                rule_digest text,
+                normalized_fact_digest text,
+                effective_page_count integer,
+                pool_id text,
+                logical_endpoint_group_id text,
+                endpoint_revision text,
+                estimator_version text,
+                routing_source text,
+                routing_actor text,
+                routing_reason text,
+                route_digest text,
+                payload jsonb
+            )
+        ), inserted_routes AS (
+            INSERT INTO {schema}.llm_job_route (
+                work_unit_id, job_id, fabric_group_id, policy_generation,
+                policy_digest, rule_digest, normalized_fact_digest,
+                effective_page_count, pool_id, logical_endpoint_group_id,
+                endpoint_revision, estimator_version, routing_source,
+                routing_actor, routing_reason
+            )
+            SELECT
+                work_unit_id, job_id, fabric_group_id, policy_generation,
+                policy_digest, rule_digest, normalized_fact_digest,
+                effective_page_count, pool_id, logical_endpoint_group_id,
+                endpoint_revision, estimator_version, routing_source,
+                routing_actor, routing_reason
+            FROM routes
+            RETURNING work_unit_id
+        )
+        INSERT INTO {schema}.llm_routing_outbox (
+            work_unit_id, route_digest, payload
+        )
+        SELECT route.work_unit_id, route.route_digest, route.payload
+        FROM routes route
+        JOIN inserted_routes inserted USING (work_unit_id)
+        RETURNING work_unit_id
     """
 
 

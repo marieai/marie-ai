@@ -2225,10 +2225,15 @@ show_service_endpoints() {
     echo -e "${BLUE}🔗 Service Endpoints:${NC}"
 
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
-        local valkey_url="${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}"
+        local queue_status="default local store"
+        if [ -n "${LLM_QUEUE_URL:-}" ]; then
+            queue_status="configured (LLM_QUEUE_URL)"
+        elif [ -n "${LLM_QUEUE_VALKEY_URL:-}" ]; then
+            queue_status="configured (LLM_QUEUE_VALKEY_URL)"
+        fi
         echo -e "${GREEN}Infrastructure Services:${NC}"
         echo "  🐰 RabbitMQ Management: http://localhost:15672 (${RABBIT_MQ_USERNAME:-marie}/${RABBIT_MQ_PASSWORD:-mariepassword})"
-        echo "  🧠 Valkey LLM Queue: ${valkey_url}"
+        echo "  🧠 LLM Queue: ${queue_status}"
         echo "  💾 MinIO S3 API: http://localhost:8000 (${MINIO_ROOT_USER:-marieadmin}/${MINIO_ROOT_PASSWORD:-marietopsecret})"
         echo "  💾 MinIO Console: http://localhost:8001 (${MINIO_ROOT_USER:-marieadmin}/${MINIO_ROOT_PASSWORD:-marietopsecret})"
         echo "  🗄️  etcd: http://localhost:2379"

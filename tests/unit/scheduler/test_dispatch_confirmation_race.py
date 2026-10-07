@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from marie.job.common import DuplicateJobSubmissionError, JobStatus
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.psql import PostgreSQLJobScheduler
@@ -155,6 +156,29 @@ class LateConfirmingJobManager:
         self.completed.set()
 
 
+class DuplicateAwareJobManager:
+    def __init__(self, existing_status: JobStatus) -> None:
+        self.existing_status = existing_status
+        self.retry_flags: list[bool] = []
+
+    async def submit_job(
+        self,
+        *,
+        submission_id: str,
+        confirmation_event: asyncio.Event,
+        is_retry: bool,
+        **_fields: Any,
+    ) -> str:
+        self.retry_flags.append(is_retry)
+        if not is_retry:
+            raise DuplicateJobSubmissionError(submission_id)
+        confirmation_event.set()
+        return submission_id
+
+    async def get_job_status(self, _job_id: str) -> JobStatus:
+        return self.existing_status
+
+
 class RecordingSemaphoreStore:
     def __init__(self) -> None:
         self.releases: list[tuple[str, str, str, str | None]] = []
@@ -194,6 +218,38 @@ def build_work_item() -> WorkInfo:
         dependencies=[],
         job_level=0,
     )
+
+
+def build_scheduler_for_enqueue(job_manager: Any) -> PostgreSQLJobScheduler:
+    scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.logger = MagicMock()
+    scheduler.job_manager = job_manager
+    scheduler.run_ttl_seconds = 5
+    scheduler.lease_owner = 'reset-replay-scheduler'
+    scheduler.gateway_instance_id = 'reset-replay-gateway'
+    return scheduler
+
+
+@pytest.mark.asyncio
+async def test_enqueue_replays_reset_job_over_terminal_job_manager_record() -> None:
+    job_manager = DuplicateAwareJobManager(JobStatus.SUCCEEDED)
+    scheduler = build_scheduler_for_enqueue(job_manager)
+
+    enqueued = await scheduler.enqueue(build_work_item(), is_retry=False)
+
+    assert enqueued is True
+    assert job_manager.retry_flags == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_enqueue_keeps_duplicate_protection_for_running_job() -> None:
+    job_manager = DuplicateAwareJobManager(JobStatus.RUNNING)
+    scheduler = build_scheduler_for_enqueue(job_manager)
+
+    enqueued = await scheduler.enqueue(build_work_item(), is_retry=False)
+
+    assert enqueued is False
+    assert job_manager.retry_flags == [False]
 
 
 @pytest.mark.asyncio

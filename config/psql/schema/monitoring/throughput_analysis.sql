@@ -49,7 +49,7 @@ WITH params AS (
             720
         ) AS lookback_hours,
         NULLIF(BTRIM(p_planner_name), '') AS planner_name
-), bounds AS (
+), bounds AS NOT MATERIALIZED (
     SELECT
         date_trunc('hour', NOW(), 'UTC')
             - make_interval(hours => p.lookback_hours - 1) AS window_start,
@@ -115,9 +115,9 @@ WITH params AS (
         0,
         0,
         0,
-        CASE WHEN j.state::text = 'completed' THEN 1 ELSE 0 END,
+        CASE WHEN j.state = 'completed' THEN 1 ELSE 0 END,
         CASE
-            WHEN j.state::text = 'completed'
+            WHEN j.state = 'completed'
              AND COALESCE(j.data #>> '{metadata,on}', '') NOT IN (
                  '',
                  'noop://noop',
@@ -128,16 +128,16 @@ WITH params AS (
             THEN 1
             ELSE 0
         END,
-        CASE WHEN j.state::text = 'failed' THEN 1 ELSE 0 END,
-        CASE WHEN j.state::text = 'expired' THEN 1 ELSE 0 END,
-        CASE WHEN j.state::text = 'cancelled' THEN 1 ELSE 0 END,
-        CASE WHEN j.state::text = 'skipped' THEN 1 ELSE 0 END
+        CASE WHEN j.state = 'failed' THEN 1 ELSE 0 END,
+        CASE WHEN j.state = 'expired' THEN 1 ELSE 0 END,
+        CASE WHEN j.state = 'cancelled' THEN 1 ELSE 0 END,
+        CASE WHEN j.state = 'skipped' THEN 1 ELSE 0 END
     FROM {schema}.job j
     JOIN {schema}.dag d ON d.id = j.dag_id
     CROSS JOIN bounds b
     WHERE j.completed_on >= b.window_start
       AND j.completed_on < b.observed_at
-      AND j.state::text IN (
+      AND j.state IN (
           'completed',
           'failed',
           'expired',
@@ -466,17 +466,21 @@ RETURNS TABLE (
     avg_execution_seconds numeric,
     p95_execution_seconds numeric
 )
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
+PARALLEL SAFE
 AS $function$
+BEGIN
+    -- Plan for this window and planner even when the caller uses a generic plan.
+    RETURN QUERY EXECUTE $query$
 WITH params AS (
     SELECT
         LEAST(
-            GREATEST(COALESCE(p_lookback_hours, 24), 1),
+            GREATEST(COALESCE($1, 24), 1),
             720
         ) AS lookback_hours,
-        NULLIF(BTRIM(p_planner_name), '') AS planner_name
-), bounds AS (
+        NULLIF(BTRIM($2), '') AS planner_name
+), bounds AS NOT MATERIALIZED (
     SELECT
         date_trunc('hour', NOW(), 'UTC')
             - make_interval(hours => p.lookback_hours - 1) AS window_start,
@@ -503,7 +507,7 @@ WITH params AS (
             'switch://control',
             'merger://control'
         ) AS executor_backed,
-        j.state::text AS terminal_state,
+        j.state AS terminal_state,
         EXTRACT(EPOCH FROM (j.completed_on - j.started_on))
             AS execution_seconds
     FROM {schema}.job j
@@ -511,7 +515,7 @@ WITH params AS (
     CROSS JOIN bounds b
     WHERE j.completed_on >= b.window_start
       AND j.completed_on < b.observed_at
-      AND j.state::text IN (
+      AND j.state IN (
           'completed',
           'failed',
           'expired',
@@ -520,60 +524,61 @@ WITH params AS (
       )
       AND (b.planner_name IS NULL OR d.planner = b.planner_name)
 ), grouped AS (
-SELECT
-    CASE
-        WHEN GROUPING(t.bucket_start_utc) = 1 THEN 'window_total'
-        ELSE 'hour'
-    END AS period,
-    t.bucket_start_utc,
-    t.planner,
-    t.queue_name,
-    t.task_name,
-    t.endpoint,
-    t.executor_backed,
-    COUNT(*) FILTER (
-        WHERE t.terminal_state = 'completed'
-    ) AS tasks_completed,
-    COUNT(*) FILTER (
-        WHERE t.terminal_state = 'failed'
-    ) AS tasks_failed,
-    COUNT(*) FILTER (
-        WHERE t.terminal_state = 'expired'
-    ) AS tasks_expired,
-    COUNT(*) FILTER (
-        WHERE t.terminal_state = 'cancelled'
-    ) AS tasks_cancelled,
-    COUNT(*) FILTER (
-        WHERE t.terminal_state = 'skipped'
-    ) AS tasks_skipped,
-    ROUND(AVG(t.execution_seconds) FILTER (
-        WHERE t.terminal_state = 'completed'
-    )::numeric, 3) AS avg_execution_seconds,
-    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (
-        ORDER BY t.execution_seconds
-    ) FILTER (
-        WHERE t.terminal_state = 'completed'
-          AND t.execution_seconds IS NOT NULL
-    )::numeric, 3) AS p95_execution_seconds,
-    GROUPING(t.bucket_start_utc) AS bucket_group
-FROM task_events t
-GROUP BY GROUPING SETS (
-    (
-        t.planner,
-        t.queue_name,
-        t.task_name,
-        t.endpoint,
-        t.executor_backed
-    ),
-    (
+    -- Share one scan and sort between hourly and whole-window statistics.
+    SELECT
+        CASE
+            WHEN GROUPING(t.bucket_start_utc) = 1 THEN 'window_total'
+            ELSE 'hour'
+        END AS period,
         t.bucket_start_utc,
         t.planner,
         t.queue_name,
         t.task_name,
         t.endpoint,
-        t.executor_backed
+        t.executor_backed,
+        COUNT(*) FILTER (
+            WHERE t.terminal_state = 'completed'
+        ) AS tasks_completed,
+        COUNT(*) FILTER (
+            WHERE t.terminal_state = 'failed'
+        ) AS tasks_failed,
+        COUNT(*) FILTER (
+            WHERE t.terminal_state = 'expired'
+        ) AS tasks_expired,
+        COUNT(*) FILTER (
+            WHERE t.terminal_state = 'cancelled'
+        ) AS tasks_cancelled,
+        COUNT(*) FILTER (
+            WHERE t.terminal_state = 'skipped'
+        ) AS tasks_skipped,
+        ROUND(AVG(t.execution_seconds) FILTER (
+            WHERE t.terminal_state = 'completed'
+        )::numeric, 3) AS avg_execution_seconds,
+        ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (
+            ORDER BY t.execution_seconds
+        ) FILTER (
+            WHERE t.terminal_state = 'completed'
+              AND t.execution_seconds IS NOT NULL
+        )::numeric, 3) AS p95_execution_seconds,
+        GROUPING(t.bucket_start_utc) AS bucket_group
+    FROM task_events t
+    GROUP BY GROUPING SETS (
+        (
+            t.planner,
+            t.queue_name,
+            t.task_name,
+            t.endpoint,
+            t.executor_backed
+        ),
+        (
+            t.bucket_start_utc,
+            t.planner,
+            t.queue_name,
+            t.task_name,
+            t.endpoint,
+            t.executor_backed
+        )
     )
-)
 )
 SELECT
     g.period,
@@ -598,4 +603,6 @@ ORDER BY
     g.task_name,
     g.endpoint,
     g.bucket_start_utc;
+    $query$ USING p_lookback_hours, p_planner_name;
+END;
 $function$;

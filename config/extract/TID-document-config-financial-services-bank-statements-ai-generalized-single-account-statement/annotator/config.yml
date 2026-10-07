@@ -11,6 +11,12 @@ annotators:
       prompt_path: ./prompts/document-config-extract.j2
       temperature: 0
       top_p: 1
+      repetition_recovery:
+        temperature: 0.7
+        top_p: 0.8
+        presence_penalty: 1.5
+        extra_body:
+          top_k: 20
     parser: noop
     validators: []
 grounding:

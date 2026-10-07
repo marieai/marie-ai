@@ -7,8 +7,10 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from marie.utils.docs import (
+    DocumentTooLargeError,
     UnsupportedOcrInputError,
     docs_from_file,
+    document_page_count_from_uri,
     load_document,
     supports_ocr_input,
 )
@@ -46,6 +48,33 @@ def _pdf(path: Path, page_count: int, image_path: Path | None = None) -> None:
             document.drawImage(image, 40, 5, width=20, height=20)
         document.showPage()
     document.save()
+
+
+def test_page_count_reads_pdf_and_tiff_container_headers(tmp_path):
+    pdf = tmp_path / 'four-pages.pdf'
+    tiff = tmp_path / 'three-pages.tiff'
+    _pdf(pdf, 4)
+    _multipage_image(tiff, fmt='TIFF')
+
+    assert document_page_count_from_uri(str(pdf), 1_000_000, 2.0) == 4
+    assert document_page_count_from_uri(str(tiff), 1_000_000, 2.0) == 3
+
+
+def test_page_count_rejects_oversized_and_unsupported_sources(tmp_path):
+    image = tmp_path / 'source.png'
+    _solid_image((1, 2, 3)).save(image)
+    unsupported = tmp_path / 'source.txt'
+    unsupported.write_text('hello')
+
+    with pytest.raises(DocumentTooLargeError):
+        document_page_count_from_uri(str(image), 1, 2.0)
+    with pytest.raises(UnsupportedOcrInputError):
+        document_page_count_from_uri(str(unsupported), 1_000_000, 2.0)
+
+
+def test_page_count_rejects_unreadable_source(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        document_page_count_from_uri(str(tmp_path / 'missing.tif'), 1_000_000, 2.0)
 
 
 @pytest.mark.parametrize(

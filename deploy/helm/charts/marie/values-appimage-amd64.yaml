@@ -62,3 +62,15 @@ minio:
 clickhouse:
   image:
     digest: sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8
+
+otel-collector:
+  image:
+    digest: sha256:54312b4534a545f052b5d8232754c5329f7ac8779a4e9af167955d9f2bb657d1
+
+ferretdb:
+  image:
+    digest: sha256:5d8966f7ec1267d35fc61acc56fd9f3f62f22b4baf65ecb6c331b63b86a52aac
+
+hyperdx:
+  image:
+    digest: sha256:0f88ad527e43f8352f7decc44381c8741c4d5e0122429e95986e14340b98f3dc

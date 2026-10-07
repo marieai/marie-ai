@@ -100,6 +100,7 @@ class LLMTableAnnotator(LLMAnnotator):
             document: Document to process
             frames: List of frames to process
         """
+        del frames
         self.logger.info(f"Annotating {self.__class__.__name__}...")
         (
             htables_output_dir,

@@ -1,0 +1,67 @@
+{
+  "description": "Generated Marie extraction plan for Bank Statements",
+  "name": "Ai Generalized Single Account Statement extraction",
+  "nodes": [
+    {
+      "definition": {
+        "endpoint": "noop",
+        "method": "NOOP",
+        "params": {
+          "layout": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement"
+        }
+      },
+      "dependencies": [],
+      "node_type": "COMPUTE",
+      "query_str": "Start",
+      "task_id": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement-start"
+    },
+    {
+      "definition": {
+        "endpoint": "extract_executor://document/extract",
+        "method": "EXECUTOR_ENDPOINT",
+        "params": {
+          "layout": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement"
+        }
+      },
+      "dependencies": [
+        "document-config-financial-services-bank-statements-ai-generalized-single-account-statement-start"
+      ],
+      "node_type": "COMPUTE",
+      "query_str": "Prepare Bank Statements",
+      "task_id": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement-prepare"
+    },
+    {
+      "definition": {
+        "endpoint": "/annotator/llm",
+        "method": "LLM",
+        "model_name": "qwen_3_instruct",
+        "params": {
+          "key": "document-config-extract",
+          "layout": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement"
+        }
+      },
+      "dependencies": [
+        "document-config-financial-services-bank-statements-ai-generalized-single-account-statement-prepare"
+      ],
+      "node_type": "COMPUTE",
+      "query_str": "Extract Bank Statements",
+      "task_id": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement-extract"
+    },
+    {
+      "definition": {
+        "endpoint": "noop",
+        "method": "NOOP",
+        "params": {
+          "layout": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement"
+        }
+      },
+      "dependencies": [
+        "document-config-financial-services-bank-statements-ai-generalized-single-account-statement-extract"
+      ],
+      "node_type": "COMPUTE",
+      "query_str": "End",
+      "task_id": "document-config-financial-services-bank-statements-ai-generalized-single-account-statement-end"
+    }
+  ],
+  "version": "0.1.0"
+}

@@ -43,9 +43,9 @@ def get_fastapi_app(
     if expose_graphql_endpoint:
         logger.error(" GraphQL endpoint is not enabled when using docarray >0.30")
     with ImportExtensions(required=True):
-        from fastapi import FastAPI, Response, HTTPException
-        from fastapi.middleware.cors import CORSMiddleware
         import pydantic
+        from fastapi import FastAPI, HTTPException, Response
+        from fastapi.middleware.cors import CORSMiddleware
         from pydantic import Field
     from docarray import BaseDoc, DocList
     from docarray.base_doc.docarray_response import DocArrayResponse
@@ -95,15 +95,7 @@ def get_fastapi_app(
     )
     from marie.types_core.request.status import StatusMessage
 
-    # Manually set the configurations
-    class InnerConfig(ConfigDict):
-        def __init__(self):
-            super().__init__()
-            self.alias_generator = _to_camel_case
-            self.populate_by_name = True
-
-    # Use InnerConfig directly instead of inherit_config
-    _config = InnerConfig
+    _config = ConfigDict(alias_generator=_to_camel_case, populate_by_name=True)
 
     class Header(BaseModel):
         request_id: Optional[str] = Field(
@@ -304,8 +296,6 @@ def get_fastapi_app(
             else:
                 parameters_model = Optional[Dict]
                 default_parameters = None
-
-            # _config =_config inherit_config(InnerConfig, BaseDoc.__config__)
 
             endpoint_input_model = pydantic.create_model(
                 f'{endpoint.strip("/")}_input_model',

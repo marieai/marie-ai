@@ -13,7 +13,13 @@ class MaxTokensExceededError(Exception):
 class RepetitionError(Exception):
     """Raised when an LLM response becomes repetitious."""
 
-    def __init__(self, message: str = "LLM output is repetitive") -> None:
+    def __init__(
+        self,
+        message: str = "LLM output is repetitive",
+        *,
+        retryable: bool = True,
+    ) -> None:
+        self.retryable = retryable
         super().__init__(message)
 
 
@@ -34,7 +40,9 @@ class BatchExecutionError(Exception):
         failed_results: list[Any],
         total: int,
         message: str = "",
+        successful_results: list[Any] | None = None,
     ) -> None:
+        self.successful_results = successful_results or []
         self.request_id = request_id
         self.failed_results = failed_results
         self.total = total

@@ -84,12 +84,11 @@ class PostgresqlMixin:
                 )
 
             if connection_only:
-                self.logger.info(f"Connected to postgresql database: {config}")
+                self.logger.info("Connected to postgresql database")
                 return
 
             self.schema = config.get("schema")  # Optional schema name
             self.table = config["default_table"]
-            self.logger.info(f"[DEBUG] PostgresqlMixin config: {config}")
             self.logger.info(
                 f"[DEBUG] PostgresqlMixin schema={self.schema}, table={self.table}, qualified_table={self.schema}.{self.table if self.schema else self.table}"
             )
@@ -103,9 +102,7 @@ class PostgresqlMixin:
             self._init_table(create_table_callback, reset_table_callback)
 
         except Exception as e:
-            raise BadConfigSource(
-                f"Cannot connect to postgresql database: {config}, {e}"
-            )
+            raise BadConfigSource('Postgresql storage initialization failed') from None
 
     def _pool_counts(self) -> tuple[int | None, int | None]:
         pool = getattr(self, "postgreSQL_pool", None)

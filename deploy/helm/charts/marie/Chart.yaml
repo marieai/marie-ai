@@ -70,6 +70,24 @@ dependencies:
     repository: "file://charts/clickhouse"
     condition: clickhouse.enabled
 
+  # Optional: OpenTelemetry Collector (OTLP -> ClickHouse "otel" database)
+  - name: otel-collector
+    version: "0.1.0"
+    repository: "file://charts/otel-collector"
+    condition: otel-collector.enabled
+
+  # Optional: FerretDB (MongoDB wire protocol over PostgreSQL, state store for HyperDX)
+  - name: ferretdb
+    version: "0.1.0"
+    repository: "file://charts/ferretdb"
+    condition: ferretdb.enabled
+
+  # Optional: HyperDX (alert evaluation for marie-studio)
+  - name: hyperdx
+    version: "0.1.0"
+    repository: "file://charts/hyperdx"
+    condition: hyperdx.enabled
+
   # Optional: Gitea (Git service for marie-studio)
   - name: gitea
     version: "0.1.0"

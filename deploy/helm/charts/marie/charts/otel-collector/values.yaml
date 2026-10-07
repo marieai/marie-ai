@@ -1,0 +1,49 @@
+# OpenTelemetry Collector subchart values
+# Receives OTLP (gRPC 4317, HTTP 4318) and exports logs, traces and metrics to the
+# ClickHouse "otel" database. Mirrors the otel-collector service in
+# Dockerfiles/docker-compose.clickstack.yml, without the Docker-host receivers.
+# Used by: marie-ai (telemetry), marie-studio (Observability, alerting)
+
+enabled: false
+replicas: 1
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.149.0"
+  digest: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  grpcPort: 4317
+  httpPort: 4318
+  annotations: {}
+
+# ClickHouse the collector writes to. An empty host means the bundled ClickHouse
+# of this release ("<release>-clickhouse").
+clickhouse:
+  host: ""
+  nativePort: 9000
+  database: otel
+  username: default
+  password: ""
+  # How long telemetry is kept
+  ttl: 72h
+
+config:
+  # Value of the service.namespace resource attribute added to all telemetry
+  serviceNamespace: marie-ai
+  memoryLimitMiB: 768
+  memorySpikeLimitMiB: 256
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 1Gi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

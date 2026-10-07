@@ -43,10 +43,14 @@ RETURNS TABLE (
     last_update_age_seconds DOUBLE PRECISION,
     attention_codes TEXT[]
 )
-LANGUAGE SQL
+LANGUAGE plpgsql
 STABLE
+PARALLEL SAFE
 AS $function$
-WITH source AS NOT MATERIALIZED (
+BEGIN
+    -- Optional filters need a fresh plan; retain index scans for selective pages.
+    RETURN QUERY EXECUTE $query$
+WITH signals AS NOT MATERIALIZED (
     SELECT
         ja.*,
         EXTRACT(EPOCH FROM (NOW() - ja.activated_at))::DOUBLE PRECISION AS age_seconds,
@@ -72,19 +76,30 @@ WITH source AS NOT MATERIALIZED (
             )
         ) AS owner_mismatch
     FROM {schema}.job_attempt AS ja
-    WHERE (p_states IS NULL OR LOWER(ja.attempt_state) = ANY(p_states))
-      AND (p_gateway IS NULL OR ja.gateway_instance_id = p_gateway)
-      AND (p_executor IS NULL OR ja.executor = p_executor)
+    WHERE ($3 IS NULL OR LOWER(ja.attempt_state) = ANY($3))
+      AND ($5 IS NULL OR ja.gateway_instance_id = $5)
+      AND ($6 IS NULL OR ja.executor = $6)
       AND (
-          p_search IS NULL
-          OR ja.run_attempt_id::TEXT ILIKE '%' || p_search || '%'
-          OR ja.job_id::TEXT ILIKE '%' || p_search || '%'
-          OR ja.dag_id::TEXT ILIKE '%' || p_search || '%'
-          OR ja.job_name ILIKE '%' || p_search || '%'
-          OR ja.run_owner ILIKE '%' || p_search || '%'
-          OR COALESCE(ja.gateway_instance_id, '') ILIKE '%' || p_search || '%'
-          OR COALESCE(ja.executor, '') ILIKE '%' || p_search || '%'
+          $7 IS NULL
+          OR ja.run_attempt_id::TEXT ILIKE '%' || $7 || '%'
+          OR ja.job_id::TEXT ILIKE '%' || $7 || '%'
+          OR ja.dag_id::TEXT ILIKE '%' || $7 || '%'
+          OR ja.job_name ILIKE '%' || $7 || '%'
+          OR ja.run_owner ILIKE '%' || $7 || '%'
+          OR COALESCE(ja.gateway_instance_id, '') ILIKE '%' || $7 || '%'
+          OR COALESCE(ja.executor, '') ILIKE '%' || $7 || '%'
       )
+), source AS NOT MATERIALIZED (
+    SELECT
+        signals.*,
+        CASE
+            WHEN terminal_accepted IS FALSE OR terminal_mismatch THEN 0
+            WHEN owner_mismatch THEN 1
+            WHEN recovery_at IS NOT NULL THEN 2
+            WHEN is_active THEN 3
+            ELSE 4
+        END AS attention_group
+    FROM signals
 ), filtered AS NOT MATERIALIZED (
     SELECT
         source.*,
@@ -94,11 +109,11 @@ WITH source AS NOT MATERIALIZED (
             CASE WHEN owner_mismatch THEN 'OWNER_MISMATCH' END,
             CASE WHEN recovery_at IS NOT NULL THEN 'RECOVERED' END,
             CASE
-                WHEN is_active AND age_seconds > p_active_too_long_seconds
+                WHEN is_active AND age_seconds > $9
                 THEN 'ACTIVE_TOO_LONG'
             END,
             CASE
-                WHEN is_active AND last_update_age_seconds > p_stale_update_seconds
+                WHEN is_active AND last_update_age_seconds > $10
                 THEN 'STALE_UPDATE'
             END
         ]::TEXT[], NULL) AS attention_codes,
@@ -106,21 +121,28 @@ WITH source AS NOT MATERIALIZED (
             WHEN terminal_accepted IS FALSE OR terminal_mismatch THEN 0
             WHEN owner_mismatch THEN 1
             WHEN recovery_at IS NOT NULL THEN 2
-            WHEN is_active AND age_seconds > p_active_too_long_seconds THEN 3
-            WHEN is_active AND last_update_age_seconds > p_stale_update_seconds THEN 4
+            WHEN is_active AND age_seconds > $9 THEN 3
+            WHEN is_active AND last_update_age_seconds > $10 THEN 4
             ELSE 5
         END AS attention_rank
     FROM source
-    WHERE p_attention = 'any'
-       OR (p_attention = 'active_too_long' AND is_active AND age_seconds > p_active_too_long_seconds)
-       OR (p_attention = 'stale_update' AND is_active AND last_update_age_seconds > p_stale_update_seconds)
-       OR (p_attention = 'recovered' AND recovery_at IS NOT NULL)
-       OR (p_attention = 'terminal_rejected' AND terminal_accepted IS FALSE)
-       OR (p_attention = 'terminal_mismatch' AND terminal_mismatch)
-       OR (p_attention = 'owner_mismatch' AND owner_mismatch)
+    WHERE $4 = 'any'
+       OR ($4 = 'active_too_long' AND is_active AND age_seconds > $9)
+       OR ($4 = 'stale_update' AND is_active AND last_update_age_seconds > $10)
+       OR ($4 = 'recovered' AND recovery_at IS NOT NULL)
+       OR ($4 = 'terminal_rejected' AND terminal_accepted IS FALSE)
+       OR ($4 = 'terminal_mismatch' AND terminal_mismatch)
+       OR ($4 = 'owner_mismatch' AND owner_mismatch)
+), metadata_pairs AS (
+    SELECT
+        gateway_instance_id,
+        executor,
+        COUNT(*) AS attempt_count
+    FROM filtered
+    GROUP BY gateway_instance_id, executor
 ), metadata AS (
     SELECT
-        COUNT(*) AS total_count,
+        COALESCE(SUM(attempt_count), 0)::BIGINT AS total_count,
         COALESCE(
             ARRAY_AGG(DISTINCT gateway_instance_id ORDER BY gateway_instance_id)
                 FILTER (WHERE gateway_instance_id IS NOT NULL),
@@ -131,19 +153,124 @@ WITH source AS NOT MATERIALIZED (
                 FILTER (WHERE executor IS NOT NULL),
             ARRAY[]::TEXT[]
         ) AS executor_facets
+    FROM metadata_pairs
+), page_budget AS (
+    -- Lower-priority scans stop once the offset and page have been filled.
+    SELECT CASE
+        WHEN $8 = 'attention'
+         AND GREATEST($2, 0) < (SELECT total_count FROM metadata)
+        THEN GREATEST($2, 0)::BIGINT + LEAST(GREATEST($1, 1), 100)
+        ELSE 0::BIGINT
+    END AS candidate_limit
+), rejected_page AS MATERIALIZED (
+    SELECT run_attempt_id, updated_on, activated_at, 0 AS attention_rank
     FROM filtered
-), paged AS (
-    SELECT *
+    WHERE attention_group = 0
+    ORDER BY updated_on DESC, run_attempt_id DESC
+    LIMIT (SELECT candidate_limit FROM page_budget)
+), owner_page AS MATERIALIZED (
+    SELECT run_attempt_id, updated_on, activated_at, 1 AS attention_rank
     FROM filtered
+    WHERE attention_group = 1
+    ORDER BY updated_on DESC, run_attempt_id DESC
+    LIMIT (SELECT candidate_limit - (SELECT COUNT(*) FROM rejected_page) FROM page_budget)
+), recovered_page AS MATERIALIZED (
+    SELECT run_attempt_id, updated_on, activated_at, 2 AS attention_rank
+    FROM filtered
+    WHERE attention_group = 2
+    ORDER BY updated_on DESC, run_attempt_id DESC
+    LIMIT (
+        SELECT candidate_limit
+            - (SELECT COUNT(*) FROM rejected_page)
+            - (SELECT COUNT(*) FROM owner_page)
+        FROM page_budget
+    )
+), long_running_page AS MATERIALIZED (
+    SELECT run_attempt_id, updated_on, activated_at, 3 AS attention_rank
+    FROM filtered
+    WHERE attention_group = 3
+      AND age_seconds > $9
+    ORDER BY updated_on DESC, run_attempt_id DESC
+    LIMIT (
+        SELECT candidate_limit
+            - (SELECT COUNT(*) FROM rejected_page)
+            - (SELECT COUNT(*) FROM owner_page)
+            - (SELECT COUNT(*) FROM recovered_page)
+        FROM page_budget
+    )
+), stale_page AS MATERIALIZED (
+    SELECT run_attempt_id, updated_on, activated_at, 4 AS attention_rank
+    FROM filtered
+    WHERE attention_group = 3
+      AND (age_seconds > $9) IS NOT TRUE
+      AND last_update_age_seconds > $10
+    ORDER BY updated_on DESC, run_attempt_id DESC
+    LIMIT (
+        SELECT candidate_limit
+            - (SELECT COUNT(*) FROM rejected_page)
+            - (SELECT COUNT(*) FROM owner_page)
+            - (SELECT COUNT(*) FROM recovered_page)
+            - (SELECT COUNT(*) FROM long_running_page)
+        FROM page_budget
+    )
+), remaining_budget AS (
+    SELECT candidate_limit
+        - (SELECT COUNT(*) FROM rejected_page)
+        - (SELECT COUNT(*) FROM owner_page)
+        - (SELECT COUNT(*) FROM recovered_page)
+        - (SELECT COUNT(*) FROM long_running_page)
+        - (SELECT COUNT(*) FROM stale_page) AS candidate_limit
+    FROM page_budget
+), ordinary_page AS (
+    (
+        SELECT run_attempt_id, updated_on, activated_at, 5 AS attention_rank
+        FROM filtered
+        WHERE attention_group = 3
+          AND (age_seconds > $9) IS NOT TRUE
+          AND (last_update_age_seconds > $10) IS NOT TRUE
+        ORDER BY updated_on DESC, run_attempt_id DESC
+        LIMIT (SELECT candidate_limit FROM remaining_budget)
+    )
+    UNION ALL
+    (
+        SELECT run_attempt_id, updated_on, activated_at, 5 AS attention_rank
+        FROM filtered
+        WHERE attention_group = 4
+        ORDER BY updated_on DESC, run_attempt_id DESC
+        LIMIT (SELECT candidate_limit FROM remaining_budget)
+    )
+    ORDER BY updated_on DESC, run_attempt_id DESC
+    LIMIT (SELECT candidate_limit FROM remaining_budget)
+), attention_page AS (
+    SELECT * FROM rejected_page
+    UNION ALL SELECT * FROM owner_page
+    UNION ALL SELECT * FROM recovered_page
+    UNION ALL SELECT * FROM long_running_page
+    UNION ALL SELECT * FROM stale_page
+    UNION ALL SELECT * FROM ordinary_page
+    ORDER BY attention_rank, updated_on DESC, run_attempt_id DESC
+    LIMIT LEAST(GREATEST($1, 1), 100)
+    OFFSET GREATEST($2, 0)
+), other_page AS (
+    SELECT run_attempt_id, updated_on, activated_at, attention_rank
+    FROM filtered
+    WHERE $8 IS DISTINCT FROM 'attention'
     ORDER BY
-        CASE WHEN p_sort = 'attention' THEN attention_rank END,
-        CASE WHEN p_sort = 'attention' THEN updated_on END DESC,
-        CASE WHEN p_sort = 'newest' THEN activated_at END DESC,
-        CASE WHEN p_sort = 'oldest' THEN activated_at END,
-        CASE WHEN p_sort = 'updated' THEN updated_on END DESC,
+        CASE WHEN $8 = 'attention' THEN attention_rank END,
+        CASE WHEN $8 = 'attention' THEN updated_on END DESC,
+        CASE WHEN $8 = 'newest' THEN activated_at END DESC,
+        CASE WHEN $8 = 'oldest' THEN activated_at END,
+        CASE WHEN $8 = 'updated' THEN updated_on END DESC,
         run_attempt_id DESC
-    LIMIT LEAST(GREATEST(p_limit, 1), 100)
-    OFFSET GREATEST(p_offset, 0)
+    LIMIT LEAST(GREATEST($1, 1), 100)
+    OFFSET GREATEST($2, 0)
+), page_ids AS (
+    SELECT run_attempt_id FROM attention_page
+    UNION ALL SELECT run_attempt_id FROM other_page
+), paged AS (
+    SELECT filtered.*
+    FROM page_ids
+    JOIN filtered USING (run_attempt_id)
 )
 SELECT
     metadata.total_count,
@@ -176,12 +303,17 @@ SELECT
 FROM metadata
 LEFT JOIN paged ON TRUE
 ORDER BY
-    CASE WHEN p_sort = 'attention' THEN paged.attention_rank END,
-    CASE WHEN p_sort = 'attention' THEN paged.updated_on END DESC,
-    CASE WHEN p_sort = 'newest' THEN paged.activated_at END DESC,
-    CASE WHEN p_sort = 'oldest' THEN paged.activated_at END,
-    CASE WHEN p_sort = 'updated' THEN paged.updated_on END DESC,
+    CASE WHEN $8 = 'attention' THEN paged.attention_rank END,
+    CASE WHEN $8 = 'attention' THEN paged.updated_on END DESC,
+    CASE WHEN $8 = 'newest' THEN paged.activated_at END DESC,
+    CASE WHEN $8 = 'oldest' THEN paged.activated_at END,
+    CASE WHEN $8 = 'updated' THEN paged.updated_on END DESC,
     paged.run_attempt_id DESC;
+    $query$ USING
+        p_limit, p_offset, p_states, p_attention, p_gateway,
+        p_executor, p_search, p_sort, p_active_too_long_seconds, p_stale_update_seconds;
+END;
+
 $function$;
 
 COMMENT ON FUNCTION {schema}.list_operational_attempts(

@@ -38,7 +38,8 @@ WITH statements AS (
     JOIN pg_roles AS r
       ON r.oid = p.userid
     WHERE p.calls > 0
-      AND p.query NOT ILIKE '%pg_stat_statements%'
+        AND p.toplevel
+        AND p.query NOT ILIKE '%pg_stat_statements%'
 )
 SELECT
     datname,

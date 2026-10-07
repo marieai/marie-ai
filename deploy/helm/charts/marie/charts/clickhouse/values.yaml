@@ -22,6 +22,14 @@ service:
   mysqlPort: 9004
   annotations: {}
 
+# Observability schema (database "otel": logs, traces, metrics, and the views and
+# columns marie-studio queries). Applied by a Job after install and upgrade.
+schema:
+  enabled: true
+  backoffLimit: 6
+  # Maximum total Job lifetime, including readiness waits and retries.
+  activeDeadlineSeconds: 300
+
 # ClickHouse configuration
 config:
   # Default database to create

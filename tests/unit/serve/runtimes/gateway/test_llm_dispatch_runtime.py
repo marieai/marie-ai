@@ -1,10 +1,11 @@
 import asyncio
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 from marie.engine.llm_queue.config import (
-    DEFAULT_LLM_QUEUE_POOL_ID,
     DEFAULT_MAX_INLINE_PAYLOAD_BYTES,
+    INTERNAL_LEGACY_POOL_ID,
     LlmQueueConfig,
 )
 from marie.engine.llm_queue.dispatcher import DrrQueuedBatchDispatcher
@@ -171,6 +172,7 @@ async def test_gateway_llm_dispatch_runtime_is_noop_when_disabled():
 
     health = runtime.health()
     assert health["enabled"] is False
+    assert runtime.mode == "direct-batch"
     assert health["running"] is False
 
     await runtime.stop()
@@ -302,6 +304,71 @@ def test_llm_dispatch_runtime_event_uses_control_plane_event_shape():
     assert event.payload["metadata"]["llm_dispatch_runtime"].value == snapshot
 
 
+@pytest.mark.asyncio
+async def test_llm_dispatch_runtime_event_joins_database_drain_references(
+    monkeypatch,
+):
+    from marie.serve.runtimes.servers import marie_gateway as module
+
+    snapshot = {
+        'fabric_group_id': 'default',
+        'runtime_summary': {},
+        'live_requests': [],
+        'dispatchers': [],
+        'pools': [
+            {
+                'pool_id': 'document-small',
+                'drain_references': {
+                    'postgres': 2,
+                    'valkey': 1,
+                    'total': 3,
+                },
+            }
+        ],
+    }
+    reads = []
+
+    async def read_observation(**kwargs):
+        reads.append(kwargs)
+        return snapshot
+
+    published = []
+
+    async def notify(*args):
+        published.append(args)
+
+    monkeypatch.setattr(module, 'read_operator_runtime_snapshot', read_observation)
+    monkeypatch.setattr(module.Toast, 'notify', notify)
+    repository = object()
+    gateway = SimpleNamespace(
+        llm_dispatch_runtime=SimpleNamespace(
+            config=_queue_config(
+                fabric_group_id='default',
+                gateway_id='gateway-localhost',
+            ),
+            _scheduler_config_source=SimpleNamespace(repository=repository),
+        ),
+        _last_llm_dispatch_event_fingerprint=None,
+        _last_llm_dispatch_event_monotonic=0.0,
+    )
+
+    await MarieServerGateway._publish_llm_dispatch_runtime_event(gateway)
+
+    assert reads == [
+        {
+            'fabric_group_id': 'default',
+            'limit': 50,
+            'policy_repository': repository,
+        }
+    ]
+    assert len(published) == 1
+    assert published[0][1].payload['result']['pools'][0]['drain_references'] == {
+        'postgres': 2,
+        'valkey': 1,
+        'total': 3,
+    }
+
+
 def test_llm_dispatch_runtime_event_publish_policy_repeats_idle_snapshots():
     assert _should_publish_llm_dispatch_runtime_event(
         fingerprint="snapshot-a",
@@ -364,7 +431,7 @@ def test_database_scheduler_config_source_reads_repository_mapping():
     assert [lane.pool_id for lane in config.lanes] == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
     assert config.lanes[0].min_concurrent == 10
     assert config.lanes[1].max_burst_per_visit == 1
@@ -452,6 +519,28 @@ def test_llm_queue_runtime_config_preserves_explicit_scheduler_postgres_config()
     assert repository_config["schema"] == "llm_scheduler"
 
 
+def test_registered_policy_selects_current_runtime_without_version_selector(
+    monkeypatch,
+):
+    from marie.serve.runtimes.gateway.marie import llm_dispatch_runtime as module
+
+    monkeypatch.setenv("LLM_QUEUE_CONTRACT_VERSION", "v2")
+    monkeypatch.setattr(
+        module,
+        "_build_scheduler_config_source",
+        lambda **_kwargs: object(),
+    )
+
+    runtime = GatewayLlmDispatchRuntime(
+        config={
+            "fabric_group_id": "default",
+            "llm_dispatch": {"policy_source": "database"},
+        }
+    )
+
+    assert runtime.config.queue_contract_version == "v3"
+
+
 def test_build_dispatcher_uses_drr_dispatcher_for_drr_policy():
     scheduler_config = LlmQueueSchedulerConfig(
         policy="drr",
@@ -508,7 +597,7 @@ def test_build_dispatcher_builds_lane_endpoint_adapters():
         if lane["pool_id"] == "interactive"
     )
     assert lane["pool_id"] == "interactive"
-    assert lane["endpoint_url"] == "http://interactive:4000/v1"
+    assert "endpoint_url" not in lane
 
 
 @pytest.mark.asyncio
@@ -577,12 +666,12 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
     assert queue_clients[0].depth_calls == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
     assert health["pool_ids"] == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
     assert health["pool_count"] == 3
     started_message = next(
@@ -591,18 +680,21 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
         if message.startswith("Started LLM DRR dispatch runtime")
     )
     assert "  pools: 3" in started_message
+    assert "http://" not in started_message
+    assert "secret" not in started_message
+    assert "queue-backend" not in started_message
     assert (
-        "interactive -> http://interactive:4000/v1 "
+        "interactive "
         "(explicit; quantum=1, protected=0, max=unbounded, burst=default)"
         in started_message
     )
     assert (
-        "backfill -> http://queue-backend:4000/v1 "
+        "backfill "
         "(runtime default; quantum=1, protected=0, max=unbounded, burst=default)"
         in started_message
     )
     assert (
-        "default -> http://queue-backend:4000/v1 "
+        "default "
         "(runtime default; quantum=1, protected=0, max=unbounded, burst=default)"
         in started_message
     )
@@ -613,7 +705,7 @@ async def test_gateway_runtime_uses_injected_scheduler_config_source():
     assert [lane.pool_id for lane in dispatchers[0].scheduler_config.lanes] == [
         "interactive",
         "backfill",
-        DEFAULT_LLM_QUEUE_POOL_ID,
+        INTERNAL_LEGACY_POOL_ID,
     ]
 
 
@@ -625,8 +717,23 @@ async def test_gateway_llm_dispatch_runtime_requires_valkey_when_enabled():
     )
 
     with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
-        with pytest.raises(RuntimeFailToStart, match="LLM_QUEUE_VALKEY_URL"):
+        with pytest.raises(RuntimeFailToStart, match="LLM_QUEUE_URL"):
             await runtime.start()
+
+
+def test_gateway_llm_dispatch_runtime_reports_canonical_queue_diagnostic():
+    with mock.patch.dict(
+        "os.environ",
+        {
+            "LLM_QUEUE_ENABLED": "true",
+            "LLM_QUEUE_URL": "redis://queue:6379/0",
+        },
+        clear=True,
+    ):
+        health = GatewayLlmDispatchRuntime(logger=_Logger()).health()
+
+    assert health["queue_configured"] is True
+    assert "valkey_configured" not in health
 
 
 @pytest.mark.asyncio
@@ -634,6 +741,8 @@ async def test_gateway_background_runtime_start_calls_llm_dispatch_runtime():
     started = 0
 
     class _Runtime:
+        mode = "queued-dispatch"
+
         async def start(self):
             nonlocal started
             started += 1
@@ -645,6 +754,7 @@ async def test_gateway_background_runtime_start_calls_llm_dispatch_runtime():
     await gateway._start_gateway_background_runtimes()
 
     assert started == 1
+    assert "LLM execution mode: queued-dispatch" in gateway.logger.info_messages
 
 
 @pytest.mark.asyncio

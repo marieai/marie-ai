@@ -1,0 +1,6 @@
+apiVersion: v2
+name: ferretdb
+description: FerretDB - MongoDB wire protocol on top of the chart's PostgreSQL (DocumentDB)
+type: application
+version: 0.1.0
+appVersion: "2.7.0"

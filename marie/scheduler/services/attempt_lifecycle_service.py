@@ -85,6 +85,9 @@ class AttemptLifecycleService:
                     source=source,
                 )
             )
+            allow_retry = self._failure_allows_retry(runtime_env)
+            if not allow_retry:
+                metadata['retryable'] = False
             accepted = await self._fail(
                 job_id,
                 work_item,
@@ -92,6 +95,7 @@ class AttemptLifecycleService:
                 run_attempt_id,
                 source,
                 metadata,
+                allow_retry=allow_retry,
             )
         elif status == JobStatus.STOPPED:
             accepted = await self._stop(
@@ -198,6 +202,8 @@ class AttemptLifecycleService:
         run_attempt_id: str,
         source: str,
         output_metadata: dict[str, Any],
+        *,
+        allow_retry: bool,
     ) -> bool:
         self.logger.error(
             f'Job failure received: job_id={job_id} '
@@ -230,6 +236,7 @@ class AttemptLifecycleService:
                 terminal_status=JobStatus.FAILED.value,
                 source=source,
                 output_metadata=output_metadata,
+                allow_retry=allow_retry,
                 schema=DEFAULT_SCHEMA,
             )
 
@@ -553,3 +560,13 @@ class AttemptLifecycleService:
         elif error:
             metadata['error'] = str(error)
         return metadata
+
+    @staticmethod
+    def _failure_allows_retry(runtime_env: Any) -> bool:
+        if not isinstance(runtime_env, dict):
+            return True
+        error = runtime_env.get('error')
+        return not (
+            isinstance(error, dict)
+            and error.get('type') in {'MaxTokensExceededError', 'RepetitionError'}
+        )

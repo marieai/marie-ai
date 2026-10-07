@@ -1,0 +1,83 @@
+artifacts:
+  - create:
+      category: document-extraction
+      description: Generated Marie extraction plan for Bank Statements
+      name: Ai Generalized Single Account Statement extraction
+      planDefinitionPath: workflows/query-plan.json
+      tags:
+        - document-extraction
+        - bank-statements
+      version: 0.1.0
+    kind: query_plan
+    path: workflows/query-plan.json
+    ref: query-plan/main
+  - kind: sample_data
+    path: sample-data/input.pdf
+    ref: sample/input
+description: Marie document extraction candidate for Bank Statements
+entrypoints:
+  - artifactRef: query-plan/main
+    key: extract-document
+    kind: query_plan
+    label: Extract document
+id: bp.document-config.financial-services-bank-statements-ai-generalized-single-account-statement
+install:
+  conflictPolicy: prompt
+  smokeTest:
+    entrypointKey: extract-document
+    inputArtifactRef: sample/input
+manifestVersion: 2
+metadata:
+  category: document-extraction
+  difficulty: intermediate
+  industry: Financial Services
+  tags:
+    - document-extraction
+    - bank-statements
+name: Ai Generalized Single Account Statement
+parameters: []
+prerequisites:
+  - check: component:document-extract
+    label: Document extraction executor is available
+    required: true
+  - check: llm:extraction
+    label: An extraction LLM connection is configured
+    required: true
+publish:
+  categories:
+    - Document extraction
+  keywords:
+    - document
+    - extraction
+    - bank-statements
+  languages:
+    - en
+  overview: Extract bank statements into validated structured JSON.
+  setupSteps:
+    - Select an extraction LLM connection.
+    - Run the included local sample before publication.
+  title: Ai Generalized Single Account Statement
+requirements:
+  components:
+    - name: document-extract
+      required: true
+    - name: annotator-llm
+      required: true
+  llmConnections:
+    - required: true
+      role: extraction
+scope:
+  installTarget: workspace
+  requiresOrganization: false
+security:
+  data:
+    classifications:
+      - customer-provided
+    handles:
+      - documents
+  network:
+    outbound:
+      required: false
+  secrets:
+    required: []
+version: 0.1.0

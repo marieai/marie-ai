@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:marie:document-config-library:qualification-result:v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "configurationId",
+    "blueprintId",
+    "candidateDigest",
+    "status",
+    "runtime",
+    "gates"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "configurationId": { "type": "string" },
+    "blueprintId": { "type": "string" },
+    "candidateDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "status": { "enum": ["qualified", "blocked"] },
+    "runtime": { "type": "object" },
+    "gates": { "type": "array", "minItems": 1 }
+  }
+}

@@ -3,3 +3,14 @@
 {{- if not (has $phase (list "infrastructure" "migrating" "active" "suspended")) }}
 {{- fail "global.lifecycle.phase must be one of: infrastructure, migrating, active, suspended" }}
 {{- end }}
+{{- $queue := .Values.global.llmQueue | default dict }}
+{{- $queueURL := trim ($queue.url | default "") }}
+{{- $globalValkey := .Values.global.valkey | default dict }}
+{{- $bundledValkey := .Values.valkey | default dict }}
+{{- $legacyValkeyHost := trim ($globalValkey.host | default "") }}
+{{- $hasBundledQueueStore := and ($globalValkey.enabled | default false) ($bundledValkey.enabled | default false) }}
+{{- $hasLegacyExternalQueueStore := and ($globalValkey.enabled | default false) (ne $legacyValkeyHost "") }}
+{{- $hasQueueStore := or $hasBundledQueueStore $hasLegacyExternalQueueStore }}
+{{- if and ($queue.enabled | default false) (not $queueURL) (not $queue.existingSecret) (not $hasQueueStore) }}
+{{- fail "global.llmQueue.url or global.llmQueue.existingSecret must be set when global.llmQueue.enabled=true without a bundled Valkey store" }}
+{{- end }}
