@@ -1,29 +1,58 @@
+import argparse
 import difflib
 import glob
 import os
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Directory containing labeled OCR fragments"
+    )
+    parser.add_argument(
+        "source_dir",
+        type=os.path.expanduser,
+        help="Directory containing labeled OCR fragments",
+    )
+    parser.add_argument(
+        "output_dir", type=os.path.expanduser, help="Directory for validation results"
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=os.path.expanduser,
+        required=True,
+        help="TrOCR checkpoint file",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
 
 import cv2
 import torch as torch
 from PIL import Image
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
+from marie.constants import __model_path__
 from marie.document import TrOcrProcessor
 from marie.utils.ocr_debug import dump_bboxes
 
 use_cuda = torch.cuda.is_available()
 
 
-def build_ocr_engines():
+def build_ocr_engines(
+    checkpoint: str,
+) -> tuple[BoxProcessorUlimDit, TrOcrProcessor, None]:
     # return None, None, None
 
     box_processor = BoxProcessorUlimDit(
-        models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
+        models_dir=os.path.join(__model_path__, "unilm", "dit", "text_detection"),
         cuda=use_cuda,
     )
 
     trocr_processor = TrOcrProcessor(
-        models_dir="/mnt/data/marie-ai/model_zoo/trocr",
-        model_name_or_path="/data/models/unilm/trocr/ft_SROIE_LINES_SET41/checkpoint_best.pt",
+        models_dir=os.path.join(__model_path__, "trocr"),
+        model_name_or_path=checkpoint,
         cuda=use_cuda,
     )
     # craft_processor = CraftOcrProcessor(cuda=True)
@@ -157,25 +186,5 @@ def verify_dir(src_dir: str, output_dir: str, processor) -> None:
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
-    box_processor, trocr_processor, craf_processor = build_ocr_engines()
-
-    if True:
-        verify_dir(
-            "/home/greg/datasets/SROIE_OCR/converted",
-            "/home/greg/datasets/SROIE_OCR/validation",
-            trocr_processor,
-        )
-
-    if False:
-        verify_dir(
-            "/home/greg/datasets/SROIE_OCR/lines/raw",
-            "/home/greg/datasets/SROIE_OCR/lines/validation",
-            trocr_processor,
-        )
-
-    if False:
-        verify_dir(
-            "/home/greg/datasets/SROIE_OCR/boxes/validated-True/alpha",
-            "/home/greg/datasets/SROIE_OCR/validation",
-            trocr_processor,
-        )
+    box_processor, trocr_processor, craf_processor = build_ocr_engines(args.checkpoint)
+    verify_dir(args.source_dir, args.output_dir, trocr_processor)

@@ -730,7 +730,7 @@ async def eventually(predicate, seconds: float = 10) -> None:
     raise AssertionError('Bounded fixture condition was not reached')
 
 
-STORE_VERSIONS = {'redis': '7.4.2', 'valkey': '8.1.6'}
+STORE_VERSIONS = {'redis': '7.4.2', 'valkey': '9.1.2'}
 STORE_POLICY = {
     'appendonly': 'yes',
     'appendfsync': 'always',

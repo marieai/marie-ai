@@ -1,4 +1,11 @@
 import copy
+import os
+
+MODEL_ID = os.path.expanduser(os.environ.get("MARIE_TAXONOMY_MODEL", ""))
+if not MODEL_ID:
+    raise ValueError(
+        "Set MARIE_TAXONOMY_MODEL to the trained taxonomy model path or model ID"
+    )
 
 import gradio as gr
 import numpy as np
@@ -17,7 +24,6 @@ from marie.utils.visualization import normalize_bbox
 use_cuda = torch.cuda.is_available()
 
 prefix_text = "0"
-import os
 from time import time
 from typing import Dict, List, Tuple
 
@@ -30,12 +36,6 @@ from transformers import (
 )
 
 # TODO: Move this to document_taxonomy package
-MODEL_ID = os.path.expanduser(
-    # "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy/512-0_9805782233085468"
-    # "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy/home-best"
-    # "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy-trainer/0.9693884572194766"
-    "~/dev/flan-t5-text-classifier/flan-t5-eob-classification-taxonomy-trainer/R2-0.973529761794621"
-)
 max_input_length = 512
 
 # quantization_config = BitsAndBytesConfig(

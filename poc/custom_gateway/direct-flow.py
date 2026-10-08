@@ -8,6 +8,7 @@ from docarray.documents import TextDoc
 
 from marie.api import AssetKeyDoc
 from marie.conf.helper import load_yaml
+from marie.constants import __config_dir__
 from marie.executor.marie_executor import MarieExecutor
 from marie.runtime import Deployment, Executor, Flow, requests
 
@@ -58,7 +59,7 @@ class TestExecutor(MarieExecutor):
 
 def main_deployment():
     context = {"name": "test"}
-    yml_config = "/mnt/data/marie-ai/config/service/deployment.yml"
+    yml_config = os.path.join(__config_dir__, 'service', 'deployment.yml')
 
     # Load the config file and set up the toast events
     config = load_yaml(yml_config, substitute=True, context=context)
@@ -111,7 +112,7 @@ def main():
             "max_connections": 5,
         },
     ).add(uses=TestExecutor, name="executor_a", replicas=1) as f:
-        f.save_config("/mnt/data/marie-ai/config/service/direct-flow.yml")
+        f.save_config(os.path.join(__config_dir__, 'service', 'direct-flow.yml'))
         f.block()
 
 

@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 || ! -f "$1" ]]; then
+    echo "Usage: $0 MODEL_GGUF_FILE" >&2
+    exit 2
+fi
+
+model_file=$(realpath -- "$1")
+
 # DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf
 # DeepSeek-R1-Distill-Qwen-14B-Q8_0.gguf
 
@@ -5,7 +15,7 @@ docker run --gpus all \
     --shm-size 32g \
     -p 30000:30000 \
     -v ~/.cache/huggingface:/root/.cache/huggingface \
-    -v /home/greg/Downloads/DeepSeek-R1-Distill-Qwen-14B-Q6_K_L.gguf:/model/DeepSeek-R1-Distill-Qwen.gguf \
+    -v "$model_file:/model/DeepSeek-R1-Distill-Qwen.gguf:ro" \
     --ipc=host \
     lmsysorg/sglang:v0.4.3.post3-cu124 \
     python3 -m sglang.launch_server --model-path /model/DeepSeek-R1-Distill-Qwen.gguf --load-format gguf \

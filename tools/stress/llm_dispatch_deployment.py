@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-PYTHON = '/home/gbugaj/dev/marieai/marie-ai/.venv/bin/python'
+PYTHON = str(Path(__file__).resolve().parents[2] / '.venv/bin/python')
 
 
 def require(condition: bool, check: str) -> None:

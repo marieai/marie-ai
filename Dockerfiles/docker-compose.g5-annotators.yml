@@ -44,10 +44,10 @@ services:
       - LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=${LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES:-16777216}
     volumes:
       # Volumes mapped from the host to the container
-      - /mnt/data/marie-ai/config:/etc/marie/config:ro
-      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
-      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
-      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
     deploy:
       resources:
         reservations:
@@ -103,10 +103,10 @@ services:
       - LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL=${LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL:-32}
       - LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=${LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES:-16777216}
     volumes:
-      - /mnt/data/marie-ai/config:/etc/marie/config:ro
-      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
-      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
-      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
     deploy:
       resources:
         reservations:
@@ -161,10 +161,10 @@ services:
       - LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL=${LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL:-32}
       - LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=${LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES:-16777216}
     volumes:
-      - /mnt/data/marie-ai/config:/etc/marie/config:ro
-      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
-      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
-      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
     deploy:
       resources:
         reservations:
@@ -219,10 +219,10 @@ services:
       - LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL=${LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL:-32}
       - LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=${LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES:-16777216}
     volumes:
-      - /mnt/data/marie-ai/config:/etc/marie/config:ro
-      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
-      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
-      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
     deploy:
       resources:
         reservations:
@@ -277,10 +277,10 @@ services:
       - LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL=${LLM_QUEUE_MAX_BUFFERED_REQUESTS_PER_POOL:-32}
       - LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=${LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES:-16777216}
     volumes:
-      - /mnt/data/marie-ai/config:/etc/marie/config:ro
-      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
-      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
-      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
     deploy:
       resources:
         reservations:

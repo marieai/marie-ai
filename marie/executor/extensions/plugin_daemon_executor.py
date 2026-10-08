@@ -19,7 +19,7 @@ from marie.plugin_daemon import (
     parse_daemon_frames,
     runtime_error_frame,
 )
-from marie.plugin_daemon.frames import as_text, first_text, now_utc
+from marie.plugin_daemon.frames import now_utc
 from marie.runtime import requests
 from marie.secret_store import CredentialRequirement, CredentialResolver
 
@@ -83,48 +83,6 @@ class MariePluginDaemonExecutor(MarieExecutor):
         return DocList[TextDoc](
             [TextDoc(text=json.dumps(self.status_payload(), separators=(",", ":")))]
         )
-
-    @requests(on="/v1/runtime/stub-invocations")
-    async def stub_invocation(
-        self,
-        docs: DocList[TextDoc],
-        parameters: dict[str, Any] | None = None,
-        **kwargs: Any,
-    ) -> DocList[TextDoc]:
-        request_id = str((parameters or {}).get("job_id") or "")
-        if not docs:
-            frame = runtime_error_frame(
-                request_id, "Runtime invocation envelope is empty", "invalid_envelope"
-            )
-            return frames_to_docs([frame])
-
-        try:
-            envelope = json.loads(docs[0].text or "{}")
-        except json.JSONDecodeError:
-            frame = runtime_error_frame(
-                request_id,
-                "Runtime invocation envelope is not valid JSON",
-                "invalid_envelope",
-            )
-            return frames_to_docs([frame])
-
-        if not isinstance(envelope, dict):
-            frame = runtime_error_frame(
-                request_id,
-                "Runtime invocation envelope must be a JSON object",
-                "invalid_envelope",
-            )
-            return frames_to_docs([frame])
-
-        request_id = (
-            first_text(
-                request_id,
-                as_text(envelope.get("requestId")),
-                as_text(envelope.get("request_id")),
-            )
-            or ""
-        )
-        return frames_to_docs(self._post_stub_invocation(envelope, request_id))
 
     @requests(on="/execute")
     async def connector_invoke(
@@ -209,7 +167,6 @@ class MariePluginDaemonExecutor(MarieExecutor):
         child = self._child
         return {
             "executor": "MariePluginDaemonExecutor",
-            "runtime_execution": "decode_stub_only",
             "mode": self.discovery.mode,
             "source": self.discovery.source,
             "daemon": health,
@@ -341,57 +298,9 @@ class MariePluginDaemonExecutor(MarieExecutor):
         self._last_health = health
         return health
 
-    def _post_stub_invocation(
-        self, envelope: dict[str, Any], request_id: str
-    ) -> list[dict[str, Any]]:
-        self._ensure_child()
-        if self.discovery.mode == "unavailable":
-            return [
-                runtime_error_frame(
-                    request_id,
-                    self.discovery.message or "marie-plugin-daemon is not configured",
-                )
-            ]
-
-        url = self.discovery.url
-        if not url:
-            return [
-                runtime_error_frame(
-                    request_id, "marie-plugin-daemon URL is not configured"
-                )
-            ]
-
-        body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
-        request = Request(
-            f"{url.rstrip('/')}/v1/runtime/stub-invocations",
-            data=body,
-            headers={
-                "Accept": "text/event-stream, application/x-ndjson, application/json",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        try:
-            with urlopen(request, timeout=self.invoke_timeout_s) as response:
-                raw = response.read().decode("utf-8")
-        except HTTPError as error:
-            return [
-                runtime_error_frame(
-                    request_id,
-                    f"daemon stub invocation returned HTTP {error.code}",
-                    "runtime_http_error",
-                )
-            ]
-        except (OSError, URLError, TimeoutError) as error:
-            return [runtime_error_frame(request_id, str(error))]
-
-        return parse_daemon_frames(raw, request_id)
-
     def _invoke_daemon(
         self, envelope: dict[str, Any], request_id: str
     ) -> list[dict[str, Any]]:
-        """POST a built envelope to the daemon's real ``/v1/dispatch/invoke`` and
-        return parsed frames. Mirrors ``_post_stub_invocation`` but the real path."""
         self._ensure_child()
         if self.discovery.mode == "unavailable":
             return [

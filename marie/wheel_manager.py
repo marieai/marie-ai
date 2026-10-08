@@ -1,3 +1,4 @@
+import argparse
 import importlib
 import os
 import shutil
@@ -443,7 +444,9 @@ class WheelFileHandler(FileSystemEventHandler):
 
 
 if __name__ == "__main__":
-    # Example usage
+    parser = argparse.ArgumentParser(description="Watch a directory for wheel changes")
+    parser.add_argument("directory", type=Path, help="Directory containing wheel files")
+    args = parser.parse_args()
     wheel_manager = PipWheelManager()
 
     if True:
@@ -451,7 +454,7 @@ if __name__ == "__main__":
         watcher = WheelDirectoryWatcher(wheel_manager)
         # Watch a directory for wheel changes
         try:
-            watcher.watch_directory('~/dev/hello_world_wheel/dist')
+            watcher.watch_directory(str(args.directory.expanduser().resolve()))
             print("Watching for wheel changes...")
             while True:
                 time.sleep(1)

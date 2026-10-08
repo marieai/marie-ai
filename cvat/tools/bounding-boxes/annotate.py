@@ -1,4 +1,5 @@
 import argparse
+import os
 from typing import List, Optional
 
 import cvat_sdk.auto_annotation as cvataa
@@ -16,6 +17,7 @@ from cvat_sdk.core.progress import NullProgressReporter, ProgressReporter
 from cvat_sdk.datasets import TaskDataset
 
 from marie.boxes import BoxProcessorUlimDit, PSMode
+from marie.constants import __model_path__
 
 
 class TorchvisionDetectionFunction:
@@ -25,7 +27,7 @@ class TorchvisionDetectionFunction:
         self.latest_image = None
         self.predictor = BoxProcessorUlimDit(
             # models_dir="/etc/marie/model_zoo/unilm/dit/text_detection",
-            models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
+            models_dir=os.path.join(__model_path__, "unilm", "dit", "text_detection"),
             cuda=torch.cuda.is_available(),
         )
 

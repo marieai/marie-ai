@@ -1,16 +1,52 @@
 package io_tunnel
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestWasmFixtureRequirementsUseCheckout(t *testing.T) {
+	archive := wasmFixtureZip(t)
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements, err := fs.ReadFile(reader, "requirements.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dependency string
+	for _, line := range strings.Split(string(requirements), "\n") {
+		if strings.HasPrefix(line, "marie-wasm @ ") {
+			dependency = strings.TrimPrefix(line, "marie-wasm @ ")
+		}
+	}
+	location, err := url.Parse(dependency)
+	if err != nil || location.Scheme != "file" || !filepath.IsAbs(location.Path) {
+		t.Fatalf("expected an absolute checkout file URI, got %q (%v)", dependency, err)
+	}
+	packageInfo, err := os.Stat(filepath.Join(location.Path, "pyproject.toml"))
+	if err != nil {
+		t.Fatalf("archive dependency must exist in this checkout: %v", err)
+	}
+	checkoutInfo, err := os.Stat(filepath.Join("..", "..", "..", "..", "marie-wasm", "pyproject.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(packageInfo, checkoutInfo) {
+		t.Fatalf("archive dependency points outside the owning checkout: %q", dependency)
+	}
+}
 
 // wasmFixtureZip packages testdata/fixture-wasm-plugin (a python_source plugin
 // whose entrypoint is marie.wasm.daemon_runner + a compiled node.wasm).
@@ -39,6 +75,14 @@ func wasmFixtureZip(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("read wasm fixture: %v", err)
 	}
+	wasmPackage, err := filepath.Abs(filepath.Join(root, "..", "..", "..", "marie-wasm"))
+	if err != nil {
+		t.Fatalf("resolve marie-wasm package: %v", err)
+	}
+	packageURI := (&url.URL{Scheme: "file", Path: filepath.ToSlash(wasmPackage)}).String()
+	files["requirements.txt"] = []byte(strings.ReplaceAll(
+		string(files["requirements.txt"]), "marie-wasm\n", "marie-wasm @ "+packageURI+"\n",
+	))
 	return zipFromFiles(t, files)
 }
 

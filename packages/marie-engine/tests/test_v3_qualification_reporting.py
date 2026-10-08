@@ -549,7 +549,7 @@ def valid_manifest():
         )
         for family, port, version in [
             ('redis', '4143', '7.4.2'),
-            ('valkey', '4142', '8.1.6'),
+            ('valkey', '4142', '9.1.2'),
         ]
     }
 
@@ -571,6 +571,7 @@ def valid_manifest():
         'missing_identity',
         'empty_identity',
         'version',
+        'valkey_version',
         'project',
         'compose_file',
         'ports_env',
@@ -613,6 +614,8 @@ def test_manifest_rejected_before_external_calls(tmp_path, monkeypatch, mutation
         redis['container_id'] = ''
     elif mutation == 'version':
         redis['version'] = '7.4.1'
+    elif mutation == 'valkey_version':
+        manifest['valkey']['version'] = '8.1.6'
     elif mutation == 'project':
         manifest['valkey']['compose_project'] = 'other'
     elif mutation == 'compose_file':
@@ -643,7 +646,7 @@ def valid_report():
     stores = {}
     cells = []
     cleanup = []
-    for family, version in [('redis', '7.4.2'), ('valkey', '8.1.6')]:
+    for family, version in [('redis', '7.4.2'), ('valkey', '9.1.2')]:
         stores[family] = dict(
             family=family,
             version=version,
@@ -1035,13 +1038,13 @@ def test_live_preflight_rejects_observed_drift(tmp_path, monkeypatch, mutation):
                         '7.4.1' if mutation == 'redis_version' else '7.4.2'
                     ),
                     **(
-                        {'valkey_version': '8.1.6'}
+                        {'valkey_version': '9.1.2'}
                         if mutation == 'redis_is_valkey'
                         else {}
                     ),
                 }
             return {
-                'valkey_version': '8.1.5' if mutation == 'valkey_version' else '8.1.6'
+                'valkey_version': '8.1.6' if mutation == 'valkey_version' else '9.1.2'
             }
 
         def config_get(self, *keys):

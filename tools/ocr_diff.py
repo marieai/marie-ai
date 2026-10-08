@@ -1,7 +1,30 @@
+import argparse
 import base64
 import glob
 import os
 from io import BytesIO
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Directory containing images to compare"
+    )
+    parser.add_argument(
+        "image_dir",
+        type=os.path.expanduser,
+        help="Directory containing images to compare",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=os.path.expanduser,
+        required=True,
+        help="Second TrOCR checkpoint file",
+    )
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
 
 import torch as torch
 from PIL import Image
@@ -14,11 +37,13 @@ from marie.utils.json import load_json_file, store_json_object
 use_cuda = torch.cuda.is_available()
 
 
-def build_ocr_engines():
+def build_ocr_engines(
+    checkpoint: str,
+) -> tuple[BoxProcessorUlimDit, TrOcrProcessor, TrOcrProcessor]:
     # return None, None, None
 
     box_processor = BoxProcessorUlimDit(
-        models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
+        models_dir=os.path.join(__model_path__, "unilm", "dit", "text_detection"),
         cuda=use_cuda,
     )
 
@@ -31,7 +56,7 @@ def build_ocr_engines():
     )
 
     ocr2_processor = TrOcrProcessor(
-        model_name_or_path="/data/models/unilm/trocr/ft_SROIE_LINES_SET38/checkpoint_best.pt",
+        model_name_or_path=checkpoint,
         cuda=use_cuda,
     )
 
@@ -95,7 +120,6 @@ def process_image(img_path, box_processor, ocr1_processor, ocr2_processor):
         word1,
         word2,
     ) in enumerate(zip(result1["words"], result2["words"])):
-
         print("word : ", word1, word2)
         # filter only for words that contain digits
         # if not any(char.isdigit() for char in word1["text"]):
@@ -190,12 +214,5 @@ def process_dir(image_dir: str, box_processor, ocr1_processor, ocr2_processor):
 
 if __name__ == "__main__":
     torch.set_float32_matmul_precision("high")
-    box_processor, ocr1_processor, ocr2_processor = build_ocr_engines()
-
-    process_dir(
-        # "/home/greg/datasets/funsd_dit/IMAGES/LbxIDImages_boundingBox_6292023",
-        "~/datasets/private/eob-extract/converted/imgs/eob-extract/eob-003",
-        box_processor,
-        ocr1_processor,
-        ocr2_processor,
-    )
+    box_processor, ocr1_processor, ocr2_processor = build_ocr_engines(args.checkpoint)
+    process_dir(args.image_dir, box_processor, ocr1_processor, ocr2_processor)

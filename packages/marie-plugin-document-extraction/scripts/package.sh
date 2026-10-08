@@ -2,7 +2,8 @@
 set -euo pipefail
 
 plugin_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-out_dir="${1:-/mnt/data/marie-ai/plugins}"
+repo_dir="$(cd "$plugin_dir/../.." && pwd)"
+out_dir="${1:-${DATA_DIR:-${MARIE_DEFAULT_MOUNT:-$repo_dir}}/plugins}"
 
 version="$(
   python3 - "$plugin_dir/marie-extension.yaml" <<'PY'

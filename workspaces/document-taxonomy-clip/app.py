@@ -1,4 +1,8 @@
-import os.path
+import os
+
+model2_name = os.path.expanduser(os.environ.get("MARIE_CLIP_MODEL", ""))
+if not model2_name:
+    raise ValueError("Set MARIE_CLIP_MODEL to the trained CLIP model path or model ID")
 
 import gradio as gr
 import torch
@@ -6,13 +10,8 @@ from transformers import CLIPModel, CLIPProcessor
 
 # Load two different CLIP models
 model1_name = "openai/clip-vit-base-patch16"
-model2_name = "openai/clip-vit-large-patch14"
 
 model1_name = "openai/clip-vit-large-patch14-336"
-model2_name = "openai/clip-vit-base-patch16"
-model2_name = os.path.expanduser(
-    "~/dev/tooling/train-clip/oputput-taxonomy/checkpoint-13000"
-)
 
 # Load CLIP models and their respective processors
 model_1 = CLIPModel.from_pretrained(model1_name)

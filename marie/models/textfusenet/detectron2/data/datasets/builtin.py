@@ -50,7 +50,7 @@ _PREDEFINED_SPLITS_COCO["coco"] = {
     "ctw1500":("ctw1500/train_images", "ctw1500/train.json"),
     "icdar2013":("icdar2013/train_images", "icdar2013/train.json"),
     "icdar2015XX":("icdar2015/train_images", "icdar2015/train.json"),
-    "icdar2015":("~/devio/TextFuseNet/data/sample001/images/coco-text", "~/devio/TextFuseNet/data/sample001/annotations/instances_default.json"),
+    "icdar2015":("icdar2015/train_images", "icdar2015/train.json"),
 
 }
 
@@ -109,7 +109,7 @@ _PREDEFINED_SPLITS_COCO_PANOPTIC = {
 }
 
 
-def register_all_coco(root="***"):  # put your root path of ocr datasets here
+def register_all_coco(root: str = "datasets") -> None:
     for dataset_name, splits_per_dataset in _PREDEFINED_SPLITS_COCO.items():
         for key, (image_root, json_file) in splits_per_dataset.items():
             # Assume pre-defined datasets live in `./datasets`.
@@ -216,8 +216,9 @@ def register_all_pascal_voc(root="datasets"):
         MetadataCatalog.get(name).evaluator_type = "pascal_voc"
 
 
-# Register them all under "./datasets"
-register_all_coco()
-register_all_lvis()
-register_all_cityscapes()
-register_all_pascal_voc()
+# Register them all under the configured dataset root.
+_root = os.path.expanduser(os.getenv("DETECTRON2_DATASETS", "datasets"))
+register_all_coco(_root)
+register_all_lvis(_root)
+register_all_cityscapes(_root)
+register_all_pascal_voc(_root)

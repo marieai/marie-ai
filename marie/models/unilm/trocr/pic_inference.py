@@ -1,18 +1,15 @@
-import glob
+import argparse
 import os
-
-import task
-import deit
-import trocr_models
-import torch
-import fairseq
-from fairseq import utils
-from fairseq_cli import generate
-from PIL import Image
-import torchvision.transforms as transforms
 
 
 def init(model_path, beam=5):
+    import task
+    import deit
+    import trocr_models
+    import torch
+    import fairseq
+    import torchvision.transforms as transforms
+
     model, cfg, task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
         arg_overrides={"beam": beam, "task": "text_recognition", "data": "", "fp16": False})
@@ -36,6 +33,8 @@ def init(model_path, beam=5):
 
 
 def preprocess(img_path, img_transform):
+    from PIL import Image
+
     im = Image.open(img_path).convert('RGB').resize((384, 384))
     im = img_transform(im).unsqueeze(0).to(device).float()
 
@@ -47,6 +46,9 @@ def preprocess(img_path, img_transform):
 
 
 def get_text(cfg, generator, model, sample, bpe):
+    from fairseq import utils
+    from fairseq_cli import generate
+
     decoder_output = task.inference_step(generator, model, sample, prefix_tokens=None, constraints=None)
     decoder_output = decoder_output[0][0]  # top1
 
@@ -66,24 +68,19 @@ def get_text(cfg, generator, model, sample, bpe):
 
 
 if __name__ == '__main__':
-    model_path = '~/devio/3rdparty/unilm/models/trocr-large-printed.pt'
-    jpg_path = "~/devio/marie-icr/assets/psm/word/0001.jpg"
-    jpg_path = "~/devio/marie-icr/assets/english/Lines/004.png"
-    beam = 5
+    parser = argparse.ArgumentParser(description='Recognize text in images with TrOCR')
+    parser.add_argument('--model-path', required=True, help='TrOCR checkpoint file')
+    parser.add_argument('--beam', type=int, default=5, help='Beam search width')
+    parser.add_argument('images', nargs='+', help='Image files to recognize')
+    args = parser.parse_args()
 
-    model, cfg, task, generator, bpe, img_transform, device = init(model_path, beam)
-    _path = jpg_path
-
-    sample = preprocess(_path, img_transform)
-    text = get_text(cfg, generator, model, sample, bpe)
-    print(f"format : {text}  >> {_path}")
-
-    os.exit(0)
-    burst_dir = "/tmp/boxes/PID_576_7188_0_150459314_page_0004/bounding_boxes/field/crop"
-
-    for _path in sorted(glob.glob(os.path.join(burst_dir, "*.*"))):
+    model, cfg, task, generator, bpe, img_transform, device = init(
+        os.path.expanduser(args.model_path), args.beam
+    )
+    for image_path in args.images:
+        _path = os.path.expanduser(image_path)
         sample = preprocess(_path, img_transform)
         text = get_text(cfg, generator, model, sample, bpe)
-        print(f"format : {text}  >> {_path}")
+        print(f'format : {text}  >> {_path}')
 
     print('done')

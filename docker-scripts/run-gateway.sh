@@ -11,9 +11,10 @@ fi
 # Set gateway-specific configuration
 NAME=${CONTAINER_NAME}
 CONFIG="config"
+DATA_DIR="${DATA_DIR:-${MARIE_DEFAULT_MOUNT:-/mnt/data/marie-ai}}"
 PORT=51000
 GRPC_PORT=52000
-CONFIG_DIR="/mnt/data/marie-ai/$CONFIG"
+CONFIG_DIR="$DATA_DIR/$CONFIG"
 
 # Check if container already exists
 CONTAINER_ID=$(docker inspect --format="{{.Id}}" ${NAME} 2> /dev/null)
@@ -77,11 +78,11 @@ else
     -e OPENAI_API_KEY="${OPENAI_API_KEY:-EMPTY}" \
     --env-file ./service.env \
     --name $NAME \
-    -v $CONFIG_DIR:/etc/marie:rw \
-    -v /mnt/data/marie-ai/:/mnt/data/marie-ai:rw \
-    -v /mnt/data/marie-ai/model_zoo:/mnt/data/marie-ai/model_zoo:ro \
+    -v "$CONFIG_DIR:/etc/marie:rw" \
+    -v "$DATA_DIR:/mnt/data/marie-ai:rw" \
+    -v "$DATA_DIR/model_zoo:/mnt/data/marie-ai/model_zoo:ro" \
     -v /opt/logs/marie-ai:/opt/marie-ai/logs:rw \
-    -v /mnt/data/marie-ai/config/extra_py_modules:/mnt/data/marie-ai/config/extra_py_modules:ro \
+    -v "$DATA_DIR/config/extra_py_modules:/mnt/data/marie-ai/config/extra_py_modules:ro" \
     --network=host \
     -p $PORT:51000 \
     -p $GRPC_PORT:52000 \

@@ -43,7 +43,7 @@ services:
       - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb_core,pg_documentdb
     volumes:
       - psql_data:/var/lib/postgresql/data
-      - /mnt/data/marie-ai/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - marie_default
 volumes:

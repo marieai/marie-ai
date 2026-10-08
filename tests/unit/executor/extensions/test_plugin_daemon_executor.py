@@ -15,8 +15,6 @@ from marie.plugin_daemon import discover_daemon
 
 
 class HealthHandler(BaseHTTPRequestHandler):
-    stub_payloads: list[dict] = []
-
     def do_GET(self):
         if self.path != "/health":
             self.send_response(404)
@@ -33,27 +31,6 @@ class HealthHandler(BaseHTTPRequestHandler):
         ).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_POST(self):
-        if self.path != "/v1/runtime/stub-invocations":
-            self.send_response(404)
-            self.end_headers()
-            return
-
-        raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        self.__class__.stub_payloads.append(json.loads(raw.decode("utf-8")))
-        body = "\n".join(
-            [
-                'data: {"type":"text","payload":"hello","sequence":0}',
-                'data: {"type":"structured_object","payload":{"ok":true},"sequence":1,"final":true}',
-                "data: [DONE]",
-            ]
-        ).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -76,7 +53,6 @@ def test_explicit_missing_binary_reports_unavailable(tmp_path):
 
 
 def test_sidecar_status_reports_health():
-    HealthHandler.stub_payloads = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -90,60 +66,17 @@ def test_sidecar_status_reports_health():
         server.server_close()
 
     assert status["mode"] == "sidecar_proxy"
-    assert status["runtime_execution"] == "decode_stub_only"
     assert status["daemon"]["ready"] is True
     assert status["daemon"]["version"] == "0.1.0-test"
     assert status["process"]["pid"] is None
 
 
-def test_stub_invocation_forwards_signed_envelope_to_daemon():
-    HealthHandler.stub_payloads = []
-    server = ThreadingHTTPServer(("127.0.0.1", 0), HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    try:
-        url = f"http://127.0.0.1:{server.server_port}"
-        executor = MariePluginDaemonExecutor(daemon_url=url, start=False, env={"PATH": ""})
-        docs = asyncio.run(
-            executor.stub_invocation(
-                DocList[TextDoc](
-                    [
-                        TextDoc(
-                            text=json.dumps(
-                                {
-                                    "requestId": "request-1",
-                                    "signature": {"keyId": "test", "value": "signed"},
-                                }
-                            )
-                        )
-                    ]
-                ),
-                parameters={"job_id": "request-1"},
-            )
-        )
-    finally:
-        server.shutdown()
-        server.server_close()
-
-    frames = [json.loads(doc.text) for doc in docs]
-    assert HealthHandler.stub_payloads == [
-        {"requestId": "request-1", "signature": {"keyId": "test", "value": "signed"}}
-    ]
-    assert frames[0]["requestId"] == "request-1"
-    assert frames[0]["type"] == "text"
-    assert frames[0]["payload"] == "hello"
-    assert frames[1]["type"] == "structured_object"
-    assert frames[1]["payload"] == {"ok": True}
-    assert frames[1]["final"] is True
-
-
-def test_stub_invocation_rejects_invalid_envelope():
+def test_connector_invocation_rejects_missing_plugin_identity():
     executor = MariePluginDaemonExecutor(daemon_url="http://127.0.0.1:1", start=False, env={"PATH": ""})
 
     docs = asyncio.run(
-        executor.stub_invocation(
-            DocList[TextDoc]([TextDoc(text="{not-json")]),
+        executor.connector_invoke(
+            DocList[TextDoc]([]),
             parameters={"job_id": "request-2"},
         )
     )

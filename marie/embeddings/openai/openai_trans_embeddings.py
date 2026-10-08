@@ -85,12 +85,14 @@ class OpenAITransformerEmbeddings(EmbeddingsBase):
             self.model_name_or_path, self.device
         )
 
-    def setup_model(self, model_name_or_path, device: str = "cuda"):
+    def setup_model(
+        self, model_name_or_path: str, device: str = "cuda"
+    ) -> tuple[CLIPModel, CLIPProcessor, CLIPTokenizer]:
         """prepare for the model"""
         model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
 
         checkpoint = torch.load(
-            "/mnt/data/marie-ai/model_zoo/clip/snippet/clip-vit-base-patch32/pytorch_model.bin",
+            os.path.join(model_name_or_path, 'pytorch_model.bin'),
             map_location=device,
             weights_only=True,
         )

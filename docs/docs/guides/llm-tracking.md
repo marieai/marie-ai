@@ -6,6 +6,8 @@ sidebar_position: 12
 
 Marie-AI exposes LLM and runtime observability through `marie.instrumentation`, using OpenTelemetry for transport and OpenInference for LLM/agent span semantics. The standard runtime path is OTLP collector to ClickHouse.
 
+For queue configuration and the isolated deployment qualification, follow [LLM dispatcher setup](./llm-dispatcher-setup.md).
+
 ## Architecture overview
 
 The current tracking system follows this path:

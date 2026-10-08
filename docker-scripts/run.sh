@@ -21,6 +21,7 @@ DEVICES="all"
 GPUS=$1
 GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
 CONFIG="config"
+DATA_DIR="${DATA_DIR:-${MARIE_DEFAULT_MOUNT:-/mnt/data/marie-ai}}"
 PORT=6000
 
 printf '\e[1;32m%-6s\e[m\n' "GPU_COUNT : $GPU_COUNT"
@@ -46,7 +47,7 @@ if [[ -n "$GPUS" ]]; then
 fi
 
 CONTAINER_ID=$(docker inspect --format="{{.Id}}" ${NAME} 2> /dev/null)
-CONFIG_DIR="/mnt/data/marie-ai/$CONFIG"
+CONFIG_DIR="$DATA_DIR/$CONFIG"
 
 echo "GPUS Selected  > ${DEVICES}"
 echo "CONTAINER_NAME > ${NAME}"
@@ -77,8 +78,8 @@ docker run -d -u 0 --user root -it --gpus $DEVICES --shm-size=4g --ulimit memloc
 -e MARIE_PORT=$PORT \
 --env-file ./service.env \
 --name $NAME \
--v $CONFIG_DIR:/etc/marie:rw \
--v /mnt/data/marie-ai/model_zoo:/opt/marie-icr/model_zoo:ro \
+-v "$CONFIG_DIR:/etc/marie:rw" \
+-v "$DATA_DIR/model_zoo:/opt/marie-icr/model_zoo:ro" \
 -v /opt/logs/marie-icr/$GPUS:/opt/marie-icr/logs:rw \
 -v /opt/shares/medrxprovdata:/opt/marie-icr/share:rw \
 --network=host \

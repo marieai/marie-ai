@@ -107,22 +107,6 @@ func NewServer(version VersionInfo, options ...ServerOption) http.Handler {
 		writeJSON(w, http.StatusOK, result)
 	})
 
-	mux.HandleFunc("POST /v1/runtime/stub-invocations", func(w http.ResponseWriter, r *http.Request) {
-		var envelope map[string]any
-		if !decodeJSONBody(w, r, &envelope) {
-			return
-		}
-		if err := config.verifier.Verify(envelope); err != nil {
-			writeJSON(w, http.StatusUnauthorized, errorBody(auth.Code(err), err.Error()))
-			return
-		}
-		if err := policy.VerifyRuntimeEnvelope(envelope); err != nil {
-			writeJSON(w, http.StatusForbidden, errorBody(policy.Code(err), err.Error()))
-			return
-		}
-		writeJSON(w, http.StatusNotImplemented, errorBody("runtime_disabled", "runtime invocation is disabled in decode-only mode"))
-	})
-
 	mux.HandleFunc("POST /v1/plugins/install", func(w http.ResponseWriter, r *http.Request) {
 		envelope, tenant, ok := authorizeHeaderEnvelope(w, r, config)
 		if !ok {
