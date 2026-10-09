@@ -52,7 +52,7 @@ class JobSupervisor:
         confirmation_event: asyncio.Event,
         terminal_event_callback: Optional[TerminalEventCallback] = None,
         committed_terminal_lookup: Optional[CommittedTerminalLookup] = None,
-    ):
+    ) -> None:
         self.logger = MarieLogger(self.__class__.__name__)
         self._job_id = job_id
         self._job_info_client = job_info_client
@@ -64,7 +64,7 @@ class JobSupervisor:
         self.confirmation_event = confirmation_event  # we need to make sure that this is per job confirmation event
         self._terminal_event_callback = terminal_event_callback
         self._committed_terminal_lookup = committed_terminal_lookup
-        self._active_tasks = set()
+        self._active_tasks: set[asyncio.Task] = set()
         self._loop = get_or_reuse_loop()
         self._current_job_epoch: Optional[int] = None
 
@@ -240,9 +240,6 @@ class JobSupervisor:
                         )
         else:
             await self._submit_job_in_background(curr_info)
-            # task = asyncio.create_task(self._submit_job_in_background(curr_info))
-            # self._active_tasks.add(task)
-            # task.add_done_callback(lambda t: self._active_tasks.discard(t))
 
     def _signal_confirmation_threadsafe(self) -> None:
         """Signal confirmation directly on its loop or safely across threads."""
@@ -427,7 +424,7 @@ class JobSupervisor:
             )
             self.logger.error("Ack wait error for %s/%s: %s", node, deployment_name, e)
 
-    async def _submit_job_in_background(self, job_info: JobInfo):
+    async def _submit_job_in_background(self, job_info: JobInfo) -> None:
         start_time = time.monotonic()
 
         try:
@@ -455,7 +452,7 @@ class JobSupervisor:
                 self._job_id,
             )
 
-            async def _finalize_when_done():
+            async def _finalize_when_done() -> None:
                 """
                 Finalize the job once the send_task is completed.
                 """
@@ -618,7 +615,11 @@ class JobSupervisor:
                         )
                     self.logger.exception("Finalize failed for job %s", self._job_id)
 
-            asyncio.create_task(_finalize_when_done(), name=f"finalize:{self._job_id}")
+            finalize_task = asyncio.create_task(
+                _finalize_when_done(), name=f"finalize:{self._job_id}"
+            )
+            self._active_tasks.add(finalize_task)
+            finalize_task.add_done_callback(self._active_tasks.discard)
 
         except Exception as e:
             self.logger.error(
