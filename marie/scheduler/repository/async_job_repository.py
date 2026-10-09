@@ -209,6 +209,8 @@ class AsyncJobRepository:
             FROM {DEFAULT_SCHEMA}.job
             WHERE data->'metadata'->>'ref_type' = %s
               AND data->'metadata'->>'ref_id' = %s
+            ORDER BY created_on DESC, id DESC
+            LIMIT 1
         """
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(query, ref_type, ref_id)
