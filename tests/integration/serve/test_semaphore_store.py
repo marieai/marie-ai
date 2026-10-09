@@ -569,6 +569,80 @@ def test_release_with_missing_counter(sema: SemaphoreStore):
     assert ticket not in holders_after
 
 
+@pytest.mark.parametrize("counter_value", [None, "invalid"])
+@pytest.mark.parametrize("max_retries", [1, 5])
+def test_release_repairs_counter_without_losing_other_holders(
+    sema: SemaphoreStore, counter_value: str | None, max_retries: int
+) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 3)
+    tickets = [_ticket() for _ in range(3)]
+    for ticket in tickets:
+        assert sema.reserve(slot, ticket, node="worker", ttl=30)
+    count_key = f"semaphores/{slot}/count"
+    if counter_value is None:
+        sema.etcd.delete(count_key)
+    else:
+        sema.etcd.put(count_key, counter_value)
+
+    assert sema.release(slot, tickets[0], max_retries=max_retries)
+
+    assert sema.read_count(slot) == 2
+    assert set(sema.list_holders(slot)) == set(tickets[1:])
+    assert sema.available_slot_count(slot) == 1
+    assert sema.reserve(slot, _ticket(), node="replacement", ttl=30)
+    assert not sema.reserve(slot, _ticket(), node="overflow", ttl=30)
+
+
+def test_release_repair_preserves_a_concurrent_reservation(
+    sema: SemaphoreStore, monkeypatch
+) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 3)
+    tickets = [_ticket() for _ in range(2)]
+    for ticket in tickets:
+        assert sema.reserve(slot, ticket, node="worker", ttl=30)
+    sema.etcd.delete(f"semaphores/{slot}/count")
+    get_prefix = sema.etcd.client.get_prefix
+    injected = False
+    concurrent_ticket = _ticket()
+
+    def reserve_during_scan(key, *args, **kwargs):
+        nonlocal injected
+        snapshot = list(get_prefix(key, *args, **kwargs))
+        if not injected and "/holders/" in str(key):
+            injected = True
+            assert sema.reserve(slot, concurrent_ticket, node="concurrent", ttl=30)
+        return iter(snapshot)
+
+    monkeypatch.setattr(sema.etcd.client, "get_prefix", reserve_during_scan)
+
+    assert sema.release(slot, tickets[0])
+
+    assert injected
+    assert sema.read_count(slot) == 2
+    assert set(sema.list_holders(slot)) == {tickets[1], concurrent_ticket}
+    assert sema.reserve(slot, _ticket(), node="replacement", ttl=30)
+    assert not sema.reserve(slot, _ticket(), node="overflow", ttl=30)
+
+
+def test_release_leaves_holder_intact_when_counter_repair_fails(
+    sema: SemaphoreStore, monkeypatch
+) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+    ticket = _ticket()
+    assert sema.reserve(slot, ticket, node="worker", ttl=30)
+    count_key = f"semaphores/{slot}/count"
+    sema.etcd.delete(count_key)
+    monkeypatch.setattr(sema, "_reconcile_count", lambda *_args, **_kwargs: (1, False, 5))
+
+    assert not sema.release(slot, ticket)
+
+    assert sema.get_holder(slot, ticket) is not None
+    assert sema.etcd.get(count_key) is None
+
+
 def test_release_owned_with_missing_counter(sema: SemaphoreStore):
     """
     Bug #2 fix: Test that release_owned() handles missing counter gracefully

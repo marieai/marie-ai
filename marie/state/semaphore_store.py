@@ -583,9 +583,8 @@ class SemaphoreStore(BaseStore):
         """
         Atomically release a slot. Returns True if released, False otherwise.
 
-        Handles missing counter gracefully to prevent holder leaks:
-        - If counter exists: decrement and delete holder
-        - If counter missing but holder exists: delete holder and initialize counter to 0
+        Repair a missing or malformed counter from live holders before the
+        atomic counter decrement and holder deletion.
 
         Uses CAS with automatic retry on contention to prevent holder leaks under high load.
         """
@@ -603,31 +602,17 @@ class SemaphoreStore(BaseStore):
                 )  # True if deleted during retry, False if never existed
 
             cnt_raw = self._get_raw(cnt_k)
-
-            # Handle missing counter case - prevent holder leak
-            if cnt_raw is None:
-                # Counter missing but holder exists
-                # Delete holder and set count to 0 atomically
-                t = self.etcd.txn()
-                t.if_missing(cnt_k)  # Verify counter still missing
-                t.if_value(h_k, "==", h_raw)  # Holder unchanged & exists (CAS)
-                t.put(cnt_k, "0")  # Initialize counter to 0
-                t.delete(h_k)
-
-                ok, _resp = t.commit()
-                if ok:
-                    return True
-                # CAS failed - retry with backoff
-                if attempt < max_retries - 1:
-                    time.sleep(
-                        0.001 * (2**attempt)
-                    )  # Exponential backoff: 1ms, 2ms, 4ms, 8ms, 16ms
-                continue
-
-            # Normal case: counter exists
             old_count = _decode_count(cnt_raw)
-            if old_count is None:
-                old_count = 0
+            if cnt_raw is None or old_count is None:
+                _count, reconciled, _attempts = self._reconcile_count(
+                    slot_type, max_retries=max_retries
+                )
+                if not reconciled:
+                    return False
+                cnt_raw = self._get_raw(cnt_k)
+                old_count = _decode_count(cnt_raw)
+                if cnt_raw is None or old_count is None:
+                    continue
             new_count = max(0, old_count - 1)
 
             t = self.etcd.txn()
