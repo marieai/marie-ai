@@ -131,3 +131,153 @@ async def test_sync_subscriber_exception_releases_capacity() -> None:
         assert received == [2]
     finally:
         await publisher.stop()
+
+
+async def test_stop_bounds_drain_and_unblocks_pending_publish(
+    caplog, monkeypatch
+) -> None:
+    from marie.job.event_publisher import logger
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def subscriber(_event_type: str, _message: int) -> None:
+        started.set()
+        await release.wait()
+
+    publisher = EventPublisher(
+        worker_count=1,
+        max_queue_size=1,
+        publish_blocking=True,
+        subscriber_timeout_s=0,
+    )
+    publisher.subscribe("event", subscriber)
+    monkeypatch.setattr(logger.logger, "propagate", True)
+    blocked = None
+    try:
+        await publisher.publish("event", 0)
+        await asyncio.wait_for(started.wait(), timeout=1)
+        await publisher.publish("event", 1)
+        blocked = asyncio.create_task(publisher.publish("event", 2))
+        await asyncio.sleep(0)
+        assert not blocked.done()
+        await asyncio.wait_for(publisher.stop(timeout_s=0.05), timeout=0.5)
+        with pytest.raises(RuntimeError, match="stopped"):
+            await asyncio.wait_for(blocked, timeout=0.5)
+        await asyncio.wait_for(publisher.join(), timeout=0.5)
+        assert publisher.queue_size == 0
+        assert publisher._active_publishes == 0
+        assert "pending_publishes=1" in caplog.text
+        assert "queued_events=1" in caplog.text
+        await publisher.stop(timeout_s=0.05)
+        with pytest.raises(RuntimeError, match="stopped"):
+            await publisher.publish("event", 3)
+    finally:
+        release.set()
+        if blocked is not None:
+            await asyncio.gather(blocked, return_exceptions=True)
+        await publisher.stop()
+
+
+async def test_stop_does_not_await_a_subscriber_that_defers_cancellation() -> None:
+    started = asyncio.Event()
+    cancelling = asyncio.Event()
+    release = asyncio.Event()
+
+    async def subscriber(_event_type: str, _message: str) -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelling.set()
+            await release.wait()
+
+    publisher = EventPublisher(worker_count=1, subscriber_timeout_s=0)
+    publisher.subscribe("event", subscriber)
+    workers = []
+    try:
+        await publisher.publish("event", "message")
+        await asyncio.wait_for(started.wait(), timeout=1)
+        workers = list(publisher._worker_tasks)
+        await asyncio.wait_for(publisher.stop(timeout_s=0.05), timeout=0.5)
+        await asyncio.wait_for(cancelling.wait(), timeout=0.5)
+        assert any(not worker.done() for worker in workers)
+        with pytest.raises(RuntimeError, match="cannot restart"):
+            publisher.start()
+    finally:
+        release.set()
+        if workers:
+            for worker in workers:
+                worker.cancel()
+            await asyncio.wait_for(
+                asyncio.gather(*workers, return_exceptions=True), timeout=1
+            )
+        await publisher.stop()
+
+
+async def test_stop_cancellation_still_cleans_up_workers() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def subscriber(_event_type: str, _message: str) -> None:
+        started.set()
+        await release.wait()
+
+    publisher = EventPublisher(worker_count=1, subscriber_timeout_s=0)
+    publisher.subscribe("event", subscriber)
+    stopping = None
+    try:
+        await publisher.publish("event", "message")
+        await asyncio.wait_for(started.wait(), timeout=1)
+        stopping = asyncio.create_task(publisher.stop())
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        stopping.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        assert publisher._stopped.is_set()
+        await asyncio.wait_for(publisher.join(), timeout=0.5)
+    finally:
+        release.set()
+        if stopping is not None:
+            await asyncio.gather(stopping, return_exceptions=True)
+        await publisher.stop()
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
+async def test_stop_timeout_must_be_positive_and_finite(timeout: float) -> None:
+    publisher = EventPublisher()
+    try:
+        with pytest.raises(ValueError, match="stop timeout_s"):
+            await publisher.stop(timeout_s=timeout)
+        assert publisher._accepting
+    finally:
+        await publisher.stop()
+
+
+async def test_concurrent_stop_respects_its_own_deadline() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def subscriber(_event_type: str, _message: str) -> None:
+        started.set()
+        await release.wait()
+
+    publisher = EventPublisher(worker_count=1, subscriber_timeout_s=0)
+    publisher.subscribe("event", subscriber)
+    stopping = None
+    try:
+        await publisher.publish("event", "message")
+        await asyncio.wait_for(started.wait(), timeout=1)
+        stopping = asyncio.create_task(publisher.stop(timeout_s=1))
+        while publisher._accepting:
+            await asyncio.sleep(0)
+        await asyncio.wait_for(publisher.stop(timeout_s=0.02), timeout=0.5)
+        assert not stopping.done()
+        release.set()
+        await asyncio.wait_for(stopping, timeout=1)
+    finally:
+        release.set()
+        if stopping is not None:
+            await asyncio.gather(stopping, return_exceptions=True)
+        await publisher.stop()

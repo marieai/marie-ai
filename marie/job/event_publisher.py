@@ -74,6 +74,7 @@ class EventPublisher:
         self._stopped = asyncio.Event()
         self._accepting = True
         self._active_publishes = 0
+        self._pending_puts: set[asyncio.Task] = set()
         self._publishes_done = asyncio.Event()
         self._publishes_done.set()
         self._stop_lock = asyncio.Lock()
@@ -162,31 +163,37 @@ class EventPublisher:
             queued_message = dict(message) if isinstance(message, dict) else message
 
             if self._publish_blocking:
-                if timeout_s is None:
-                    await queue.put((event_type, queued_message, enqueued_at))
-                else:
-                    try:
-                        await asyncio.wait_for(
-                            queue.put((event_type, queued_message, enqueued_at)),
-                            timeout=timeout_s,
+                pending_put = asyncio.create_task(
+                    queue.put((event_type, queued_message, enqueued_at))
+                )
+                self._pending_puts.add(pending_put)
+                try:
+                    if timeout_s is None:
+                        await pending_put
+                    else:
+                        await asyncio.wait_for(pending_put, timeout=timeout_s)
+                except asyncio.CancelledError:
+                    if self._stopped.is_set() and pending_put.cancelled():
+                        raise RuntimeError("EventPublisher is stopped") from None
+                    raise
+                except asyncio.TimeoutError:
+                    if trace_job_event:
+                        scheduler_trace(
+                            "job_status_event_dropped",
+                            **trace_fields,
+                            reason="publish_timeout",
+                            worker_id=worker_id,
+                            worker_queue_size=queue.qsize(),
+                            queue_size=self.queue_size,
+                            queue_capacity=self.queue_capacity,
+                            elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
                         )
-                    except asyncio.TimeoutError:
-                        if trace_job_event:
-                            scheduler_trace(
-                                "job_status_event_dropped",
-                                **trace_fields,
-                                reason="publish_timeout",
-                                worker_id=worker_id,
-                                worker_queue_size=queue.qsize(),
-                                queue_size=self.queue_size,
-                                queue_capacity=self.queue_capacity,
-                                elapsed_ms=(time.perf_counter() - publish_started)
-                                * 1000.0,
-                            )
-                        logger.error(
-                            f"EventPublisher: publish timeout for event '{event_type}'"
-                        )
-                        return
+                    logger.error(
+                        f"EventPublisher: publish timeout for event '{event_type}'"
+                    )
+                    return
+                finally:
+                    self._pending_puts.discard(pending_put)
             else:
                 try:
                     queue.put_nowait((event_type, queued_message, enqueued_at))
@@ -358,10 +365,10 @@ class EventPublisher:
         return float(len(self._dequeue_times))
 
     def start(self) -> None:
-        if self._worker_tasks:
-            return
         if self._stopped.is_set():
             raise RuntimeError("EventPublisher cannot restart after stop")
+        if self._worker_tasks:
+            return
         loop = asyncio.get_running_loop()
         self._worker_tasks = [
             loop.create_task(
@@ -370,18 +377,74 @@ class EventPublisher:
             for worker_id in range(self.worker_count)
         ]
 
-    async def stop(self) -> None:
-        """Stop accepting events, drain queued work, and stop publisher workers."""
-        async with self._stop_lock:
+    async def stop(self, timeout_s: float = 5.0) -> None:
+        """Drain within the deadline, then cancel delivery and discard any backlog."""
+        timeout_s = float(timeout_s)
+        if not math.isfinite(timeout_s) or timeout_s <= 0:
+            raise ValueError("stop timeout_s must be positive and finite")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        try:
+            async with asyncio.timeout(timeout_s):
+                await self._stop_lock.acquire()
+        except TimeoutError:
+            logger.warning("EventPublisher shutdown is already in progress")
+            return
+
+        try:
             if self._stopped.is_set():
                 return
 
             self._accepting = False
-            await self._publishes_done.wait()
-            await self.join()
-            self._stopped.set()
-            for task in self._worker_tasks:
-                task.cancel()
-            if self._worker_tasks:
-                await asyncio.gather(*self._worker_tasks, return_exceptions=True)
-                self._worker_tasks.clear()
+
+            async def drain() -> None:
+                await self._publishes_done.wait()
+                await self.join()
+
+            def consume_result(task: asyncio.Task) -> None:
+                if not task.cancelled():
+                    error = task.exception()
+                    if error is not None:
+                        logger.error(
+                            "EventPublisher shutdown task failed",
+                            exc_info=(type(error), error, error.__traceback__),
+                        )
+
+            draining = asyncio.create_task(drain())
+            drained = False
+            try:
+                done, _ = await asyncio.wait(
+                    {draining}, timeout=max(0.0, deadline - loop.time())
+                )
+                if done:
+                    draining.result()
+                    drained = True
+            finally:
+                self._stopped.set()
+                if not drained:
+                    logger.warning(
+                        "EventPublisher shutdown discarded undrained work: "
+                        "pending_publishes=%d queued_events=%d",
+                        self._active_publishes,
+                        self.queue_size,
+                    )
+                cleanup = {draining, *self._pending_puts, *self._worker_tasks}
+                for task in cleanup:
+                    if not task.done():
+                        task.cancel()
+                    task.add_done_callback(consume_result)
+                for queue in self._queues:
+                    while not queue.empty():
+                        queue.get_nowait()
+                        queue.task_done()
+                await asyncio.wait(cleanup, timeout=max(0.0, deadline - loop.time()))
+                self._worker_tasks = [
+                    task for task in self._worker_tasks if not task.done()
+                ]
+                if self._worker_tasks:
+                    logger.warning(
+                        "EventPublisher shutdown left %d worker(s) cancelling",
+                        len(self._worker_tasks),
+                    )
+        finally:
+            self._stop_lock.release()
