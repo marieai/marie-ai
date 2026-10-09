@@ -415,7 +415,6 @@ def mark_as_active_jobs(
         SELECT id
         FROM {schema}.job
         WHERE name = {_literal(name)} AND id IN (SELECT UNNEST({ids_string}::uuid[]))
-        --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
     )
     UPDATE {schema}.job j SET
         state = '{WorkState.ACTIVE.value}',

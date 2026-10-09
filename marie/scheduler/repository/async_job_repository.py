@@ -4000,6 +4000,7 @@ class AsyncJobRepository:
 
     def _record_to_work_info(self, record: Any) -> WorkInfo:
         if len(record) == 17:
+            # Legacy rows omit the trailing branch_metadata column.
             record = (*record, None)
         (
             id_,

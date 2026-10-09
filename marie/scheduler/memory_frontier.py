@@ -168,7 +168,7 @@ class MemoryFrontier:
         v = self._ver[wi.id]
         self._ready_set.add(wi.id)
         if wi.id not in self._added_at:
-            self._added_at[wi.id] = self._now()  # was time.time()
+            self._added_at[wi.id] = self._now()
         self._seq += 1
         heapq.heappush(
             self._ready_heap,
@@ -707,7 +707,7 @@ class MemoryFrontier:
         """
         async with self._lock:
             taken: list[WorkInfo] = []
-            now = self._now()  # was time.time()
+            now = self._now()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
             for jid in ids:
                 if not self._still_ready(jid):
@@ -731,7 +731,7 @@ class MemoryFrontier:
         async with self._lock:
             if max_n <= 0 or not self._ready_heap:
                 return []
-            now = self._now()  # was time.time()
+            now = self._now()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
             selected: list[WorkInfo] = []
             skipped: list[ReadyEntry] = []
@@ -767,7 +767,7 @@ class MemoryFrontier:
 
     async def reap_expired_soft_leases(self) -> int:
         async with self._lock:
-            now = self._now()  # was time.time()
+            now = self._now()
             reap = [jid for jid, until in self.leased_until.items() if until <= now]
             for jid in reap:
                 self.leased_until.pop(jid, None)
