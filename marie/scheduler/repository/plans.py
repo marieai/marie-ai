@@ -299,18 +299,18 @@ def insert_job_search_documents(schema: str) -> str:
 
 def load_dag(schema: str, dag_id: str) -> str:
     return f"""
-        SELECT serialized_dag FROM {schema}.dag WHERE id = '{dag_id}'::uuid
+        SELECT serialized_dag FROM {schema}.dag WHERE id = {_literal(dag_id)}::uuid
     """
 
 
 def create_queue(schema: str, queue_name: str, options: Dict[str, str]) -> str:
     return f"""
-            SELECT {schema}.create_queue('{queue_name}', '{{"retry_limit":2}}'::json)
+            SELECT {schema}.create_queue({_literal(queue_name)}, '{{"retry_limit":2}}'::json)
            """
 
 
 def delete_queue(schema: str, queue_name: str) -> str:
-    return f"SELECT {schema}.delete_queue({queue_name})"
+    return f"SELECT {schema}.delete_queue({_literal(queue_name)})"
 
 
 def version_table_exists(schema: str) -> str:
@@ -319,7 +319,7 @@ def version_table_exists(schema: str) -> str:
 
 def insert_version(schema: str, version: str) -> str:
     query = (
-        f"INSERT INTO {schema}.version(version) VALUES ('{version}') "
+        f"INSERT INTO {schema}.version(version) VALUES ({_literal(str(version))}) "
         "ON CONFLICT DO NOTHING"
     )
     return query
@@ -340,7 +340,7 @@ def count_dag_states(schema: str):
 
 
 def cancel_jobs(schema: str, name: str, ids: list):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     nonterminal = "', '".join(
         [
             WorkState.CREATED.value,
@@ -359,7 +359,7 @@ def cancel_jobs(schema: str, name: str, ids: list):
           run_owner = NULL,
           run_attempt_id = NULL,
           run_lease_expires_at = NULL
-      WHERE name = '{name}'
+      WHERE name = {_literal(name)}
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND state::text IN ('{nonterminal}')
       RETURNING 1
@@ -380,7 +380,7 @@ def cancel_pending_jobs_for_dag(schema: str, dag_id: str, output: dict):
           run_owner = NULL,
           run_attempt_id = NULL,
           run_lease_expires_at = NULL
-      WHERE dag_id = '{dag_id}'::uuid
+      WHERE dag_id = {_literal(dag_id)}::uuid
         AND state IN ('{WorkState.CREATED.value}', '{WorkState.RETRY.value}')
       RETURNING id
     )
@@ -389,14 +389,14 @@ def cancel_pending_jobs_for_dag(schema: str, dag_id: str, output: dict):
 
 
 def resume_jobs(schema: str, name: str, ids: list):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
 
     return f"""
     WITH results AS (
       UPDATE {schema}.job
       SET completed_on = NULL,
           state = '{WorkState.CREATED.value}'
-      WHERE name = '{name}'
+      WHERE name = {_literal(name)}
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND state = '{WorkState.CANCELLED.value}'
       RETURNING 1
@@ -408,13 +408,13 @@ def resume_jobs(schema: str, name: str, ids: list):
 def mark_as_active_jobs(
     schema: str, name: str, ids: list, include_metadata: bool = False
 ):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
 
     return f"""
     WITH next AS (
         SELECT id
         FROM {schema}.job
-        WHERE name = '{name}' AND id IN (SELECT UNNEST({ids_string}::uuid[]))
+        WHERE name = {_literal(name)} AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
     )
     UPDATE {schema}.job j SET
@@ -422,13 +422,13 @@ def mark_as_active_jobs(
         started_on = now(),
         retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
     FROM next
-    WHERE name = '{name}' AND j.id = next.id
+    WHERE name = {_literal(name)} AND j.id = next.id
     RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
     """
 
 
 def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
 
     return f"""
     WITH next AS (
@@ -451,7 +451,7 @@ def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
 def _complete_jobs_query(
     schema: str, name: str, ids: list, output: dict, state_condition: str
 ):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     return f"""
     WITH results AS (
       UPDATE {schema}.job
@@ -463,7 +463,7 @@ def _complete_jobs_query(
           lease_expires_at     = NULL,
           run_owner            = NULL,
           run_lease_expires_at = NULL  
-      WHERE name = '{name}'
+      WHERE name = {_literal(name)}
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND {state_condition}
       RETURNING 1
@@ -499,9 +499,9 @@ def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
 
 
 def fail_jobs_by_id(schema: str, name: str, ids: list, output: dict):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     where = (
-        f"name = '{name}' "
+        f"name = {_literal(name)} "
         f"AND id IN (SELECT UNNEST({ids_string}::uuid[])) "
         "AND state::text IN ('created', 'retry', 'active')"
     )
@@ -516,9 +516,9 @@ def fail_jobs_by_attempt(
     run_owner: str,
     run_attempt_id: str,
 ):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     where = (
-        f"name = '{name}' "
+        f"name = {_literal(name)} "
         f"AND id IN (SELECT UNNEST({ids_string}::uuid[])) "
         f"AND state = '{WorkState.ACTIVE.value}' "
         f"AND run_owner = {_literal(run_owner)} "
