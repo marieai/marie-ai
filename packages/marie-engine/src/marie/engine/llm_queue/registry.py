@@ -79,7 +79,8 @@ reserved_items reserved_bytes failures circuit next_probe probe_successes catego
 execution_bytes protected_slots borrowed_slots config_generation waiting_reason last_error last_error_at_ms request_queue_depth_error transport_failures
 observed_at_ms policy_generation policy_digest endpoint_group_id revision replica_id group_id selected_replica_id
 charged_cost refunded_cost committed_charge accepted completed drain_references oldest_pending_age_seconds gate processing_truncated""".split()
-    + """ charge_sequence refund_state endpoint_count endpoint_group_count details_truncated port""".split()
+    + """ charge_sequence refund_state endpoint_count endpoint_group_count details_truncated port
+held_reservations_sampled state_counts_truncated policy_refresh_inflight policy_refresh_timed_out""".split()
 )
 _ERRORS = frozenset(
     """connect_refused connect_timeout timeout outcome_unknown
@@ -97,16 +98,29 @@ malformed_requests_dropped offline_producer_requests_dropped offline_producer_re
 inflight_request_count pool_count total_concurrent_dispatch metadata_unavailable reserved_items
 reserved_bytes protected_slots borrowed_slots config_generation failures next_probe probe_successes open_until execution_limit execution_bytes last_error_at_ms""".split()
     + """ observed_at_ms policy_generation charged_cost refunded_cost committed_charge accepted completed charge_sequence drain_references oldest_pending_age_seconds""".split()
-    + """ endpoint_count endpoint_group_count port""".split()
+    + """ endpoint_count endpoint_group_count port held_reservations_sampled""".split()
 )
 
-_STATE_NAMES = frozenset({"ready", "claimed", "executing", "outcome_unknown"})
+_STATE_NAMES = frozenset(
+    {
+        "ready",
+        "claimed",
+        "executing",
+        "outcome_unknown",
+        "abandoned",
+        "failed",
+        "cancelled",
+        "expired",
+    }
+)
 
 
 def _clean(row: dict[str, Any]) -> dict[str, Any]:
     result = {}
     for key in _FIELDS & row.keys():
         value = row[key]
+        if key == "state_counts_truncated" and value is False:
+            continue
         if key in _NUMBER_FIELDS and isinstance(value, str):
             result[key] = int(value) if value.isdecimal() and len(value) <= 16 else None
         elif key == "policy_digest":
@@ -156,7 +170,15 @@ def _clean_state_counts(value: Any) -> dict[str, int]:
         if name in _STATE_NAMES and type(count) is int and count >= 0
     }
     return {
-        name: result.get(name, 0) for name in ("ready", "claimed", "running", "unknown")
+        **{
+            name: result.get(name, 0)
+            for name in ("ready", "claimed", "running", "unknown")
+        },
+        **{
+            name: result[name]
+            for name in ("abandoned", "failed", "cancelled", "expired")
+            if result.get(name, 0) > 0
+        },
     }
 
 

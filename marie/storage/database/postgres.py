@@ -58,6 +58,7 @@ class PostgresqlMixin:
 
             self.postgreSQL_pool = pool or ConnectionPool(
                 "",
+                connection_class=getattr(self, "connection_class", psycopg.Connection),
                 min_size=min_connections,
                 max_size=max_connections,
                 timeout=self._pg_pool_acquire_timeout_seconds,

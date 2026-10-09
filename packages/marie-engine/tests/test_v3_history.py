@@ -120,15 +120,13 @@ async def test_unknown_transport_exports_error_without_success_or_exception_cont
     releases['model'] = asyncio.Event()
     runtime = dispatcher_for(store, url)
     runtime.endpoints['endpoint'] = replace(
-        runtime.endpoints['endpoint'], call_timeout_seconds=0.1
+        runtime.endpoints['endpoint'], call_timeout_seconds=0.2
     )
     await runtime.start()
     try:
         await eventually(lambda: runtime._owner_ready)
         req = admit_request(store)
-        await eventually(
-            lambda: store.metadata(req.attempt_id).state == 'outcome_unknown'
-        )
+        await eventually(lambda: store.metadata(req.attempt_id).state == 'failed')
         spans = [
             s
             for s in exporter.get_finished_spans()

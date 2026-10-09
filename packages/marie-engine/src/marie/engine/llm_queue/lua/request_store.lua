@@ -51,7 +51,7 @@ local manifest = KEYS[18]
 local operations = {route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
     producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,admit_manifest=true,
     metadata=true,result=true,ack_result=true,claim=true,reserve_replica=true,release_replica=true,payload=true,start=true,defer=true,promote=true,
-    finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true}
+    finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true,continue=true}
 if not operations[op] then return redis.error_reply('invalid operation') end
 local function integer(value, low, high)
     return type(value) == 'number' and value == math.floor(value) and value >= low and value <= high
@@ -97,7 +97,7 @@ if op == 'owner_acquire' and not identifier(a.identity) then return redis.error_
 if op == 'owner_acquire' or op == 'owner_renew' or op == 'producer_create' or op == 'producer_renew' then
     if not integer(a.lease_ms,1,a.limits.max_lease_ms) then return redis.error_reply('invalid lease') end
 end
-if op == 'claim' or op == 'payload' or op == 'start' or op == 'defer' or op == 'finish' or op == 'settle' then
+if op == 'claim' or op == 'payload' or op == 'start' or op == 'defer' or op == 'finish' or op == 'settle' or op == 'continue' then
     if not identifier(a.claim_id) then return redis.error_reply('missing claim identity') end
 end
 if op == 'return_untransmitted' and (not identifier(a.claim_id) or
@@ -106,7 +106,7 @@ if op == 'return_untransmitted' and (not identifier(a.claim_id) or
 if (op == 'reserve_replica' or op == 'release_replica') and
     (not identifier(a.claim_id) or not identifier(a.replica_id) or
     not integer(a.charge_sequence,1,2^53-1)) then return redis.error_reply('invalid replica arguments') end
-if op == 'defer' or op == 'finish' or op == 'settle' then
+if op == 'defer' or op == 'finish' or op == 'settle' or op == 'continue' then
     if not integer(a.execution_seq,0,a.limits.max_attempts) then return redis.error_reply('invalid execution sequence') end
 end
 if op == 'circuit_feedback' and (not identifier(a.claim_id) or not identifier(a.reason) or
@@ -160,7 +160,7 @@ local counter_limits = {
     records=a.limits.max_records, storage_bytes=a.limits.max_storage_bytes,
     ready_ids=a.limits.max_ready_ids, reserved_items=a.limits.max_execution_items,
     reserved_bytes=a.limits.max_execution_bytes, charge_sequence=2^53-1,
-    charged_cost=2^53-1, refunded_cost=2^53-1}
+    charged_cost=2^53-1, refunded_cost=2^53-1, abandoned_executions=2^53-1}
 for field, maximum in pairs(counter_limits) do
     if not stored_integer(h(usage,field),maximum) then
         return redis.error_reply('invalid store counter')
@@ -314,6 +314,9 @@ local function abandon()
     unlink_indexes()
     redis.call('SREM',members,a.id)
     if n(R,'reserved') == 1 and n(R,'execution_seq') > 0 and h(R,'state') ~= 'claimed' then
+        if h(R,'state') ~= 'abandoned' and n(usage,'abandoned_executions') < 2^53-1 then
+            inc('abandoned_executions',1)
+        end
         local values = redis.call('HMGET',R,'producer_id','pool_id','endpoint_id','claim_id',
             'execution_seq','owner_generation','owner_id','reservation_bytes','uncertainty_until','feedback_seq',
             'charged_cost','charge_sequence','charged_owner_generation','refund_state','refunded_on',
@@ -355,7 +358,7 @@ local function finish_terminal(state, result)
     redis.call('HINCRBY',route,'completed',1)
 end
 local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,reserve_replica=true,release_replica=true,start=true,payload=true,defer=true,return_untransmitted=true,
-    promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true}
+    promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,continue=true}
 if dispatcher_ops[op] and not owner_valid() then return reply('stale_owner') end
 if op == 'initialize' then
     if stored_limits and stored_limits ~= a.limits_json then return reply('invalid_limits') end
@@ -541,7 +544,6 @@ if op == 'mark_unknown' then
         return reply('producer_dead')
     end
     ensure_activity_capacity()
-    release()
     finish_terminal('failed',cjson.encode({error='remote_outcome_unknown',category=a.reason}))
     return reply('finished')
 end
@@ -552,7 +554,7 @@ if op == 'result' then
 end
 if op == 'ack_result' then
     if not terminal() then return reply('not_terminal') end
-    erase()
+    abandon()
     return reply('acked')
 end
 if op == 'discard' then
@@ -577,6 +579,26 @@ if op == 'purge' then
     abandon()
     return reply('purged')
 end
+if op == 'return_untransmitted' and (terminal() or h(R,'state') == 'abandoned' or
+    not live() or now >= n(R,'expires_at_ms')) then
+    if h(R,'claim_id') ~= a.claim_id or n(R,'charge_sequence') ~= a.charge_sequence or
+        (n(R,'execution_seq') ~= a.execution_sequence and
+         n(R,'execution_seq') ~= a.execution_sequence+1) then return reply('stale_claim') end
+    if not live() then
+        refund(); release()
+        local result = reply('returned')
+        abandon()
+        return result
+    end
+    if not terminal() and h(R,'state') ~= 'abandoned' then
+        ensure_activity_capacity()
+        finish_terminal('expired','{"error":"expired"}')
+    end
+    refund(); release()
+    local result = reply('returned')
+    if h(R,'state') == 'abandoned' then erase() end
+    return result
+end
 if not live() then
     if op == 'payload' or op == 'start' or op == 'finish' then return reply('producer_dead') end
     abandon()
@@ -594,12 +616,14 @@ if op == 'cancel' then
 end
 if terminal() then
     if op == 'recover' then
+        if n(R,'reserved') == 1 then return reply('held') end
         release()
         return reply('settled')
     end
     if op == 'finish' and h(R,'claim_id') == a.claim_id and n(R,'execution_seq') == a.execution_seq then return reply('existing') end
     return reply('terminal')
 end
+if h(R,'state') == 'abandoned' then return reply('held') end
 if now >= n(R,'expires_at_ms') then return reply('expired') end
 local state = h(R,'state')
 local function claim_matches()
@@ -691,9 +715,8 @@ elseif op == 'recover' then
         redis.call('RPUSH',ready,a.id); inc('ready_ids',1)
         return reply('requeued')
     end
-    if now < n(R,'uncertainty_until') then return reply('not_due') end
+    if now < n(R,'uncertainty_until') then return reply('outcome_unknown') end
     ensure_activity_capacity()
-    release()
     finish_terminal('failed','{"error":"remote_outcome_unknown","category":"dispatcher_owner_lost"}')
     return reply('finished')
 elseif op == 'promote' then
@@ -726,6 +749,11 @@ if op == 'return_untransmitted' then
     return reply('returned')
 end
 if not claim_matches() then return reply('stale_claim') end
+if op == 'continue' then
+    if state ~= 'executing' or n(R,'execution_seq') ~= a.execution_seq then return reply('stale_claim') end
+    if not route_open() or not replica_open() then return reply('gated') end
+    return reply('allowed')
+end
 if op == 'reject_claim' then
     if state ~= 'claimed' then return reply('invalid_state') end
     ensure_activity_capacity()

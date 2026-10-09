@@ -239,6 +239,7 @@ class RequestDispatcher:
         self._refresh_started = 0.0
         self._next_refresh = 0.0
         self._refresh_failures = 0
+        self._refresh_timed_out = False
         self._policy_paused = False
         self._routes_disabled = False
         self._config_revision = 1
@@ -280,6 +281,8 @@ class RequestDispatcher:
         self._inflight_claims: dict[str, _InflightClaim] = {}
         self._calling: set[str] = set()
         self._clients: dict[str, EndpointClient] = {}
+        self._client_endpoints: dict[str, RegisteredEndpoint] = {}
+        self._client_users: Counter[str] = Counter()
         self._replica_cursors: Counter[str] = Counter()
         self._stop = asyncio.Event()
         self._dispatch_wakeup: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
@@ -566,7 +569,12 @@ class RequestDispatcher:
                         "claimed": state_counts["claimed"],
                         "executing": state_counts["executing"],
                         "outcome_unknown": state_counts["outcome_unknown"],
+                        "abandoned": state_counts["abandoned"],
+                        "failed": state_counts["failed"],
+                        "cancelled": state_counts["cancelled"],
+                        "expired": state_counts["expired"],
                     },
+                    state_counts_truncated=processing_truncated,
                     drain_references=depth + len(lane_processing),
                 )
             )
@@ -620,7 +628,15 @@ class RequestDispatcher:
             pool_ids=[lane.pool_id for lane in visible_lanes],
             endpoint_ids=sorted(visible_replica_ids),
             inflight_request_count=len(self._tasks),
-            counters=dict(self._counts),
+            counters={
+                **self._counts,
+                "abandoned_executions": usage.get("abandoned_executions", 0),
+            },
+            held_reservations_sampled=sum(
+                row.reserved == 1
+                and row.state in {"abandoned", "failed", "cancelled", "expired"}
+                for row in processing_rows
+            ),
             observed_at_ms=int(time.time() * 1000),
             policy_generation=self.policy_generation,
             policy_digest=self.policy_digest,
@@ -643,6 +659,8 @@ class RequestDispatcher:
                 "policy_refresh_unavailable" if self._policy_paused else None
             ),
             processing_truncated=processing_truncated,
+            policy_refresh_inflight=self._refresh_future is not None,
+            policy_refresh_timed_out=self._refresh_timed_out,
         )
 
     def routing_resource_references(
@@ -856,6 +874,9 @@ class RequestDispatcher:
             )
         }
         self._runner = asyncio.create_task(self._run())
+        self._client_endpoints = {
+            identity: self.endpoints[identity] for identity in self._clients
+        }
         register_dispatcher(self.dispatcher_id, self)
 
     async def stop(self) -> None:
@@ -965,6 +986,7 @@ class RequestDispatcher:
         now = time.monotonic()
         if self._refresh_future is None and now >= self._next_refresh:
             self._refresh_started = now
+            self._refresh_timed_out = False
             self._refresh_future = self._refresh_worker.submit(self.policy_loader)
         future = self._refresh_future
         if future is not None and future.done():
@@ -1030,7 +1052,9 @@ class RequestDispatcher:
                 }
                 lanes = tuple(policy["lanes"])
                 for identity, endpoint in endpoints.items():
-                    previous = self.endpoints.get(identity)
+                    previous = self.endpoints.get(
+                        identity
+                    ) or self._client_endpoints.get(identity)
                     if (
                         previous
                         and previous.transport_fingerprint()
@@ -1091,11 +1115,16 @@ class RequestDispatcher:
                     for identity, endpoint in endpoints.items():
                         if endpoint.enabled and identity not in self._clients:
                             self._clients[identity] = self.client_factory(endpoint)
+                            self._client_endpoints[identity] = endpoint
+                    await self._retire_clients()
                     self.scheduler = scheduler
                     self.policy = policy["policy"]
                     self._config_revision += 1
                     self._counts["config_refreshes"] += 1
+                if self._policy_paused:
+                    self._counts["config_refresh_recoveries"] += 1
                 self._policy_paused = False
+                self._refresh_timed_out = False
                 self._routes_disabled = False
                 self._refresh_failures = 0
                 self._next_refresh = now + self.refresh_seconds
@@ -1113,6 +1142,9 @@ class RequestDispatcher:
             future is not None
             and now - self._refresh_started >= self.refresh_timeout_seconds
         ):
+            if not self._refresh_timed_out:
+                self._counts["config_refresh_timeouts"] += 1
+                self._refresh_timed_out = True
             self._policy_paused = True
             self._category = "policy_refresh_unavailable"
         if self._policy_paused and not self._routes_disabled:
@@ -1254,9 +1286,8 @@ class RequestDispatcher:
                 await asyncio.gather(
                     *tuple(self._store_futures), return_exceptions=True
                 )
-            for client in self._clients.values():
-                await client.close()
-            self._clients.clear()
+            for identity in tuple(self._clients):
+                await self._close_client(identity)
             if self.owner:
                 try:
                     await self._io("release_owner", self.owner)
@@ -1269,14 +1300,29 @@ class RequestDispatcher:
             self._lease_worker.shutdown(wait=True)
             self._refresh_worker.shutdown(wait=False, cancel_futures=True)
 
+    async def _close_client(self, identity: str) -> None:
+        client = self._clients.pop(identity, None)
+        if client is None:
+            return
+        self._client_endpoints.pop(identity, None)
+        self._client_users.pop(identity, None)
+        try:
+            await client.close()
+        except Exception:
+            self._counts["client_close_errors"] += 1
+            self._category = "client_close_failed"
+
+    async def _retire_clients(self) -> None:
+        for identity in tuple(self._clients):
+            if identity not in self.endpoints and not self._client_users[identity]:
+                await self._close_client(identity)
+
     async def _maintenance(self) -> None:
         page = self.store.limits.cleanup_page_size
         for attempt, task in tuple(self._tasks.items()):
             metadata = await self._maintenance_io("metadata", attempt)
-            if attempt in self._calling and (
-                metadata is None
-                or metadata.state in {"cancelled", "expired", "abandoned"}
-            ):
+            # Keep the bounded HTTP observer to obtain actual settlement evidence.
+            if attempt in self._calling and metadata is None:
                 task.cancel()
         for producer in await self._maintenance_io("due_ids", "producers", limit=page):
             expired = await self._maintenance_io(
@@ -1442,7 +1488,9 @@ class RequestDispatcher:
     async def _reserve_replica(
         self, claim: ClaimRecord, excluded: set[str]
     ) -> RegisteredReplica:
-        group = self.endpoint_groups[claim.endpoint_group_id]
+        group = self.endpoint_groups.get(claim.endpoint_group_id)
+        if group is None:
+            raise _NoReplicaAvailable
         while len(excluded) < len(group.replicas):
             try:
                 replica = await self.select_replica(claim, excluded=excluded)
@@ -1482,6 +1530,7 @@ class RequestDispatcher:
         if self._stop.is_set():
             raise TransitionRejected("start_stopped")
         payload = call = None
+        used_clients: set[str] = set()
         self._calling.add(attempt)
         try:
             excluded: set[str] = set()
@@ -1490,6 +1539,15 @@ class RequestDispatcher:
             except _NoReplicaAvailable:
                 await self._return_untransmitted(claim)
                 raise
+            client = self._clients.get(replica.replica_id)
+            if client is None:
+                await self._commit(
+                    "release_replica_for_failover", claim, replica.replica_id
+                )
+                await self._return_untransmitted(claim)
+                raise _NoReplicaAvailable
+            used_clients.add(replica.replica_id)
+            self._client_users[replica.replica_id] += 1
             metadata = await self._io("metadata", attempt)
             payload = await self._io(
                 "fetch_payload", self.owner, attempt, claim_id=claim_id
@@ -1513,12 +1571,21 @@ class RequestDispatcher:
             if started.disposition != "started":
                 raise TransitionRejected("start_unconfirmed")
             repetition_retry_used = False
+            transmitted = False
             while True:
                 timeout = min(
                     request_deadline - time.monotonic(),
                     replica.call_timeout_seconds,
                 )
                 if timeout <= 0:
+                    if transmitted:
+                        return (
+                            started.execution_seq,
+                            ExecutionOutcome(
+                                category="call_timeout", remote_settled=True
+                            ),
+                            replica.replica_id,
+                        )
                     await self._commit(
                         "release_replica_for_failover",
                         claim,
@@ -1557,9 +1624,11 @@ class RequestDispatcher:
                 }
                 began_ns = time.time_ns()
                 began = time.monotonic()
-                outcome = await self._clients[replica.replica_id].execute(
-                    call, timeout_seconds=timeout
-                )
+                outcome = await client.execute(call, timeout_seconds=timeout)
+                if not outcome.request_started and transmitted:
+                    outcome.retryable = False
+                    return started.execution_seq, outcome, replica.replica_id
+                transmitted = transmitted or outcome.request_started
                 recovered, repetitive = _normalize_length_response(outcome.response)
                 if recovered:
                     self._counts["missing_eos_recovered"] += 1
@@ -1569,10 +1638,17 @@ class RequestDispatcher:
                     _emit_execution_history(attributes, outcome, began_ns, began)
                     recovered_call = apply_repetition_recovery(call)
                     if not repetition_retry_used and recovered_call is not None:
-                        call = recovered_call
-                        repetition_retry_used = True
-                        self._counts["repetition_retries"] += 1
-                        continue
+                        permission = await self._commit(
+                            "can_continue_execution",
+                            attempt,
+                            claim_id=claim_id,
+                            execution_seq=started.execution_seq,
+                        )
+                        if permission.disposition == "allowed":
+                            call = recovered_call
+                            repetition_retry_used = True
+                            self._counts["repetition_retries"] += 1
+                            continue
                     outcome = ExecutionOutcome(
                         category="repetition",
                         remote_settled=True,
@@ -1594,20 +1670,35 @@ class RequestDispatcher:
                     category=outcome.category or "none",
                     open_ms=self.circuit_open_ms,
                 )
-                await self._commit(
+                released = await self._commit(
                     "release_replica_for_failover",
                     claim,
                     replica.replica_id,
                 )
+                if released.disposition not in {"released", "existing"}:
+                    await self._return_untransmitted(claim)
+                    raise _NoReplicaAvailable
                 excluded.add(replica.replica_id)
                 try:
                     replica = await self._reserve_replica(claim, excluded)
+                    client = self._clients.get(replica.replica_id)
+                    if client is None:
+                        await self._commit(
+                            "release_replica_for_failover", claim, replica.replica_id
+                        )
+                        raise _NoReplicaAvailable
+                    if replica.replica_id not in used_clients:
+                        used_clients.add(replica.replica_id)
+                        self._client_users[replica.replica_id] += 1
                 except _NoReplicaAvailable:
                     await self._return_untransmitted(claim)
                     raise
         finally:
             payload = call = None
             self._calling.discard(attempt)
+            for identity in used_clients:
+                self._client_users[identity] -= 1
+            await self._retire_clients()
 
     async def _commit(self, method: str, *args: Any, **kwargs: Any) -> Any:
         while True:
@@ -1722,6 +1813,7 @@ class RequestDispatcher:
                 "producer_dead",
                 "expired",
                 "terminal",
+                "held",
             }:
                 await self._commit(
                     "settle_remote", attempt, **args, evidence="remote_completed"

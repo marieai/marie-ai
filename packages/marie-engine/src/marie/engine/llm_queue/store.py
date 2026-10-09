@@ -236,6 +236,7 @@ class RequestMetadata:
     replica_id: str | None = None
     replica_reserved: int = 0
     policy_generation: int = 0
+    reserved: int = 0
 
 
 class RequestStore:
@@ -982,6 +983,7 @@ class RequestStore:
             "refunded_on",
             "replica_reserved",
             "policy_generation",
+            "reserved",
         ):
             data[name] = int(data[name] or 0)
         if data["admitted_at_ms"] is not None:
@@ -998,7 +1000,7 @@ class RequestStore:
         )
 
     def ack_result(self, producer_id: str, attempt_id: str) -> StoreReply:
-        """Release a terminal record after its original producer delivers the result."""
+        """Drop the delivered result while retaining any unsettled reservation."""
         return self._change(
             "ack_result", producer_id=producer_id, attempt_id=attempt_id
         )
@@ -1105,7 +1107,7 @@ class RequestStore:
     def return_untransmitted_and_refund(
         self, owner: OwnerToken, claim: ClaimRecord
     ) -> StoreReply:
-        """Requeue one definitely-unsent claim and refund its charge once."""
+        """Refund definitely-unsent work; requeue only while delivery remains live."""
         return self._change(
             "return_untransmitted",
             owner=owner,
@@ -1113,6 +1115,18 @@ class RequestStore:
             claim_id=claim.claim_id,
             charge_sequence=claim.charge_sequence,
             execution_sequence=claim.execution_sequence,
+        )
+
+    def can_continue_execution(
+        self, owner: OwnerToken, attempt_id: str, *, claim_id: str, execution_seq: int
+    ) -> StoreReply:
+        """Fence another physical call on live delivery and the original execution."""
+        return self._change(
+            "continue",
+            owner=owner,
+            attempt_id=attempt_id,
+            claim_id=claim_id,
+            execution_seq=execution_seq,
         )
 
     def reserve_replica(
@@ -1477,6 +1491,7 @@ class RequestStore:
             "reserved_bytes",
             "charged_cost",
             "refunded_cost",
+            "abandoned_executions",
         ]
         return {
             key: int(value or 0)

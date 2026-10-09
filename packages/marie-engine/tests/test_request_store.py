@@ -16,6 +16,89 @@ def test_store_boundary_exists():
     assert importlib.util.find_spec('marie.engine.llm_queue.store') is not None
 
 
+@pytest.mark.parametrize(
+    'cleanup', ['ack', 'purge', 'producer_expiry', 'owner_recovery']
+)
+def test_unknown_capacity_survives_result_cleanup_until_evidence(store, cleanup):
+    req = request_for(store)
+    token, seq = run_request(store, req)
+    sibling = request_for(store)
+    run_request(store, sibling)
+    totals = store.charge_totals('pool')
+    assert (
+        store.mark_unknown(
+            store.test_owner,
+            req.attempt_id,
+            claim_id=token,
+            execution_seq=seq,
+            category='read_timeout',
+        ).disposition
+        == 'finished'
+    )
+    assert (
+        store.read_result(req.producer_id, req.attempt_id)['error']
+        == 'remote_outcome_unknown'
+    )
+    assert store.usage()['reserved_items'] == 2
+    assert store.endpoint_status('endpoint')['reserved_items'] == '2'
+    if cleanup == 'ack':
+        assert store.ack_result(req.producer_id, req.attempt_id).disposition == 'acked'
+    elif cleanup == 'purge':
+        store.client.hset(store.keys.request(req.attempt_id), 'retain_until', 0)
+        assert (
+            store.purge_terminal(store.test_owner, req.attempt_id).disposition
+            == 'purged'
+        )
+    elif cleanup == 'producer_expiry':
+        store.close_producer(req.producer_id)
+        store.expire_producer(req.producer_id, limit=8)
+    else:
+        store.release_owner(store.test_owner)
+        store.test_owner = store.acquire_owner('replacement', lease_ms=10_000)
+        assert (
+            store.recover_claim(store.test_owner, req.attempt_id).disposition == 'held'
+        )
+    assert store.usage()['reserved_items'] == 2
+    assert req.attempt_id in store.processing_ids()
+    record = store.client.hgetall(store.keys.request(req.attempt_id))
+    assert 'payload' not in record
+    if cleanup != 'owner_recovery':
+        assert 'result' not in record
+        assert store.metadata(req.attempt_id).state == 'abandoned'
+    assert (
+        store.settle_remote(
+            store.test_owner,
+            req.attempt_id,
+            claim_id=token,
+            execution_seq=seq + 1,
+            evidence='remote_completed',
+        ).disposition
+        == 'stale_claim'
+    )
+    assert (
+        store.settle_remote(
+            store.test_owner,
+            req.attempt_id,
+            claim_id=token,
+            execution_seq=seq,
+            evidence='remote_completed',
+        ).disposition
+        == 'settled'
+    )
+    assert store.settle_remote(
+        store.test_owner,
+        req.attempt_id,
+        claim_id=token,
+        execution_seq=seq,
+        evidence='remote_completed',
+    ).disposition in {'existing', 'missing'}
+    assert store.usage()['reserved_items'] == 1
+    assert store.route_status('pool')['reserved_items'] == 1
+    assert store.endpoint_status('endpoint')['reserved_items'] == '1'
+    assert store.metadata(sibling.attempt_id).state == 'executing'
+    assert store.charge_totals('pool') == totals
+
+
 @pytest.fixture(params=['redis', 'valkey'])
 def store(request):
     from marie.engine.llm_queue.store import RequestStore, StoreLimits
@@ -335,8 +418,8 @@ def test_physical_replica_reservation_moves_within_logical_group(store):
         ).disposition
         == 'finished'
     )
-    assert store.endpoint_status('replica-b')['reserved_items'] == '0'
-    assert store.usage()['reserved_items'] == 0
+    assert store.endpoint_status('replica-b')['reserved_items'] == '1'
+    assert store.usage()['reserved_items'] == 1
     assert store.read_result(req.producer_id, req.attempt_id) == {
         'error': 'remote_outcome_unknown',
         'category': 'read_timeout',
@@ -498,7 +581,7 @@ def test_sent_recovery_waits_for_uncertainty_window(store, state, replace_owner)
 
     assert req.attempt_id in store.processing_ids()
     before = _fabric_dump(store)
-    assert store.recover_claim(owner, req.attempt_id).disposition == 'not_due'
+    assert store.recover_claim(owner, req.attempt_id).disposition == 'outcome_unknown'
     assert _fabric_dump(store) == before
     assert store.read_result(req.producer_id, req.attempt_id) is None
 
@@ -507,8 +590,8 @@ def test_sent_recovery_waits_for_uncertainty_window(store, state, replace_owner)
     )
     assert store.recover_claim(owner, req.attempt_id).disposition == 'finished'
     assert store.metadata(req.attempt_id).state == 'failed'
-    assert store.usage()['reserved_items'] == 0
-    assert store.endpoint_status('endpoint')['reserved_items'] == '0'
+    assert store.usage()['reserved_items'] == 1
+    assert store.endpoint_status('endpoint')['reserved_items'] == '1'
     assert store.ready_head('pool') is None
     assert store.charge_totals('pool') == {'charged': 1, 'refunded': 0}
     assert store.read_result(req.producer_id, req.attempt_id) == {
@@ -542,7 +625,7 @@ def test_owner_recovery_fails_started_execution_without_resending(store):
         store.keys.request(req.attempt_id), 'uncertainty_until', store.server_time_ms()
     )
     assert store.recover_claim(owner3, req.attempt_id).disposition == 'finished'
-    assert store.usage()['reserved_items'] == 0
+    assert store.usage()['reserved_items'] == 1
     assert (
         store.defer(
             owner3,
@@ -561,7 +644,7 @@ def test_owner_recovery_fails_started_execution_without_resending(store):
     }
 
 
-def test_owner_recovery_releases_cancelled_execution_reservation(store):
+def test_owner_recovery_holds_cancelled_execution_until_remote_settlement(store):
     store.configure_endpoint(
         store.test_owner,
         'replica-a',
@@ -607,7 +690,16 @@ def test_owner_recovery_releases_cancelled_execution_reservation(store):
     time.sleep(0.01)
     replacement = store.acquire_owner('replacement', lease_ms=10_000)
 
-    assert store.recover_claim(replacement, req.attempt_id).disposition == 'settled'
+    assert store.recover_claim(replacement, req.attempt_id).disposition == 'held'
+    assert store.usage()['reserved_items'] == 1
+    assert store.endpoint_status('replica-a')['reserved_items'] == '1'
+    store.settle_remote(
+        replacement,
+        req.attempt_id,
+        claim_id=claim.claim_id,
+        execution_seq=1,
+        evidence='remote_cancelled',
+    )
     assert store.usage()['reserved_items'] == 0
     assert store.endpoint_status('replica-a')['reserved_items'] == '0'
     assert store.read_result(req.producer_id, req.attempt_id) == {'error': 'cancelled'}

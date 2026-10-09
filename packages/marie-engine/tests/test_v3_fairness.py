@@ -32,6 +32,40 @@ async def close_runtime(runtime):
     runtime._refresh_worker.shutdown(wait=True)
 
 
+async def test_concurrent_retirement_closes_each_client_once(store):
+    runtime = runtime_for(store, [DispatchLane('pool', 'endpoint')])
+    began = {identity: asyncio.Event() for identity in ('a', 'b')}
+    release = asyncio.Event()
+    closed = []
+
+    class Client:
+        def __init__(self, identity):
+            self.identity = identity
+
+        async def close(self):
+            began[self.identity].set()
+            await release.wait()
+            closed.append(self.identity)
+
+    runtime._clients = {identity: Client(identity) for identity in began}
+    first = asyncio.create_task(runtime._retire_clients())
+    second = None
+    try:
+        await began['a'].wait()
+        second = asyncio.create_task(runtime._retire_clients())
+        await began['b'].wait()
+        release.set()
+        await asyncio.gather(first, second)
+        assert sorted(closed) == ['a', 'b']
+        assert runtime._clients == {}
+    finally:
+        release.set()
+        await asyncio.gather(
+            *[task for task in (first, second) if task], return_exceptions=True
+        )
+        await close_runtime(runtime)
+
+
 async def test_weighted_bursts_charge_real_cost_without_payload_reads(store):
     runtime = runtime_for(
         store,
@@ -562,6 +596,91 @@ async def test_slow_refresh_has_one_read_and_does_not_block_maintenance_or_stop(
     finally:
         release.set()
         runtime._refresh_worker.shutdown(wait=True)
+        await close_runtime(runtime)
+
+
+async def test_refresh_timeout_is_counted_once_and_late_success_recovers(store):
+    import threading
+
+    from test_request_dispatcher import eventually
+
+    runtime = runtime_for(store, [DispatchLane('pool', 'endpoint')])
+    await runtime._configure()
+    release = threading.Event()
+    calls = []
+    policy = dict(
+        limits=store.limits,
+        endpoints=list(runtime.endpoints.values()),
+        lanes=list(runtime.lanes),
+        policy='drr',
+        total_concurrent_dispatch=16,
+    )
+
+    def loader():
+        calls.append(1)
+        release.wait()
+        return policy
+
+    runtime.policy_loader = loader
+    runtime.refresh_timeout_seconds = 0.01
+    try:
+        await runtime._refresh_policy()
+        await asyncio.sleep(0.03)
+        for _ in range(4):
+            await runtime._refresh_policy()
+            await runtime._maintenance()
+        assert calls == [1]
+        assert runtime._counts['config_refresh_timeouts'] == 1
+        assert runtime.health()['policy_refresh_timed_out'] is True
+        assert store.resolve_route('pool') is None
+        release.set()
+        await eventually(lambda: runtime._refresh_future.done())
+        await runtime._refresh_policy()
+        assert runtime._counts['config_refresh_recoveries'] == 1
+        assert runtime.health()['policy_refresh_timed_out'] is False
+        assert store.resolve_route('pool') is not None
+    finally:
+        release.set()
+        await close_runtime(runtime)
+
+
+async def test_abandoned_health_is_visible_and_partial_when_processing_is_sampled(
+    store,
+):
+    import time
+
+    from marie.engine.llm_queue.registry import SnapshotReadBudget
+
+    runtime = runtime_for(store, [DispatchLane('pool', 'endpoint')])
+    await runtime._configure()
+    try:
+        for index in range(2):
+            req = admit_request(store)
+            store.claim(
+                runtime.owner, req.attempt_id, pool_id='pool', claim_id=f'held{index}'
+            )
+            store.authorize_start(
+                runtime.owner, req.attempt_id, claim_id=f'held{index}'
+            )
+            store.close_producer(req.producer_id)
+            await runtime._maintenance()
+        snapshot = runtime.health()
+        assert snapshot['lanes'][0]['state_counts']['abandoned'] == 2
+        assert snapshot['held_reservations_sampled'] == 2
+        assert snapshot['processing_truncated'] is False
+        assert snapshot['counters']['abandoned_executions'] == 2
+        for _ in range(3):
+            await runtime._maintenance()
+        assert runtime.health()['counters']['abandoned_executions'] == 2
+        snapshot = runtime.health(
+            read_budget=SnapshotReadBudget(1, time.monotonic() + 1, detail_rows_left=7)
+        )
+        assert snapshot['held_reservations_sampled'] == 1
+        assert snapshot['processing_truncated'] is True
+        assert snapshot['lanes'][0]['state_counts_truncated'] is True
+        runtime._counts.clear()
+        assert runtime.health()['held_reservations_sampled'] == 2
+    finally:
         await close_runtime(runtime)
 
 

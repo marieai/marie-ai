@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Optional
 
+import psycopg
 from marie.engine.llm_queue.admission_policy import AdmissionPolicy
+from psycopg.abc import RV, PQGen
 from psycopg.types.json import Jsonb
 
 from marie.logging_core.logger import MarieLogger
@@ -28,6 +31,31 @@ _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _ACTOR_ID_RE = re.compile(r'^[A-Za-z0-9_.@-]{1,128}$')
 
 
+class _PolicyConnection(psycopg.Connection):
+    policy_read_deadline: float | None = None
+
+    def wait(self, gen: PQGen[RV], interval: float = 0.1) -> RV:
+        deadline = min(
+            time.monotonic() + 3.0, self.policy_read_deadline or float('inf')
+        )
+
+        def bounded() -> PQGen[RV]:
+            try:
+                state = next(gen)
+                while True:
+                    if time.monotonic() >= deadline:
+                        self.close()
+                        raise psycopg.OperationalError('Policy database I/O timed out')
+                    ready = yield state
+                    state = gen.send(ready)
+            except StopIteration as done:
+                return done.value
+            finally:
+                gen.close()
+
+        return super().wait(bounded(), interval=min(interval, 0.05))
+
+
 @dataclass(frozen=True, slots=True)
 class ActivatedPolicy:
     fabric_group_id: str
@@ -39,6 +67,8 @@ class ActivatedPolicy:
 
 class PostgresSchedulerConfigRepository(PostgresqlMixin):
     """Load engine scheduler configuration from Marie's PostgreSQL store."""
+
+    connection_class = _PolicyConnection
 
     def __init__(
         self,
@@ -323,6 +353,7 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
         conn = None
         try:
             conn = self._get_connection()
+            conn.policy_read_deadline = time.monotonic() + 5.0
             cursor = conn.cursor()
             cursor.execute("SET LOCAL statement_timeout = '1500ms'")
             cursor.execute(
@@ -365,6 +396,8 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             raise
         finally:
             self._close_cursor(cursor)
+            if conn is not None:
+                conn.policy_read_deadline = None
             self._close_connection(conn)
 
     def load_routing_diagnostics(
