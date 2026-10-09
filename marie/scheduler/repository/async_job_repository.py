@@ -53,6 +53,13 @@ from marie.utils.scheduler_trace import scheduler_trace
 DEFAULT_SCHEMA = "marie_scheduler"
 SCHEDULER_SCHEMA_VERSION = 95
 
+_WORK_INFO_COLUMNS = (
+    "id, name, priority, state, retry_limit, start_after, "
+    "expire_in, data, retry_delay, retry_backoff, keep_until, "
+    "dag_id, job_level, soft_sla, hard_sla, "
+    "run_owner, run_attempt_id, branch_metadata"
+)
+
 OPERATIONAL_JOB_ATTENTION = {
     "any",
     "queued_too_long",
@@ -189,10 +196,7 @@ class AsyncJobRepository:
 
     async def get_job_by_id(self, job_id: str) -> Optional[WorkInfo]:
         query = f"""
-            SELECT id, name, priority, state, retry_limit, start_after,
-                   expire_in, data, retry_delay, retry_backoff, keep_until,
-                   dag_id, job_level, soft_sla, hard_sla,
-                   run_owner, run_attempt_id, branch_metadata
+            SELECT {_WORK_INFO_COLUMNS}
             FROM {DEFAULT_SCHEMA}.job
             WHERE id = %s
         """
@@ -202,10 +206,7 @@ class AsyncJobRepository:
 
     async def get_job_by_policy(self, ref_type: str, ref_id: str) -> Optional[WorkInfo]:
         query = f"""
-            SELECT id, name, priority, state, retry_limit, start_after,
-                   expire_in, data, retry_delay, retry_backoff, keep_until,
-                   dag_id, job_level, soft_sla, hard_sla,
-                   run_owner, run_attempt_id, branch_metadata
+            SELECT {_WORK_INFO_COLUMNS}
             FROM {DEFAULT_SCHEMA}.job
             WHERE data->'metadata'->>'ref_type' = %s
               AND data->'metadata'->>'ref_id' = %s
@@ -247,10 +248,7 @@ class AsyncJobRepository:
         if limit > 0:
             params.append(limit)
         query = f"""
-            SELECT id, name, priority, state, retry_limit, start_after,
-                   expire_in, data, retry_delay, retry_backoff, keep_until,
-                   dag_id, job_level, soft_sla, hard_sla,
-                   run_owner, run_attempt_id, branch_metadata
+            SELECT {_WORK_INFO_COLUMNS}
             FROM {DEFAULT_SCHEMA}.job
             {where_sql}
             ORDER BY created_on DESC
