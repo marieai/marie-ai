@@ -9,6 +9,36 @@ from marie.job.event_publisher import EventPublisher
 from marie.job.job_manager import JobManager
 
 
+def test_publisher_construction_before_asyncio_run() -> None:
+    publisher = EventPublisher(max_queue_size=1, worker_count=1)
+    received: list[str] = []
+
+    async def subscriber(_event_type: str, message: str) -> None:
+        received.append(message)
+
+    async def run() -> None:
+        publisher.subscribe("event", subscriber)
+        try:
+            assert publisher._worker_tasks == []
+            await publisher.publish("event", "message")
+            await asyncio.wait_for(publisher.join(), timeout=1)
+            assert len(publisher._worker_tasks) == 1
+            assert received == ["message"]
+        finally:
+            await publisher.stop()
+
+    asyncio.run(run())
+
+
+async def test_unused_publisher_can_stop_without_starting_workers() -> None:
+    publisher = EventPublisher()
+    try:
+        assert publisher._worker_tasks == []
+    finally:
+        await publisher.stop()
+    assert publisher._worker_tasks == []
+
+
 async def test_job_status_event_trace_covers_enqueue_dispatch_and_completion(
     monkeypatch,
 ) -> None:

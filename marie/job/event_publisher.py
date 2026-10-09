@@ -22,7 +22,7 @@ class EventPublisher:
     Notes:
         - Sync subscribers run on a dedicated, bounded thread pool (not the default loop executor).
         - Queue capacity is divided across workers to provide bounded backpressure.
-        - Start the workers via constructor (creates tasks) and stop via stop().
+        - Workers start on first publish or an explicit start(); stop via stop().
     """
 
     def __init__(
@@ -34,7 +34,7 @@ class EventPublisher:
         warn_qsize_threshold: int = 256,
         publish_blocking: bool = False,
         worker_count: int = 8,
-    ):
+    ) -> None:
         """
         :param max_queue_size: Bounded size for event queue.
         :param subscriber_timeout_s: Per-subscriber timeout when delivering an event.
@@ -75,8 +75,6 @@ class EventPublisher:
         self._executor = ThreadPoolExecutor(
             max_workers=max_thread_workers, thread_name_prefix="EventPub"
         )
-
-        self.start()
 
     @property
     def queue_size(self) -> int:
@@ -125,6 +123,7 @@ class EventPublisher:
         """
         if not self._accepting:
             raise RuntimeError("EventPublisher is stopped")
+        self.start()
 
         self._active_publishes += 1
         self._publishes_done.clear()
@@ -315,8 +314,9 @@ class EventPublisher:
             return
         if self._stopped.is_set():
             raise RuntimeError("EventPublisher cannot restart after stop")
+        loop = asyncio.get_running_loop()
         self._worker_tasks = [
-            asyncio.create_task(
+            loop.create_task(
                 self._worker(worker_id), name=f"event-publisher-{worker_id}"
             )
             for worker_id in range(self.worker_count)
