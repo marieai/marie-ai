@@ -37,7 +37,7 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
         count_job_states=AsyncMock(return_value={'created': 2}),
         count_dag_states=AsyncMock(return_value={'active': 1}),
     )
-    frontier = SimpleNamespace(summary=MagicMock(return_value={'totals': {'jobs': 2}}))
+    frontier = SimpleNamespace(summary=AsyncMock(return_value={'totals': {'jobs': 2}}))
     submission = SimpleNamespace(submission_count=7)
     diagnostics = SchedulerDiagnostics(
         repository=repository,
@@ -84,6 +84,8 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
     assert 'scheduler_mode' not in snapshot['scheduler_info']
     assert snapshot['job_state_counts'] == {'created': 2}
     assert snapshot['dag_state_counts'] == {'active': 1}
+    assert snapshot['frontier_summary'] == {'totals': {'jobs': 2}}
+    assert snapshot['frontier']['summary'] == {'totals': {'jobs': 2}}
 
 
 @pytest.mark.asyncio

@@ -1133,7 +1133,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                             f"Slots by executor: {slots_by_executor}"
                         )
                     else:
-                        frontier_summary = self.frontier.summary(detail=False)
+                        frontier_summary = await self.frontier.summary(detail=False)
                         self.logger.debug(
                             f"[WORK_DIST] No ready work in frontier. Short sleep. "
                             f"Batch size: {batch_size} | "

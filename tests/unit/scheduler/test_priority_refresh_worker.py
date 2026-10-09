@@ -1,10 +1,13 @@
 import asyncio
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import marie.scheduler.memory_frontier as frontier_module
 import marie.scheduler.psql as scheduler_psql
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
@@ -259,9 +262,10 @@ async def test_priority_update_cancellation_preserves_priorities_and_heap() -> N
 
 
 @pytest.mark.asyncio
-async def test_priority_refresh_summary_is_cancellable() -> None:
+@pytest.mark.parametrize('method', ['summary', 'priority_refresh_summary'])
+async def test_frontier_summary_is_cancellable(method: str) -> None:
     frontier = build_frontier()
-    task = asyncio.create_task(frontier.priority_refresh_summary(top_n=5))
+    task = asyncio.create_task(getattr(frontier, method)(top_n=5))
 
     await asyncio.sleep(0)
 
@@ -276,7 +280,53 @@ async def test_priority_refresh_summary_matches_frontier_summary() -> None:
     frontier = build_frontier(job_count=10)
 
     refresh_summary = await frontier.priority_refresh_summary(top_n=5)
-    full_summary = frontier.summary(detail=True, top_n=5)
+    full_summary = await frontier.summary(detail=True, top_n=5)
 
     assert refresh_summary["totals"] == full_summary["totals"]
     assert refresh_summary["sla"] == full_summary["sla"]
+
+
+async def test_frontier_summary_keeps_loop_responsive_and_snapshots_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frontier = build_frontier(job_count=1)
+    frontier.jobs_by_id['job-0'].soft_sla = datetime.now(timezone.utc) - timedelta(
+        hours=1
+    )
+    main_thread = threading.get_ident()
+    started = threading.Event()
+    release = threading.Event()
+    summarize = frontier_module.summarize_sla_work_items
+
+    def blocking_summary(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert threading.get_ident() != main_thread, (
+            'SLA computation blocks the event loop'
+        )
+        started.set()
+        assert release.wait(2), 'Frontier mutations blocked behind summary computation'
+        return summarize(*args, **kwargs)
+
+    monkeypatch.setattr(frontier_module, 'summarize_sla_work_items', blocking_summary)
+
+    task = asyncio.create_task(frontier.summary(detail=True))
+    try:
+        async with asyncio.timeout(2):
+            while not started.is_set():
+                if task.done():
+                    await task
+                await asyncio.sleep(0)
+            await frontier.update_job_state('job-0', WorkState.COMPLETED)
+            await frontier.refresh_priorities({'job-0': 42})
+            assert not task.done()
+            release.set()
+            result = await task
+        assert result['totals']['ready'] == 1
+        assert result['sla']['tracked'] == 1
+        assert result['sla']['soft_missed'] == 1
+        assert result['sla']['top_urgent'][0]['priority'] == 0
+        assert frontier.jobs_by_id['job-0'].state is WorkState.COMPLETED
+        assert frontier.jobs_by_id['job-0'].priority == 42
+    finally:
+        release.set()
+        if not task.done():
+            await task

@@ -229,7 +229,7 @@ async def debug_candidates_and_plan(
             debug_file.write("\n\n")
 
             debug_file.write("Memory Frontier State:\n")
-            frontier_summary = frontier.summary(detail=True)
+            frontier_summary = await frontier.summary(detail=True)
             debug_file.write(json.dumps(frontier_summary, indent=4))
             debug_file.write("\n\n")
 

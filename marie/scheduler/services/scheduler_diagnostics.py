@@ -265,11 +265,11 @@ class SchedulerDiagnostics:
             }
 
         try:
-            debug_data['frontier_summary'] = self.frontier.summary(detail=True)
+            debug_data['frontier_summary'] = await self.frontier.summary(detail=True)
         except Exception as error:
             debug_data['frontier_summary_error'] = str(error)
 
-        debug_data['frontier'] = self._frontier_info()
+        debug_data['frontier'] = await self._frontier_info()
         return debug_data
 
     def _update_counts(self, result: Any, *, job: bool) -> str | None:
@@ -288,15 +288,15 @@ class SchedulerDiagnostics:
         except Exception:
             return 'unknown'
 
-    def _frontier_info(self) -> dict[str, Any]:
+    async def _frontier_info(self) -> dict[str, Any]:
         info: dict[str, Any] = {'available': self.frontier is not None}
         if self.frontier is None:
             return info
         try:
-            info['summary'] = self.frontier.summary(detail=True, top_n=10)
+            info['summary'] = await self.frontier.summary(detail=True, top_n=10)
         except TypeError:
             try:
-                info['summary'] = self.frontier.summary(detail=True)
+                info['summary'] = await self.frontier.summary(detail=True)
             except Exception as error:
                 info['summary_error'] = str(error)
         except Exception as error:

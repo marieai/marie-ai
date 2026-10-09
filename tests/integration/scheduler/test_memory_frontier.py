@@ -430,7 +430,7 @@ async def test_summary_includes_sla_snapshot(frontier: MemoryFrontier):
 
     await add_ready_jobs(frontier, overdue_hard, overdue_soft, approaching, completed)
 
-    summary = frontier.summary(detail=True, top_n=3)
+    summary = await frontier.summary(detail=True, top_n=3)
     sla = summary["sla"]
 
     assert sla["tracked"] == 3
@@ -1002,7 +1002,7 @@ async def run_frontier_stress_test(job_count: int, thresholds: dict):
     refresh_time = time.monotonic() - start
     assert refresh_time < thresholds["refresh"], f"Refresh took {refresh_time:.2f}s"
 
-    summary = frontier.summary(detail=True, top_n=10)
+    summary = await frontier.summary(detail=True, top_n=10)
     sla = summary["sla"]
     assert sla["tracked"] == job_count
     assert sla["no_sla"] == job_count // 4

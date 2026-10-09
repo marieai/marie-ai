@@ -83,7 +83,7 @@ def build_scheduler() -> PostgreSQLJobScheduler:
     frontier = SimpleNamespace(
         reap_expired_soft_leases=AsyncMock(return_value=0),
         peek_ready=AsyncMock(return_value=[]),
-        summary=MagicMock(return_value={}),
+        summary=AsyncMock(return_value={}),
         take=AsyncMock(return_value=[]),
         release_lease_local=AsyncMock(),
         compact_ready_heap=AsyncMock(return_value=0),

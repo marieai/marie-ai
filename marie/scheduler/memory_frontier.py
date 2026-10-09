@@ -2,6 +2,7 @@ import asyncio
 import heapq
 import time
 from collections import defaultdict
+from copy import copy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, NamedTuple, Optional
 
@@ -865,11 +866,26 @@ class MemoryFrontier:
             return ep.split("://", 1)[0]
         return ""
 
-    def summary(self, detail: bool = False, top_n: int = 5) -> dict[str, Any]:
-        """
-        Lightweight snapshot of the frontier for logs/metrics.
-        Returns a dict; safe to json-serialize.
-        """
+    async def summary(self, detail: bool = False, top_n: int = 5) -> dict[str, Any]:
+        """Snapshot the frontier and compute SLA pressure off the event loop."""
+        async with self._lock:
+            work_items: list[WorkInfo] = []
+            for index, work_item in enumerate(self.jobs_by_id.values(), start=1):
+                work_items.append(copy(work_item))
+                if index % _COOPERATIVE_BATCH_SIZE == 0:
+                    await asyncio.sleep(0)
+            out = self._summary_locked(detail=detail, top_n=top_n)
+
+        out["sla"] = await asyncio.to_thread(
+            summarize_sla_work_items,
+            work_items,
+            now=datetime.now(timezone.utc),
+            top_n=top_n if detail else 0,
+            interval_seconds=self.sla_priority_interval_seconds,
+        )
+        return out
+
+    def _summary_locked(self, detail: bool, top_n: int) -> dict[str, Any]:
         now = self._now()
 
         # Totals
@@ -932,12 +948,6 @@ class MemoryFrontier:
                 ),
             },
             "ready_age_seconds": _quantiles(ages),
-            "sla": summarize_sla_work_items(
-                self.jobs_by_id.values(),
-                now=datetime.now(timezone.utc),
-                top_n=top_n if detail else 0,
-                interval_seconds=self.sla_priority_interval_seconds,
-            ),
         }
 
         if detail and ready_total:
