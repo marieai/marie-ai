@@ -1,5 +1,6 @@
 import threading
 from typing import Dict, List, Tuple
+from weakref import WeakValueDictionary
 
 from cachetools import LRUCache
 
@@ -23,9 +24,11 @@ class DagTopologyCache:
         )
         self._lru_lock = threading.RLock()
 
-        # Per-dag build locks registry
+        # Callers retain build locks while building or waiting.
         self._locks_guard = threading.Lock()
-        self._build_locks: Dict[str, threading.Lock] = {}
+        self._build_locks: WeakValueDictionary[str, threading.Lock] = (
+            WeakValueDictionary()
+        )
 
     def _build_lock_for(self, dag_id: str) -> threading.Lock:
         with self._locks_guard:
