@@ -322,9 +322,14 @@ def test_status_heartbeat_updates(status_store: StatusStore):
     assert isinstance(st2.heartbeat_at, str) and len(st2.heartbeat_at) > 0
 
 
+@pytest.mark.parametrize("leased", [False, True])
 def test_status_heartbeat_can_validate_without_rewriting(
     status_store: StatusStore,
+    leased: bool,
 ) -> None:
+    if leased:
+        lease = status_store.etcd.lease(30)
+        status_store = StatusStore(status_store.etcd, lease_getter=lambda: lease)
     ids = _mk_ids()
     owner = f"worker-{uuid.uuid4()}"
     key = status_store._status_key(ids["node"], ids["depl"])
@@ -337,6 +342,7 @@ def test_status_heartbeat_can_validate_without_rewriting(
         HealthCheckResponse.NOT_SERVING,
     )
     _, before = status_store.etcd.get(key, metadata=True, serializable=False)
+    assert before.lease_id == (lease.id if leased else 0)
 
     assert status_store.heartbeat(
         ids["node"],
