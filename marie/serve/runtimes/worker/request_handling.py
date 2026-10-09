@@ -239,6 +239,8 @@ class WorkerRequestHandler:
         self._node = f"{_host}:{_port}"
         self._deployment = self.node_info["deployment_name"]
         self._worker_id = f"{self.args.name}@{self._node}"
+        self._status_epoch: int | None = None
+        self._status_epoch_lock = threading.Lock()
 
         print('self.node_info')
         print(self.node_info)
@@ -1997,8 +1999,15 @@ class WorkerRequestHandler:
             else:
                 # Rare: write status directly
                 try:
+                    epoch = self._status_epoch
+                    if epoch is None:
+                        return
                     self._status_store.set_status(
-                        self._node, self._deployment, self._worker_id, status
+                        self._node,
+                        self._deployment,
+                        self._worker_id,
+                        status,
+                        epoch=epoch,
                     )
                 except Exception as e:
                     self.logger.debug(f"set_status({name}) error: {e}")
@@ -2015,6 +2024,14 @@ class WorkerRequestHandler:
                 ConnectionState.FAILED,
             ):
                 return None
+
+            if self._status_epoch is not None:
+                current = self._status_store.read(self._node, self._deployment)
+                if current is not None and (
+                    current.owner != self._worker_id
+                    or current.epoch != self._status_epoch
+                ):
+                    return False
 
             desired = self._desired_store.get(self._node, self._deployment)
             if not desired or desired.phase != "SCHEDULED":
@@ -2045,10 +2062,12 @@ class WorkerRequestHandler:
             now - self._last_status_heartbeat_write
             >= self._status_heartbeat_write_interval
         )
-        ok = self._status_store.heartbeat(
+        epoch = self._status_epoch
+        ok = epoch is not None and self._status_store.heartbeat(
             self._node,
             self._deployment,
             self._worker_id,
+            epoch=epoch,
             persist_timestamp=persist_timestamp,
         )
         if ok and persist_timestamp:
@@ -2225,7 +2244,7 @@ class WorkerRequestHandler:
         self,
         *,
         initial_status: HealthCheckResponse.ServingStatus,
-        final_apply: Callable[[], Any],
+        final_apply: Callable[[int], bool],
         log_action: str,
     ) -> bool:
         """
@@ -2234,7 +2253,7 @@ class WorkerRequestHandler:
         Args:
             initial_status: Status to write as part of the claim (what the doc should be set to
                             _during_ the claim handshake).
-            final_apply: Zero-arg callable that applies the final state (e.g., set_serving or set_not_serving).
+            final_apply: Callable that applies the final state using the claimed epoch.
             log_action: Short string used in logs to indicate the action (e.g., 'claim+serving').
 
         Returns:
@@ -2268,11 +2287,15 @@ class WorkerRequestHandler:
         )
         if eval_cond:
             try:
-                final_apply()
+                applied = final_apply(d.epoch)
+                if applied:
+                    with self._status_epoch_lock:
+                        self._status_epoch = max(self._status_epoch or 0, d.epoch)
+                return applied
             except Exception as e:
                 # Keep this soft; the caller may decide to retry or just log.
                 self.logger.debug(f"final_apply error after claim ({log_action}): {e}")
-            return True
+                return False
 
         return False
 
@@ -2292,11 +2315,12 @@ class WorkerRequestHandler:
         """
         return self._claim_and_mark(
             initial_status=HealthCheckResponse.ServingStatus.SERVING,
-            final_apply=lambda: self._status_store.set_serving(
+            final_apply=lambda epoch: self._status_store.set_serving(
                 self._node,
                 self._deployment,
                 self._worker_id,
                 details=self._safe_deployment_status_details(),
+                epoch=epoch,
             ),
             log_action="claim+serving",
         )
@@ -2308,11 +2332,12 @@ class WorkerRequestHandler:
         """
         return self._claim_and_mark(
             initial_status=HealthCheckResponse.ServingStatus.NOT_SERVING,
-            final_apply=lambda: self._status_store.set_not_serving(
+            final_apply=lambda epoch: self._status_store.set_not_serving(
                 self._node,
                 self._deployment,
                 self._worker_id,
                 details=self._safe_deployment_status_details(),
+                epoch=epoch,
             ),
             log_action="claim+ready",
         )
@@ -2323,8 +2348,12 @@ class WorkerRequestHandler:
         self._status_hb_stop.clear()
 
         try:
-            if self._status_store.heartbeat(
-                self._node, self._deployment, self._worker_id
+            epoch = self._status_epoch
+            if epoch is not None and self._status_store.heartbeat(
+                self._node,
+                self._deployment,
+                self._worker_id,
+                epoch=epoch,
             ):
                 self._last_status_heartbeat_write = time.monotonic()
         except Exception as e:

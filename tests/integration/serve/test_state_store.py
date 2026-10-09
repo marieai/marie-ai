@@ -1,3 +1,4 @@
+import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -15,12 +16,18 @@ def etcd_client():
     # Unique namespace per test: the teardown range-deletes the client's whole
     # namespace — on the default "marie" namespace this wiped the live
     # keyspace (2026-07-09 outage). Never point this at "marie".
-    c = EtcdClient("localhost", 2379, namespace=f"marie-test-{uuid.uuid4().hex[:8]}")
+    c = EtcdClient(
+        os.environ.get("ETCD_TEST_HOST", "localhost"),
+        int(os.environ.get("ETCD_TEST_PORT", "2379")),
+        namespace=f"marie-test-{uuid.uuid4().hex[:8]}",
+    )
     yield c
     try:
         c.delete_prefix("")
     except Exception:
         pass
+    finally:
+        c.close()
 
 
 @pytest.fixture(scope="function")
@@ -265,25 +272,25 @@ def test_status_set_statuses(status_store: StatusStore):
     )
 
     # set SERVING
-    assert status_store.set_serving(ids["node"], ids["depl"], owner) is True
+    assert status_store.set_serving(ids["node"], ids["depl"], owner, epoch=1) is True
     st = status_store.read(ids["node"], ids["depl"])
     assert st.status_code == HealthCheckResponse.SERVING
     assert st.status_name == "SERVING"
 
     # set NOT_SERVING
-    assert status_store.set_not_serving(ids["node"], ids["depl"], owner) is True
+    assert status_store.set_not_serving(ids["node"], ids["depl"], owner, epoch=1) is True
     st = status_store.read(ids["node"], ids["depl"])
     assert st.status_code == HealthCheckResponse.NOT_SERVING
     assert st.status_name == "NOT_SERVING"
 
     # set UNKNOWN
-    assert status_store.set_unknown(ids["node"], ids["depl"], owner) is True
+    assert status_store.set_unknown(ids["node"], ids["depl"], owner, epoch=1) is True
     st = status_store.read(ids["node"], ids["depl"])
     assert st.status_code == HealthCheckResponse.UNKNOWN
     assert st.status_name == "UNKNOWN"
 
     # set SERVICE_UNKNOWN
-    assert status_store.set_service_unknown(ids["node"], ids["depl"], owner) is True
+    assert status_store.set_service_unknown(ids["node"], ids["depl"], owner, epoch=1) is True
     st = status_store.read(ids["node"], ids["depl"])
     assert st.status_code == HealthCheckResponse.SERVICE_UNKNOWN
     assert st.status_name == "SERVICE_UNKNOWN"
@@ -294,7 +301,7 @@ def test_status_heartbeat_updates(status_store: StatusStore):
     owner = f"worker-{uuid.uuid4()}"
 
     # heartbeat without claim -> False
-    assert status_store.heartbeat(ids["node"], ids["depl"], owner) is False
+    assert status_store.heartbeat(ids["node"], ids["depl"], owner, epoch=1) is False
 
     # claim then heartbeat
     assert (
@@ -308,7 +315,7 @@ def test_status_heartbeat_updates(status_store: StatusStore):
 
     # slight delay so heartbeat_at is likely to differ
     time.sleep(0.05)
-    assert status_store.heartbeat(ids["node"], ids["depl"], owner) is True
+    assert status_store.heartbeat(ids["node"], ids["depl"], owner, epoch=1) is True
     st2 = status_store.read(ids["node"], ids["depl"])
     assert st2 is not None
     # compare ISO strings lexicographically is not reliable; ensure they exist and changed
@@ -336,6 +343,7 @@ def test_status_heartbeat_can_validate_without_rewriting(
         ids["depl"],
         owner,
         persist_timestamp=False,
+        epoch=1,
     )
     _, after = status_store.etcd.get(key, metadata=True, serializable=False)
 
@@ -367,6 +375,7 @@ def test_status_heartbeat_reattaches_replacement_lease(
         ids["depl"],
         owner,
         persist_timestamp=False,
+        epoch=1,
     )
     _, after = etcd_client.get(key, metadata=True, serializable=False)
 
@@ -379,3 +388,70 @@ def test_status_read_missing_returns_none(status_store: StatusStore):
     ids = _mk_ids()
     st = status_store.read(ids["node"], ids["depl"])
     assert st is None
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "set_status",
+        "set_serving",
+        "set_not_serving",
+        "set_unknown",
+        "set_service_unknown",
+        "heartbeat",
+        "heartbeat_without_timestamp",
+    ],
+)
+@pytest.mark.parametrize("writer_epoch", [1, 3])
+def test_status_writes_reject_a_different_epoch(
+    status_store: StatusStore, operation: str, writer_epoch: int
+) -> None:
+    ids = _mk_ids()
+    owner = "reused-worker-id"
+    assert status_store.claim(ids["node"], ids["depl"], owner, 1)
+    assert status_store.claim(ids["node"], ids["depl"], owner, 2)
+    key = status_store._status_key(ids["node"], ids["depl"])
+    before, metadata = status_store.etcd.get(key, metadata=True, serializable=False)
+    kwargs = {"epoch": writer_epoch}
+    if operation == "set_status":
+        kwargs["status"] = HealthCheckResponse.SERVING
+    elif operation == "heartbeat_without_timestamp":
+        operation = "heartbeat"
+        kwargs["persist_timestamp"] = False
+    assert not getattr(status_store, operation)(
+        ids["node"], ids["depl"], owner, **kwargs
+    )
+    after, updated = status_store.etcd.get(key, metadata=True, serializable=False)
+    assert after == before
+    assert updated.mod_revision == metadata.mod_revision
+
+
+@pytest.mark.parametrize("operation", ["set_serving", "heartbeat"])
+def test_status_cas_retry_rechecks_epoch(
+    status_store: StatusStore, monkeypatch, operation: str
+) -> None:
+    ids = _mk_ids()
+    owner = "reused-worker-id"
+    assert status_store.claim(ids["node"], ids["depl"], owner, 1)
+    update = status_store.etcd.update_if_unchanged
+    advanced = []
+
+    def advance_epoch_before_cas(key, payload, mod_revision, lease=None):
+        monkeypatch.setattr(status_store.etcd, "update_if_unchanged", update)
+        assert status_store.claim(ids["node"], ids["depl"], owner, 2)
+        advanced.append(status_store.etcd.get(key, metadata=True, serializable=False))
+        return update(key, payload, mod_revision, lease=lease)
+
+    monkeypatch.setattr(
+        status_store.etcd, "update_if_unchanged", advance_epoch_before_cas
+    )
+    assert not getattr(status_store, operation)(
+        ids["node"], ids["depl"], owner, epoch=1
+    )
+    after, metadata = status_store.etcd.get(
+        status_store._status_key(ids["node"], ids["depl"]),
+        metadata=True,
+        serializable=False,
+    )
+    assert after == advanced[0][0]
+    assert metadata.mod_revision == advanced[0][1].mod_revision

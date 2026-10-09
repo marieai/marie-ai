@@ -507,9 +507,11 @@ class StatusStore(BaseStore):
         worker_id: str,
         status: int | str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         """
-        CAS update: only the current owner can change status. Protect against concurrent owners by mod_revision CAS.
+        CAS update: only the claimed owner and epoch can change status.
         """
         k = self._status_key(node, depl)
         for _ in range(8):
@@ -517,7 +519,7 @@ class StatusStore(BaseStore):
             if val is None:
                 return False
             st = StatusDoc.from_json(val)
-            if st.owner != worker_id:
+            if st.owner != worker_id or st.epoch != epoch:
                 return False
             code = _status_code(status)
             st.status_code = code
@@ -541,9 +543,16 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
-            node, depl, worker_id, HealthCheckResponse.ServingStatus.SERVING, details
+            node,
+            depl,
+            worker_id,
+            HealthCheckResponse.ServingStatus.SERVING,
+            details,
+            epoch=epoch,
         )
 
     def set_not_serving(
@@ -552,6 +561,8 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
             node,
@@ -559,6 +570,7 @@ class StatusStore(BaseStore):
             worker_id,
             HealthCheckResponse.ServingStatus.NOT_SERVING,
             details,
+            epoch=epoch,
         )
 
     def set_unknown(
@@ -567,9 +579,16 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
-            node, depl, worker_id, HealthCheckResponse.ServingStatus.UNKNOWN, details
+            node,
+            depl,
+            worker_id,
+            HealthCheckResponse.ServingStatus.UNKNOWN,
+            details,
+            epoch=epoch,
         )
 
     def set_service_unknown(
@@ -578,6 +597,8 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
             node,
@@ -585,6 +606,7 @@ class StatusStore(BaseStore):
             worker_id,
             HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN,
             details,
+            epoch=epoch,
         )
 
     def heartbeat(
@@ -593,10 +615,11 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         *,
+        epoch: int,
         persist_timestamp: bool = True,
     ) -> bool:
         """
-        Validate ownership and keep the status lease current.
+        Validate the claimed owner and epoch, then keep the status lease current.
 
         Persist heartbeat_at when requested or when the live lease differs from
         the lease attached to the status key. If the key vanished, surface
@@ -608,7 +631,7 @@ class StatusStore(BaseStore):
             if val is None:
                 return False
             st = StatusDoc.from_json(val)
-            if st.owner != worker_id:
+            if st.owner != worker_id or st.epoch != epoch:
                 return False
 
             lease_id = self._lease_id()
