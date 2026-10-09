@@ -107,3 +107,27 @@ async def test_start_rejects_restart_until_stop_finishes() -> None:
         if stopping is not None:
             await asyncio.wait_for(stopping, timeout=1)
         await publisher.stop()
+
+
+def test_unsubscribe_is_safe_for_missing_and_removed_subscribers() -> None:
+    publisher = EventPublisher()
+
+    def subscriber(_event_type: str, _message: str) -> None:
+        pass
+
+    def other_subscriber(_event_type: str, _message: str) -> None:
+        pass
+
+    publisher.unsubscribe("missing", subscriber)
+    publisher.subscribe("event", subscriber)
+    publisher.unsubscribe("event", other_subscriber)
+    assert publisher._subscribers["event"] == [subscriber]
+
+    publisher.subscribe("event", other_subscriber)
+    publisher.unsubscribe("event", subscriber)
+    publisher.unsubscribe("event", subscriber)
+    assert publisher._subscribers["event"] == [other_subscriber]
+
+    publisher.unsubscribe("event", other_subscriber)
+    publisher.unsubscribe("event", other_subscriber)
+    assert "event" not in publisher._subscribers

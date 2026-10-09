@@ -66,14 +66,16 @@ class EventPublisher:
         for et in event_type:
             self._subscribers.setdefault(et, []).append(subscriber)
 
-    def unsubscribe(self, event_type: str, subscriber: Callable[[str, T], None]):
-        """
-        Unsubscribe a subscriber from a specific event type.
-        """
-        if event_type in self._subscribers:
-            self._subscribers[event_type].remove(subscriber)
-            if not self._subscribers[event_type]:
-                del self._subscribers[event_type]
+    def unsubscribe(
+        self, event_type: str, subscriber: Callable[[str, T], None]
+    ) -> None:
+        """Remove a subscriber if registered for the event type."""
+        subscribers = self._subscribers.get(event_type)
+        if not subscribers or subscriber not in subscribers:
+            return
+        subscribers.remove(subscriber)
+        if not subscribers:
+            del self._subscribers[event_type]
 
     async def publish(self, event_type: str, message: T) -> None:
         """
