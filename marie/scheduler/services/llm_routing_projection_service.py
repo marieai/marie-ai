@@ -47,9 +47,11 @@ class LlmRoutingProjectionService:
         acknowledged = 0
         failed = 0
         for event in events:
-            event_id = str(event['event_id'])
-            route_digest = str(event['route_digest'])
+            event_id = None
+            route_digest = None
             try:
+                event_id = str(event['event_id'])
+                route_digest = str(event['route_digest'])
                 projection = self._projection(event, route_digest)
                 reply = await asyncio.to_thread(
                     self.store.project_routing_manifest, projection
@@ -119,19 +121,29 @@ class LlmRoutingProjectionService:
                 await asyncio.sleep(idle_seconds)
 
     async def _record_failure(
-        self, event_id: str, route_digest: str, category: str
+        self, event_id: str | None, route_digest: str | None, category: str
     ) -> None:
-        await self.repository.record_routing_projection_failure(
-            event_id=event_id,
-            route_digest=route_digest,
-            category=category,
-            retry_seconds=self.retry_seconds,
-        )
         self.logger.warning(
             'LLM routing projection failed event_id=%s category=%s',
             event_id,
             category,
         )
+        if event_id is None or route_digest is None:
+            return
+        try:
+            await self.repository.record_routing_projection_failure(
+                event_id=event_id,
+                route_digest=route_digest,
+                category=category,
+                retry_seconds=self.retry_seconds,
+            )
+        except Exception:
+            self.logger.warning(
+                'Failed to record LLM routing projection failure event_id=%s category=%s',
+                event_id,
+                category,
+                exc_info=True,
+            )
 
     @staticmethod
     def _projection(
