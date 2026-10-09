@@ -1,3 +1,4 @@
+import os
 import threading
 import time
 import uuid
@@ -31,12 +32,18 @@ def etcd_client():
     # Unique namespace per test: the teardown below range-deletes the client's
     # entire namespace, which on the default "marie" namespace wiped the live
     # keyspace (2026-07-09 outage). Never point this at "marie".
-    c = EtcdClient("localhost", 2379, namespace=f"marie-test-{uuid.uuid4().hex[:8]}")
+    c = EtcdClient(
+        os.environ.get("ETCD_TEST_HOST", "localhost"),
+        int(os.environ.get("ETCD_TEST_PORT", "2379")),
+        namespace=f"marie-test-{uuid.uuid4().hex[:8]}",
+    )
     yield c
     try:
         c.delete_prefix("")
     except Exception:
         pass
+    finally:
+        c.close()
 
 
 @pytest.fixture(scope="function")
@@ -781,7 +788,11 @@ def test_fixture_cleanup_is_scoped_to_test_namespace(etcd_client):
     """Guard for the 2026-07-09 outage class: the fixture teardown
     (delete_prefix("")) must only ever range-delete the fixture's own
     namespace, and that namespace must never be the production "marie"."""
-    live = EtcdClient("localhost", 2379, namespace="marie-wipe-guard")
+    live = EtcdClient(
+        os.environ.get("ETCD_TEST_HOST", "localhost"),
+        int(os.environ.get("ETCD_TEST_PORT", "2379")),
+        namespace=f"marie-wipe-guard-{uuid.uuid4().hex[:8]}",
+    )
     try:
         live.put("sentinel", "alive")
         etcd_client.put("victim", "x")
@@ -794,6 +805,7 @@ def test_fixture_cleanup_is_scoped_to_test_namespace(etcd_client):
         assert etcd_client.ns != "marie"
     finally:
         live.delete_prefix("")
+        live.close()
 
 
 def test_scan_raises_typed_error_when_channel_closed(sema):

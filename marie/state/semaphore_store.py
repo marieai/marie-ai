@@ -174,9 +174,6 @@ class SemaphoreStore(BaseStore):
         """Return (val_bytes, meta) for capacity key (or (None, meta) if missing)."""
         return self.etcd.get(_cap_key(slot_type), metadata=True, serializable=False)
 
-    def _write_capacity_doc(self, slot_type: str, doc: CapacityDoc) -> None:
-        self._put_json(_cap_key(slot_type), asdict(doc))
-
     def set_capacity_safe(
         self,
         slot_type: str,
