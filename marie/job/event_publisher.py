@@ -106,10 +106,12 @@ class EventPublisher:
     def unsubscribe(
         self, event_type: str, subscriber: Callable[[str, T], None]
     ) -> None:
-        if event_type in self._subscribers:
-            self._subscribers[event_type].remove(subscriber)
-            if not self._subscribers[event_type]:
-                del self._subscribers[event_type]
+        subscribers = self._subscribers.get(event_type)
+        if not subscribers or subscriber not in subscribers:
+            return
+        subscribers.remove(subscriber)
+        if not subscribers:
+            del self._subscribers[event_type]
 
     async def publish(
         self, event_type: str, message: T, timeout_s: Optional[float] = None

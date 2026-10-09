@@ -39,6 +39,31 @@ async def test_unused_publisher_can_stop_without_starting_workers() -> None:
     assert publisher._worker_tasks == []
 
 
+async def test_unsubscribe_preserves_other_subscribers_and_is_repeatable() -> None:
+    publisher = EventPublisher()
+
+    async def subscriber(_event_type: str, _message: dict) -> None:
+        pass
+
+    async def other_subscriber(_event_type: str, _message: dict) -> None:
+        pass
+
+    try:
+        publisher.unsubscribe("missing", subscriber)
+        publisher.subscribe("event", subscriber)
+        publisher.unsubscribe("event", other_subscriber)
+        assert publisher._subscribers["event"] == [subscriber]
+        publisher.subscribe("event", other_subscriber)
+        publisher.unsubscribe("event", subscriber)
+        publisher.unsubscribe("event", subscriber)
+        assert publisher._subscribers["event"] == [other_subscriber]
+        publisher.unsubscribe("event", other_subscriber)
+        publisher.unsubscribe("event", other_subscriber)
+        assert "event" not in publisher._subscribers
+    finally:
+        await publisher.stop()
+
+
 async def test_job_status_event_trace_covers_enqueue_dispatch_and_completion(
     monkeypatch,
 ) -> None:
