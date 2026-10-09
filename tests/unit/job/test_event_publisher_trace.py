@@ -1,11 +1,12 @@
 import asyncio
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from marie.job.common import JobStatus
-from marie.job.event_publisher import EventPublisher
+from marie.job.event_publisher import EventPublisher, logger
 from marie.job.job_manager import JobManager
 
 
@@ -347,3 +348,34 @@ async def test_nonblocking_publish_drops_when_worker_queue_is_full(
     assert len(dropped) == 1
     assert dropped[0]["reason"] == "queue_full"
     assert dropped[0]["queue_capacity"] == 1
+
+
+@pytest.mark.parametrize("message", [{"job_id": "job-1"}, {}, {"job_id": ""}])
+async def test_queue_drop_warning_is_rate_limited_and_independent_of_tracing(
+    caplog, monkeypatch, message: dict
+) -> None:
+    now = [10.0]
+    monkeypatch.setattr("marie.job.event_publisher.time.perf_counter", lambda: now[0])
+    monkeypatch.setattr(
+        "marie.job.event_publisher.scheduler_trace", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(logger.logger, "propagate", True)
+    publisher = EventPublisher(max_queue_size=1, worker_count=1, warn_qsize_threshold=0)
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.logger.name):
+            await publisher.publish("event", message)
+            for _ in range(10):
+                await publisher.publish("event", message)
+            warnings = [r for r in caplog.records if "queue full" in r.getMessage()]
+            assert len(warnings) == 1
+            assert "event" in warnings[0].getMessage()
+            assert "dropped_total=1" in warnings[0].getMessage()
+            assert "worker=0" in warnings[0].getMessage()
+
+            now[0] += 5.0
+            await publisher.publish("event", message)
+            warnings = [r for r in caplog.records if "queue full" in r.getMessage()]
+            assert len(warnings) == 2
+            assert "dropped_total=11" in warnings[1].getMessage()
+    finally:
+        await publisher.stop()

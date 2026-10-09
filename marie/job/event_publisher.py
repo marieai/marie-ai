@@ -79,6 +79,8 @@ class EventPublisher:
         self._publishes_done.set()
         self._stop_lock = asyncio.Lock()
         self._dequeue_times: deque[float] = deque()
+        self._queue_drop_counts = [0] * worker_count
+        self._last_drop_warning_at = [-math.inf] * worker_count
 
         self._subscriber_timeout_s = max(0.0, float(subscriber_timeout_s))
         self._sync_subscriber_timeout_s = sync_subscriber_timeout_s
@@ -198,6 +200,7 @@ class EventPublisher:
                 try:
                     queue.put_nowait((event_type, queued_message, enqueued_at))
                 except asyncio.QueueFull:
+                    self._queue_drop_counts[worker_id] += 1
                     if trace_job_event:
                         scheduler_trace(
                             "job_status_event_dropped",
@@ -208,6 +211,17 @@ class EventPublisher:
                             queue_size=self.queue_size,
                             queue_capacity=self.queue_capacity,
                             elapsed_ms=(time.perf_counter() - publish_started) * 1000.0,
+                        )
+                    if publish_started - self._last_drop_warning_at[worker_id] >= 5.0:
+                        self._last_drop_warning_at[worker_id] = publish_started
+                        logger.warning(
+                            "EventPublisher queue full: dropped event %r worker=%d "
+                            "queue_size=%d capacity=%d dropped_total=%d",
+                            event_type,
+                            worker_id,
+                            queue.qsize(),
+                            queue.maxsize,
+                            self._queue_drop_counts[worker_id],
                         )
                     return
 
