@@ -12,7 +12,7 @@ class ExecutionPlanner(Protocol):
         jobs: Sequence[FlatJob],
         slots: dict[str, int],
         active_dags: set[str],
-        recently_activated_dags: set[str] = set(),
+        recently_activated_dags: set[str] | None = None,
     ) -> Sequence[FlatJob]:
         """
         Given a list of ready-to-run jobs, return them in the order they
