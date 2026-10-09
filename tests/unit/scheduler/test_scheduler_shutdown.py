@@ -248,6 +248,106 @@ async def test_stop_cancels_scheduler_tasks_before_returning() -> None:
     assert scheduler.runtime.tasks() == []
 
 
+@pytest.mark.parametrize('task_kind', ['background', 'event', 'service'])
+@pytest.mark.parametrize('timeout', [0.0, 0.02])
+async def test_runtime_stop_is_bounded_when_task_swallows_cancellation(
+    task_kind: str, timeout: float
+) -> None:
+    logger = MagicMock()
+    runtime = SchedulerRuntime(logger)
+    started = asyncio.Event()
+    release = asyncio.Event()
+    workers: list[asyncio.Task] = []
+
+    async def resist_cancellation() -> None:
+        workers.append(asyncio.current_task())
+        started.set()
+        while not release.is_set():
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+        raise RuntimeError('late shutdown failure')
+
+    service_stops = {}
+    if task_kind == 'service':
+        service_stops['slow-service-stop'] = resist_cancellation()
+    else:
+        if task_kind == 'background':
+            runtime.create_task(resist_cancellation(), name='slow-background')
+        else:
+            runtime.track_event_task(
+                asyncio.create_task(resist_cancellation(), name='slow-event')
+            )
+        await started.wait()
+    stop_task = asyncio.create_task(runtime.stop(service_stops, timeout=timeout))
+
+    try:
+        done, _ = await asyncio.wait([stop_task], timeout=0.2)
+
+        assert stop_task in done, 'Shutdown waited past its budget for cancellation'
+        await stop_task
+        assert runtime.tasks() == []
+        assert len(workers) == 1
+        assert not workers[0].done()
+        logger.warning.assert_called_once()
+        assert workers[0].get_name() in logger.warning.call_args.args[1]
+    finally:
+        release.set()
+        await asyncio.gather(*workers, stop_task, return_exceptions=True)
+
+    logger.error.assert_called_once()
+    assert logger.error.call_args.args[1] == workers[0].get_name()
+    assert str(logger.error.call_args.args[2]) == 'late shutdown failure'
+
+
+async def test_runtime_stop_logs_completed_task_failure() -> None:
+    logger = MagicMock()
+    runtime = SchedulerRuntime(logger)
+
+    async def fail() -> None:
+        raise RuntimeError('shutdown failed')
+
+    await runtime.stop({'failing-service-stop': fail()}, timeout=0.2)
+
+    logger.error.assert_called_once()
+    assert logger.error.call_args.args[1] == 'failing-service-stop'
+    assert str(logger.error.call_args.args[2]) == 'shutdown failed'
+    assert runtime.tasks() == []
+
+
+async def test_scheduler_closes_resources_when_task_defers_cancellation() -> None:
+    scheduler = _scheduler_for_stop()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_cleanup() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            while not release.is_set():
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    continue
+
+    task = scheduler.runtime.create_task(slow_cleanup(), name='slow-cleanup')
+    scheduler._close_runtime_resources = AsyncMock()
+    await started.wait()
+    stop_task = asyncio.create_task(scheduler.stop(timeout=0.02))
+    try:
+        done, _ = await asyncio.wait([stop_task], timeout=0.2)
+
+        assert stop_task in done, 'Runtime shutdown prevented resource teardown'
+        await stop_task
+        scheduler._close_runtime_resources.assert_awaited_once_with()
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.gather(task, stop_task, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_stop_drains_pending_dispatch_before_runtime_shutdown() -> None:
     scheduler = _scheduler_for_stop()
