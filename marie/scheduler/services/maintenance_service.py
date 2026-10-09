@@ -7,20 +7,17 @@ from marie.scheduler.repository import JobRepository
 
 
 class MaintenanceService:
-    """
-    Service for performing periodic maintenance tasks on the scheduler.
-    Handles expiring leases, archiving completed jobs, and purging old data.
-    """
+    """Recover expired scheduler leases and active run attempts."""
 
     def __init__(
         self,
         repository: JobRepository,
-        notify_callback: Optional[callable] = None,
+        notify_callback: Callable[[], Awaitable[bool]] | None = None,
         recovery_callback: Optional[
             Callable[[list[RecoveredRunLease]], Awaitable[None]]
         ] = None,
         maintenance_interval: int = 60,  # seconds
-    ):
+    ) -> None:
         """
         Initialize the maintenance service.
 
@@ -40,16 +37,10 @@ class MaintenanceService:
 
     # ==================== Maintenance Operations ====================
 
-    async def maintenance(self):
-        """
-        Performs the maintenance process, including expiring, archiving, and purging.
-
-        :return: None
-        """
+    async def maintenance(self) -> None:
+        """Run periodic lease recovery."""
         try:
             await self.expire()
-            await self.archive()
-            await self.purge()
         except Exception as e:
             self.logger.error(f"Error in maintenance: {e}")
 
@@ -87,27 +78,13 @@ class MaintenanceService:
             if self._notify_callback:
                 await self._notify_callback()
 
-    async def archive(self):
-        """
-        Archive completed jobs.
-        Move completed jobs to archive table for historical tracking.
-        """
-        self.logger.debug("Archiving completed jobs")
-        # TODO: Implement archival logic
-        # - Move completed jobs older than X days to archive table
-        # - Keep original IDs for reference
-        # - Update archive timestamp
+    async def archive(self) -> None:
+        """Raise until job archival and its retention policy are implemented."""
+        raise NotImplementedError("Job archiving is not implemented")
 
-    async def purge(self):
-        """
-        Purge old archived jobs.
-        Remove very old archived jobs to prevent database bloat.
-        """
-        self.logger.debug("Purging old archived jobs")
-        # TODO: Implement purge logic
-        # - Delete archived jobs older than retention period
-        # - Respect configured retention policy
-        # - Log purge statistics
+    async def purge(self) -> None:
+        """Raise until archived-job purging and its retention policy are implemented."""
+        raise NotImplementedError("Archived job purging is not implemented")
 
     async def start(self):
         """

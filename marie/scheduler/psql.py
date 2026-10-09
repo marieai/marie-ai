@@ -269,7 +269,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             handler=self.job_manager.handle_job_status_notification,
         )
 
-        # Initialize MaintenanceService for periodic cleanup tasks
+        # Initialize periodic lease recovery.
         self._maintenance_interval = scheduler_config.maintenance_interval
         self.maintenance_service = MaintenanceService(
             repository=self.repository,
@@ -2471,13 +2471,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         if admission_required:
             await self.dag_service.request_admission("run_lease_recovery")
 
-    async def maintenance(self):
-        """
-        Performs the maintenance process, including expiring, archiving, and purging.
-        Delegates to MaintenanceService.
-
-        :return: None
-        """
+    async def maintenance(self) -> None:
+        """Run periodic lease recovery."""
         await self.maintenance_service.maintenance()
 
     async def expire(self):
@@ -2487,18 +2482,12 @@ class PostgreSQLJobScheduler(JobScheduler):
         """
         await self.maintenance_service.expire()
 
-    async def archive(self):
-        """
-        Archive completed jobs.
-        Delegates to MaintenanceService.
-        """
+    async def archive(self) -> None:
+        """Raise until job archival is implemented."""
         await self.maintenance_service.archive()
 
-    async def purge(self):
-        """
-        Purge old archived jobs.
-        Delegates to MaintenanceService.
-        """
+    async def purge(self) -> None:
+        """Raise until archived-job purging is implemented."""
         await self.maintenance_service.purge()
 
     def _setup_event_subscriptions(self):
