@@ -234,7 +234,7 @@ class BranchEvaluator:
             return func
 
         except Exception as e:
-            raise ImportError(f"Failed to load function {function_path}: {e}")
+            raise ImportError(f"Failed to load function {function_path}: {e}") from e
 
     async def evaluate_switch(
         self, switch_def: SwitchQueryDefinition, context: BranchEvaluationContext
