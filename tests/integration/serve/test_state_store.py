@@ -164,6 +164,56 @@ def test_desired_update_phase_keeps_epoch(desired_store: DesiredStore):
     assert updated.epoch == old_epoch  # epoch must not change
 
 
+def test_desired_create_retries_when_the_winner_is_deleted(
+    desired_store: DesiredStore, monkeypatch
+) -> None:
+    ids = _mk_ids()
+    put_if_absent = desired_store.etcd.put_if_absent
+    attempts = 0
+
+    def delete_winner(key: str, payload: str) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            assert put_if_absent(key, payload)
+            desired_store.etcd.delete(key)
+            return False
+        return put_if_absent(key, payload)
+
+    monkeypatch.setattr(desired_store.etcd, "put_if_absent", delete_winner)
+
+    created = desired_store._create(
+        ids["node"], ids["depl"], phase="SCHEDULED", epoch=7, params={"job": "new"}
+    )
+
+    assert desired_store.get(ids["node"], ids["depl"]) == created
+    assert attempts == 2
+    assert created.epoch == 7
+
+
+def test_desired_create_preserves_the_existing_winner(
+    desired_store: DesiredStore,
+) -> None:
+    ids = _mk_ids()
+    winner = desired_store.set(ids["node"], ids["depl"], {"job": "existing"})
+
+    result = desired_store._create(
+        ids["node"], ids["depl"], phase="RUNNING", epoch=7, params={"job": "new"}
+    )
+
+    assert result == winner
+    assert desired_store.get(ids["node"], ids["depl"]) == winner
+
+
+def test_desired_create_raises_after_repeated_contention(
+    desired_store: DesiredStore, monkeypatch
+) -> None:
+    monkeypatch.setattr(desired_store.etcd, "put_if_absent", lambda *_: False)
+
+    with pytest.raises(RuntimeError, match="DesiredStore._create"):
+        desired_store._create("node", "deployment", phase="SCHEDULED", epoch=1)
+
+
 # ---------------- StatusStore tests ----------------
 
 
@@ -278,7 +328,9 @@ def test_status_set_statuses(status_store: StatusStore):
     assert st.status_name == "SERVING"
 
     # set NOT_SERVING
-    assert status_store.set_not_serving(ids["node"], ids["depl"], owner, epoch=1) is True
+    assert (
+        status_store.set_not_serving(ids["node"], ids["depl"], owner, epoch=1) is True
+    )
     st = status_store.read(ids["node"], ids["depl"])
     assert st.status_code == HealthCheckResponse.NOT_SERVING
     assert st.status_name == "NOT_SERVING"
@@ -290,7 +342,10 @@ def test_status_set_statuses(status_store: StatusStore):
     assert st.status_name == "UNKNOWN"
 
     # set SERVICE_UNKNOWN
-    assert status_store.set_service_unknown(ids["node"], ids["depl"], owner, epoch=1) is True
+    assert (
+        status_store.set_service_unknown(ids["node"], ids["depl"], owner, epoch=1)
+        is True
+    )
     st = status_store.read(ids["node"], ids["depl"])
     assert st.status_code == HealthCheckResponse.SERVICE_UNKNOWN
     assert st.status_name == "SERVICE_UNKNOWN"

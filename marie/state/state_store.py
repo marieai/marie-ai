@@ -295,13 +295,16 @@ class DesiredStore(BaseStore):
         )
         payload = json.dumps(asdict(doc))
 
-        # Fast path: atomic create
-        if self.etcd.put_if_absent(k, payload):
-            return doc
-
-        # Lost the race: read and return the winner (don’t clobber)
-        raw = self._get_raw(k)
-        return DesiredDoc.from_json(raw) if raw else doc
+        for attempt in range(8):
+            if self.etcd.put_if_absent(k, payload):
+                return doc
+            raw = self._get_raw(k)
+            if raw is not None:
+                return DesiredDoc.from_json(raw)
+            # The winner was deleted before the read; retry the atomic create.
+            if attempt < 7:
+                time.sleep(0.01)
+        raise RuntimeError(f"DesiredStore._create failed repeatedly for {k}")
 
     def _update_phaseXXX(self, node: str, depl: str, phase: str) -> DesiredDoc:
         existing = self.get(node, depl)
