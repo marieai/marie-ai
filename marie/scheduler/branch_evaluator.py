@@ -233,7 +233,10 @@ class BranchEvaluator:
             switch_def.switch_field, context.context
         )
 
-        if field_value in switch_def.cases:
-            return switch_def.cases[field_value]
+        try:
+            if field_value in switch_def.cases:
+                return switch_def.cases[field_value]
+        except TypeError:
+            logger.error(f"Unhashable switch field value: {type(field_value)}")
 
         return switch_def.default_case
