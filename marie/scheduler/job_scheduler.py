@@ -105,7 +105,8 @@ class JobScheduler(abc.ABC):
         """
         ...
 
-    def reset_active_dags(self):
+    @abc.abstractmethod
+    async def reset_active_dags(self) -> Dict[str, Any]:
         """
         Reset the active DAGs dictionary, clearing all currently tracked DAGs.
         This can be useful for debugging or when you need to force a fresh state.
@@ -113,7 +114,4 @@ class JobScheduler(abc.ABC):
         Returns:
             dict: Information about the reset operation including count of cleared DAGs
         """
-        return {
-            "message": "Active DAGs reset",
-            "cleared_dags_count": 0,
-        }
+        ...
