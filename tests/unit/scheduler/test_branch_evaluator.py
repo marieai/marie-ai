@@ -1,10 +1,14 @@
+import asyncio
+import threading
 from typing import Any
 
 import pytest
 
+import marie.scheduler.branch_evaluator as branch_module
 from marie.query_planner.base import Query, QueryPlan
 from marie.query_planner.branching import (
     BranchPath,
+    BranchQueryDefinition,
     PythonBranchQueryDefinition,
     SwitchQueryDefinition,
 )
@@ -116,3 +120,68 @@ async def test_python_branch_reads_normalized_execution_results(
     result = await BranchEvaluator().evaluate_branch(branch_def, context)
 
     assert result == [expected_path]
+
+
+def blocking_condition(context: dict[str, Any]) -> bool:
+    data = context['data']
+    try:
+        data['release'].wait(timeout=2)
+        return True
+    finally:
+        data['finished'].set()
+
+
+@pytest.mark.parametrize('include_later_path', [True, False])
+async def test_condition_timeout_allows_later_or_default_path(
+    include_later_path: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(branch_module, 'DEFAULT_CONDITION_TIMEOUT', 0.02, raising=False)
+    release = threading.Event()
+    finished = threading.Event()
+    paths = [
+        BranchPath(
+            path_id='blocked',
+            target_node_ids=['blocked-node'],
+            condition_function=f'{__name__}.blocking_condition',
+        )
+    ]
+    if include_later_path:
+        paths.append(BranchPath(path_id='later', target_node_ids=['later-node']))
+    branch_def = BranchQueryDefinition(paths=paths, default_path_id='fallback')
+    context = switch_context({'release': release, 'finished': finished})
+    evaluation = asyncio.create_task(BranchEvaluator().evaluate_branch(branch_def, context))
+
+    try:
+        done, _ = await asyncio.wait([evaluation], timeout=0.2)
+
+        assert evaluation in done, 'A blocked condition held up branch evaluation'
+        assert await evaluation == (['later'] if include_later_path else ['fallback'])
+        assert not finished.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(evaluation, return_exceptions=True)
+        assert await asyncio.to_thread(finished.wait, 2)
+
+
+def configured_condition(context: dict[str, Any]) -> bool:
+    return context['data']['result']
+
+
+@pytest.mark.parametrize('condition_result', [True, False])
+async def test_condition_function_preserves_boolean_routing(condition_result: bool) -> None:
+    branch_def = BranchQueryDefinition(
+        paths=[
+            BranchPath(
+                path_id='matched',
+                target_node_ids=['matched-node'],
+                condition_function=f'{__name__}.configured_condition',
+            )
+        ],
+        default_path_id='fallback',
+    )
+
+    result = await BranchEvaluator().evaluate_branch(
+        branch_def, switch_context({'result': condition_result})
+    )
+
+    assert result == (['matched'] if condition_result else ['fallback'])

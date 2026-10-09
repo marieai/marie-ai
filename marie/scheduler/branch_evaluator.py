@@ -27,6 +27,8 @@ from marie.query_planner.jsonpath_evaluator import (
 )
 from marie.scheduler.models import WorkInfo
 
+DEFAULT_CONDITION_TIMEOUT = 30
+
 
 class BranchEvaluationContext:
     """
@@ -162,10 +164,19 @@ class BranchEvaluator:
         if path.condition_function:
             func = self._load_function(path.condition_function)
             try:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None, func, context.context
+                result = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, func, context.context
+                    ),
+                    timeout=DEFAULT_CONDITION_TIMEOUT,
                 )
                 return bool(result)
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Condition function timed out for path {path.path_id} "
+                    f"after {DEFAULT_CONDITION_TIMEOUT}s"
+                )
+                return False
             except Exception as e:
                 logger.error(f"Condition function failed for path {path.path_id}: {e}")
                 return False
