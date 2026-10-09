@@ -1,7 +1,8 @@
 import abc
 import threading
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Collection, Optional, Sequence, Union
 
 from marie.excepts import EstablishGrpcConnectionError
 from marie.logging_core.logger import MarieLogger
@@ -11,7 +12,10 @@ if TYPE_CHECKING:
     from marie.engine.circuit_breaker import (
         CircuitBreaker,
         CircuitBreakerConfig,
+        CircuitPermit,
     )
+
+    from marie.serve.networking.connection_stub import _ConnectionStubs
 
 
 class LoadBalancerType(Enum):
@@ -42,6 +46,14 @@ class LoadBalancerType(Enum):
         )
 
 
+@dataclass(eq=False)
+class ConnectionLease:
+    """One outstanding request and its circuit admission permit."""
+
+    connection: '_ConnectionStubs'
+    permit: Optional['CircuitPermit'] = None
+
+
 class LoadBalancer(abc.ABC):
     """Base class for load balancers."""
 
@@ -51,14 +63,20 @@ class LoadBalancer(abc.ABC):
         logger: Optional[MarieLogger] = None,
         tracing_interceptors: Optional[Sequence[LoadBalancerInterceptor]] = None,
         circuit_breaker_config: Optional["CircuitBreakerConfig"] = None,
-    ):
-        self._connections = []
+    ) -> None:
+        self._connections: list['_ConnectionStubs'] = []
         self._deployment_name = deployment_name
         self._logger = logger or MarieLogger(self.__class__.__name__)
         self.active_counter = {}
         self.debug_loging_enabled = False
         self.tracing_interceptors = tracing_interceptors or []
         self._lock = threading.Lock()  # sync lock
+        self._closed = False
+        self._usage_by_address: dict[str, int] = {}
+        self._leases: set[ConnectionLease] = set()
+        self._fail_open = (
+            circuit_breaker_config.fail_open if circuit_breaker_config else False
+        )
 
         # Initialize circuit breaker if config provided (opt-in)
         self._circuit_breaker: Optional["CircuitBreaker"] = None
@@ -72,44 +90,112 @@ class LoadBalancer(abc.ABC):
 
         self._logger.info(f"LoadBalancer: for {self._deployment_name} initialized.")
 
-    async def get_next_connection(self, num_retries=3):
-        """
-        Returns the next connection to be used based on the load balancing algorithm.
-        :param num_retries:  Number of times to retry if the connection is not available.
-        """
-        connection = await self._get_next_connection(num_retries=num_retries)
-
-        if connection is None:
-            raise EstablishGrpcConnectionError(
-                f"Error while acquiring connection {self._deployment_name}. Connection cannot be used."
-            )
-
+    async def get_next_connection(
+        self, num_retries: int = 3, exclude_addresses: Optional[Collection[str]] = None
+    ) -> '_ConnectionStubs':
+        """Select without reserving usage; num_retries is kept for compatibility."""
+        with self._lock:
+            connection, _ = self._select_available_connection(exclude_addresses)
         for interceptor in self.tracing_interceptors:
             interceptor.on_connection_acquired(connection)
-
         return connection
 
+    async def acquire_connection(
+        self, exclude_addresses: Optional[Collection[str]] = None
+    ) -> ConnectionLease:
+        """Atomically select a connection, admit its circuit, and count the request."""
+        with self._lock:
+            connection, permit = self._select_available_connection(
+                exclude_addresses, reserve=True
+            )
+            lease = ConnectionLease(connection, permit)
+            self._leases.add(lease)
+            self._increment_usage(connection.address)
+        try:
+            for interceptor in self.tracing_interceptors:
+                interceptor.on_connection_acquired(connection)
+        except Exception:
+            self.release_connection(lease)
+            raise
+        return lease
+
+    def release_connection(self, lease: ConnectionLease) -> None:
+        """Release an acquisition once, including after membership changes."""
+        with self._lock:
+            if lease not in self._leases:
+                return
+            self._leases.remove(lease)
+            self._decrement_usage(lease.connection.address)
+            if self._circuit_breaker and lease.permit:
+                self._circuit_breaker.release(lease.permit)
+        for interceptor in self.tracing_interceptors:
+            try:
+                interceptor.on_connection_released(lease.connection)
+            except Exception:
+                self._logger.warning(
+                    'Connection release interceptor failed for %s',
+                    self._deployment_name,
+                    exc_info=True,
+                )
+
+    def _select_available_connection(
+        self, exclude_addresses: Optional[Collection[str]], reserve: bool = False
+    ) -> tuple['_ConnectionStubs', Optional['CircuitPermit']]:
+        if self._closed:
+            raise EstablishGrpcConnectionError(
+                f'Load balancer closed for {self._deployment_name}'
+            )
+        excluded = exclude_addresses or ()
+        candidates = [c for c in self._connections if c.address not in excluded]
+        if self._circuit_breaker:
+            healthy = [
+                c for c in candidates if self._circuit_breaker.is_available(c.address)
+            ]
+            if healthy or not self._fail_open:
+                candidates = healthy
+            else:
+                from marie.engine.circuit_breaker import CircuitState
+
+                candidates = [
+                    c
+                    for c in candidates
+                    if self._circuit_breaker.get_state(c.address) == CircuitState.OPEN
+                ]
+        while candidates:
+            connection = self._select_connection(candidates)
+            permit = None
+            if reserve and self._circuit_breaker:
+                permit = self._circuit_breaker.try_acquire(
+                    connection.address, allow_open=self._fail_open
+                )
+                if permit is None:
+                    candidates = [c for c in candidates if c is not connection]
+                    continue
+            return connection, permit
+        raise EstablishGrpcConnectionError(
+            f'No available connections for {self._deployment_name}'
+        )
+
     @abc.abstractmethod
-    async def _get_next_connection(self, num_retries=3):
-        """
-        Implementation that returns the next connection to be used based on the load balancing algorithm.
-        :param num_retries:  Number of times to retry if the connection is not available.
-        """
+    def _select_connection(
+        self, connections: list['_ConnectionStubs']
+    ) -> '_ConnectionStubs':
         raise NotImplementedError
 
-    def update_connections(self, connections: list):
+    def update_connections(self, connections: list['_ConnectionStubs']) -> None:
         """
         Rebalance the connections.
         :param connections: List of connections to be used for load balancing.
         """
-        removed_addresses = set()
         with self._lock:
-            # Calculate addresses to remove (memory leak fix)
+            if self._closed:
+                raise EstablishGrpcConnectionError(
+                    f'Load balancer closed for {self._deployment_name}'
+                )
             new_addresses = {c.address for c in connections}
             old_addresses = set(self.active_counter.keys())
             removed_addresses = old_addresses - new_addresses
 
-            # Clean up removed addresses from active_counter
             for addr in removed_addresses:
                 del self.active_counter[addr]
                 if self.debug_loging_enabled:
@@ -117,18 +203,16 @@ class LoadBalancer(abc.ABC):
                         f"Cleaned up active_counter for removed address: {addr}"
                     )
 
-            # Update connections list
             self._connections = list(connections)
 
-            # Initialize counters for new connections
             for connection in self._connections:
-                if connection.address not in self.active_counter:
-                    self.active_counter[connection.address] = 0
-
-        # Clean up circuit breaker state for removed addresses (outside lock)
-        if self._circuit_breaker:
-            for addr in removed_addresses:
-                self._circuit_breaker.remove_address(addr)
+                self.active_counter[connection.address] = self._usage_by_address.get(
+                    connection.address, 0
+                )
+            if self._circuit_breaker:
+                for addr in removed_addresses:
+                    self._circuit_breaker.remove_address(addr)
+            self._on_connections_updated()
 
         if self.debug_loging_enabled:
             self._logger.debug(
@@ -171,17 +255,35 @@ class LoadBalancer(abc.ABC):
             return LeastConnectionsLoadBalancer(
                 deployment_name, logger, circuit_breaker_config=circuit_breaker_config
             )
-        elif load_balancer_type == LoadBalancerType.RANDOM:
-            raise NotImplementedError("Random load balancer not implemented yet.")
-        else:
+        elif load_balancer_type is None:
             return RoundRobinLoadBalancer(
                 deployment_name, logger, circuit_breaker_config=circuit_breaker_config
             )
+        raise NotImplementedError(
+            f'Load balancer policy {load_balancer_type} is not implemented.'
+        )
 
-    @abc.abstractmethod
-    def close(self):
+    def close(self) -> None:
         """Close the load balancer."""
-        ...
+        with self._lock:
+            self._closed = True
+            self._connections.clear()
+            if self._circuit_breaker:
+                for lease in self._leases:
+                    if lease.permit:
+                        self._circuit_breaker.release(lease.permit)
+                for address in self.active_counter:
+                    self._circuit_breaker.remove_address(address)
+            self._leases.clear()
+            self._usage_by_address.clear()
+            self.active_counter.clear()
+            self._on_closed()
+
+    def _on_connections_updated(self) -> None:
+        pass
+
+    def _on_closed(self) -> None:
+        pass
 
     def incr_usage(self, address: str) -> int:
         """
@@ -189,10 +291,17 @@ class LoadBalancer(abc.ABC):
         :param address: Address of the connection
         """
         with self._lock:
-            self._logger.debug(f"Incrementing usage for address : {address}")
-            self.active_counter[address] = self.active_counter.get(address, 0) + 1
-            self._logger.debug(f"incr_usage: {self.active_counter}")
-            return self.active_counter[address]
+            if self._closed or address not in self.active_counter:
+                raise EstablishGrpcConnectionError(
+                    f'Unknown connection {address} for {self._deployment_name}'
+                )
+            return self._increment_usage(address)
+
+    def _increment_usage(self, address: str) -> int:
+        count = self._usage_by_address.get(address, 0) + 1
+        self._usage_by_address[address] = count
+        self.active_counter[address] = count
+        return count
 
     def decr_usage(self, address: str) -> int:
         """
@@ -200,19 +309,24 @@ class LoadBalancer(abc.ABC):
         :param address: Address of the connection
         """
         with self._lock:
-            self._logger.debug(f"Decrementing usage for address: {address}")
-            self.active_counter[address] = max(
-                0, self.active_counter.get(address, 0) - 1
-            )
-            self._logger.debug(f"decr_usage: {self.active_counter}")
-            return self.active_counter[address]
+            return self._decrement_usage(address)
+
+    def _decrement_usage(self, address: str) -> int:
+        count = max(0, self._usage_by_address.get(address, 0) - 1)
+        if count:
+            self._usage_by_address[address] = count
+        else:
+            self._usage_by_address.pop(address, None)
+        if address in self.active_counter:
+            self.active_counter[address] = count
+        return count
 
     def get_active_count(self, address: str) -> int:
         """Get the number of active requests for a given address"""
         with self._lock:
             return self.active_counter.get(address, 0)
 
-    def get_active_counter(self) -> dict:
+    def get_active_counter(self) -> dict[str, int]:
         """
         Get the active counter for all the connections
         :return:
@@ -229,11 +343,14 @@ class LoadBalancer(abc.ABC):
         Get the number of connections
         :return:
         """
-        return len(self._connections)
+        with self._lock:
+            return len(self._connections)
 
     # Circuit breaker methods
 
-    def record_failure(self, address: str) -> None:
+    def record_failure(
+        self, address: str, lease: Optional[ConnectionLease] = None
+    ) -> None:
         """
         Record a failure for the given address.
         If circuit breaker is enabled, this may cause the circuit to open.
@@ -241,9 +358,13 @@ class LoadBalancer(abc.ABC):
         :param address: The address that experienced a failure.
         """
         if self._circuit_breaker:
-            self._circuit_breaker.record_failure(address)
+            self._circuit_breaker.record_failure(
+                address, permit=lease.permit if lease else None
+            )
 
-    def record_success(self, address: str) -> None:
+    def record_success(
+        self, address: str, lease: Optional[ConnectionLease] = None
+    ) -> None:
         """
         Record a success for the given address.
         If circuit breaker is enabled, this may help close an open circuit.
@@ -251,7 +372,9 @@ class LoadBalancer(abc.ABC):
         :param address: The address that experienced a success.
         """
         if self._circuit_breaker:
-            self._circuit_breaker.record_success(address)
+            self._circuit_breaker.record_success(
+                address, permit=lease.permit if lease else None
+            )
 
     def is_connection_available(self, address: str) -> bool:
         """

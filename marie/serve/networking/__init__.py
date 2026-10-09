@@ -21,11 +21,11 @@ from marie.engine.circuit_breaker import CircuitBreakerConfig
 
 from marie.constants import __default_endpoint__
 from marie.enums import PollingType
-from marie.excepts import InternalNetworkError
+from marie.excepts import EstablishGrpcConnectionError, InternalNetworkError
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
 from marie.serve.helper import format_grpc_error
-from marie.serve.networking.balancer.load_balancer import LoadBalancer
+from marie.serve.networking.balancer.load_balancer import ConnectionLease, LoadBalancer
 from marie.serve.networking.connection_pool_map import _ConnectionPoolMap
 from marie.serve.networking.connection_stub import create_async_channel_stub
 from marie.serve.networking.instrumentation import _NetworkingHistograms
@@ -353,6 +353,7 @@ class GrpcConnectionPool:
         current_deployment: str = "",  # the specific deployment that was contacted during this attempt
         connection_list: Optional[_ReplicaList] = None,
         task_type: str = "DataRequest",
+        connection_lease: Optional[ConnectionLease] = None,
     ) -> "Optional[Union[AioRpcError, InternalNetworkError]]":
         # connection failures, cancelled requests, and timed out requests should be retried
         # all other cases should not be retried and will be raised immediately
@@ -367,11 +368,6 @@ class GrpcConnectionPool:
         if tried_addresses is None:
             tried_addresses = {""}
 
-        # Record failure in circuit breaker (if enabled)
-        if connection_list and current_address:
-            lb = connection_list.get_load_balancer()
-            lb.record_failure(current_address)
-
         skip_resetting = False
         if (
             error.code() == grpc.StatusCode.UNAVAILABLE
@@ -384,6 +380,21 @@ class GrpcConnectionPool:
         else:
             self._logger.debug(
                 f"gRPC call to {current_deployment} for {task_type} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time."
+            )
+        if (
+            connection_list
+            and current_address
+            and not skip_resetting
+            and error.code()
+            in {
+                grpc.StatusCode.UNAVAILABLE,
+                grpc.StatusCode.DEADLINE_EXCEEDED,
+                grpc.StatusCode.INTERNAL,
+                grpc.StatusCode.UNKNOWN,
+            }
+        ):
+            connection_list.get_load_balancer().record_failure(
+                current_address, lease=connection_lease
             )
         errors_to_retry = [
             grpc.StatusCode.UNAVAILABLE,
@@ -424,6 +435,39 @@ class GrpcConnectionPool:
                 )
             return None
 
+    async def _acquire_request_connection(
+        self,
+        connections: _ReplicaList,
+        tried_addresses: Set[str],
+        request_id: str = '',
+        last_error: Optional[AioRpcError] = None,
+    ) -> ConnectionLease:
+        try:
+            try:
+                lease = await connections.acquire_connection(
+                    exclude_addresses=tried_addresses
+                )
+            except EstablishGrpcConnectionError:
+                if not tried_addresses:
+                    raise
+                lease = await connections.acquire_connection()
+        except EstablishGrpcConnectionError as error:
+            if last_error is None:
+                last_error = AioRpcError(
+                    grpc.StatusCode.UNAVAILABLE, (), (), str(error), str(error)
+                )
+            addresses = set(tried_addresses) or {
+                connection.address for connection in connections.get_all_connections()
+            }
+            raise InternalNetworkError(
+                og_exception=last_error,
+                request_id=request_id,
+                dest_addr=addresses,
+                details=last_error.details(),
+            ) from error
+        tried_addresses.add(lease.connection.address)
+        return lease
+
     def _send_single_doc_request(
         self,
         request: SingleDocumentRequest,
@@ -445,7 +489,7 @@ class GrpcConnectionPool:
 
         async def async_generator_wrapper():
             tried_addresses = set()
-            num_replicas = len(connections.get_all_connections())
+            last_error = None
             if retries is None or retries < 0:
                 total_num_tries = (
                     max(DEFAULT_MINIMUM_RETRIES, len(connections.get_all_connections()))
@@ -454,21 +498,12 @@ class GrpcConnectionPool:
             else:
                 total_num_tries = 1 + retries  # try once, then do all the retries
             for i in range(total_num_tries):
-                current_connection = None
-                while (
-                    current_connection is None
-                    or current_connection.address in tried_addresses
-                ):
-                    current_connection = await connections.get_next_connection(
-                        num_retries=total_num_tries
-                    )
-                    # if you request to retry more than the amount of replicas, we just skip, we could balance the
-                    # retries in the future
-                    if len(tried_addresses) >= num_replicas:
-                        break
-                tried_addresses.add(current_connection.address)
-                connections.incr_usage(current_connection.address)
+                lease = None
                 try:
+                    lease = await self._acquire_request_connection(
+                        connections, tried_addresses, request.request_id, last_error
+                    )
+                    current_connection = lease.connection
                     async for (
                         resp,
                         metadata_resp,
@@ -481,10 +516,14 @@ class GrpcConnectionPool:
                         yield resp, metadata_resp
                     # Record success in circuit breaker (if enabled)
                     connections.get_load_balancer().record_success(
-                        current_connection.address
+                        current_connection.address, lease=lease
                     )
                     return
+                except InternalNetworkError as e:
+                    yield e, None
+                    return
                 except AioRpcError as e:
+                    last_error = e
                     error = await self._handle_aiorpcerror(
                         error=e,
                         retry_i=i,
@@ -495,6 +534,7 @@ class GrpcConnectionPool:
                         current_deployment=current_connection.deployment_name,
                         connection_list=connections,
                         task_type="SingleDocumentRequest",
+                        connection_lease=lease,
                     )
                     if error:
                         yield error, None
@@ -503,7 +543,8 @@ class GrpcConnectionPool:
                     yield e, None
                     return
                 finally:
-                    connections.decr_usage(current_connection.address)
+                    if lease is not None:
+                        connections.release_connection(lease)
 
         return async_generator_wrapper()
 
@@ -607,7 +648,7 @@ class GrpcConnectionPool:
 
         async def task_wrapper():
             tried_addresses = set()
-            num_replicas = len(connections.get_all_connections())
+            last_error = None
             if retries is None or retries < 0:
                 total_num_tries = (
                     max(DEFAULT_MINIMUM_RETRIES, len(connections.get_all_connections()))
@@ -616,28 +657,17 @@ class GrpcConnectionPool:
             else:
                 total_num_tries = 1 + retries  # try once, then do all the retries
             for i in range(total_num_tries):
-                current_connection = None
-                while (
-                    current_connection is None
-                    or current_connection.address in tried_addresses
-                ):
-                    current_connection = await connections.get_next_connection(
-                        num_retries=total_num_tries
-                    )
-                    # if you request to retry more than the amount of replicas, we just skip, we could balance the
-                    # retries in the future
-                    if len(tried_addresses) >= num_replicas:
-                        break
-                tried_addresses.add(current_connection.address)
-                connections.incr_usage(current_connection.address)
-
-                ctx = {
-                    "request_id": requests[0].request_id,
-                    "address": current_connection.address,
-                    "deployment": current_connection.deployment_name,
-                }
-
+                lease = None
                 try:
+                    lease = await self._acquire_request_connection(
+                        connections, tried_addresses, requests[0].request_id, last_error
+                    )
+                    current_connection = lease.connection
+                    ctx = {
+                        "request_id": requests[0].request_id,
+                        "address": current_connection.address,
+                        "deployment": current_connection.deployment_name,
+                    }
                     # 1) BEFORE the RPC (awaited)
                     await self._safe_send_callback(
                         pre_send_cb, requests, ctx, timeout=3.0
@@ -673,10 +703,13 @@ class GrpcConnectionPool:
                     result = await rpc_task
                     # Record success in circuit breaker (if enabled)
                     connections.get_load_balancer().record_success(
-                        current_connection.address
+                        current_connection.address, lease=lease
                     )
                     return result
+                except InternalNetworkError as e:
+                    return e
                 except AioRpcError as e:
+                    last_error = e
                     error = await self._handle_aiorpcerror(
                         error=e,
                         retry_i=i,
@@ -687,14 +720,15 @@ class GrpcConnectionPool:
                         current_deployment=current_connection.deployment_name,
                         connection_list=connections,
                         task_type="DataRequest",
+                        connection_lease=lease,
                     )
                     if error:
                         return error
                 except Exception as e:
                     return e
                 finally:
-                    if current_connection:
-                        connections.decr_usage(current_connection.address)
+                    if lease is not None:
+                        connections.release_connection(lease)
 
         return asyncio.create_task(task_wrapper())
 
@@ -708,6 +742,7 @@ class GrpcConnectionPool:
         # the grpc call function is not a coroutine but some _AioCall
         async def task_coroutine():
             tried_addresses = set()
+            last_error = None
             if retries is None or retries < 0:
                 total_num_tries = (
                     max(
@@ -719,20 +754,21 @@ class GrpcConnectionPool:
             else:
                 total_num_tries = 1 + retries  # try once, then do all the retries
             for i in range(total_num_tries):
-                connection = await connection_list.get_next_connection(
-                    num_retries=total_num_tries
+                lease = await self._acquire_request_connection(
+                    connection_list, tried_addresses, last_error=last_error
                 )
-                tried_addresses.add(connection.address)
+                connection = lease.connection
                 try:
                     result = await connection.send_discover_endpoint(
                         timeout=timeout,
                     )
                     # Record success in circuit breaker (if enabled)
                     connection_list.get_load_balancer().record_success(
-                        connection.address
+                        connection.address, lease=lease
                     )
                     return result
                 except AioRpcError as e:
+                    last_error = e
                     error = await self._handle_aiorpcerror(
                         error=e,
                         retry_i=i,
@@ -742,11 +778,14 @@ class GrpcConnectionPool:
                         connection_list=connection_list,
                         total_num_tries=total_num_tries,
                         task_type="EndpointDiscovery",
+                        connection_lease=lease,
                     )
                     if error:
                         raise error
                 except AttributeError:
                     return default_endpoints_proto, None
+                finally:
+                    connection_list.release_connection(lease)
 
         return task_coroutine()
 

@@ -8,7 +8,7 @@ nodes that exceed the failure threshold, preventing cascading failures.
 import logging
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, Optional
 
@@ -30,12 +30,14 @@ class CircuitBreakerConfig:
         success_threshold: Number of successes in half-open state to close the circuit.
         recovery_timeout: Seconds to wait before transitioning from OPEN to HALF_OPEN.
         half_open_max_calls: Maximum concurrent requests allowed in half-open state.
+        fail_open: Allow fallback traffic to OPEN circuits when no healthy node remains.
     """
 
     failure_threshold: int = 5
     success_threshold: int = 3
     recovery_timeout: float = 30.0
     half_open_max_calls: int = 1
+    fail_open: bool = False
 
 
 @dataclass
@@ -51,6 +53,18 @@ class CircuitStats:
     half_open_calls: int = 0
     total_failures: int = 0
     total_successes: int = 0
+    _generation: int = 0
+
+
+@dataclass(eq=False)
+class CircuitPermit:
+    """Admission tied to an address's circuit state generation."""
+
+    address: str
+    _stats: CircuitStats = field(repr=False)
+    _generation: int
+    _half_open: bool
+    _released: bool = False
 
 
 class CircuitBreaker:
@@ -100,29 +114,54 @@ class CircuitBreaker:
         """
         with self._lock:
             stats = self._get_or_create_stats(address)
-            current_time = time.monotonic()
+            return self._is_available(stats, address)
 
-            if stats.state == CircuitState.CLOSED:
-                return True
+    def _is_available(self, stats: CircuitStats, address: str) -> bool:
+        if stats.state == CircuitState.CLOSED:
+            return True
 
-            if stats.state == CircuitState.OPEN:
-                # Check if recovery timeout has passed
-                if (
-                    stats.open_time is not None
-                    and (current_time - stats.open_time)
-                    >= self._config.recovery_timeout
-                ):
-                    # Transition to half-open
-                    self._transition_to_half_open(stats, address)
-                    return stats.half_open_calls < self._config.half_open_max_calls
+        if stats.state == CircuitState.OPEN:
+            if (
+                stats.open_time is not None
+                and time.monotonic() - stats.open_time >= self._config.recovery_timeout
+            ):
+                self._transition_to_half_open(stats, address)
+            else:
                 return False
 
-            if stats.state == CircuitState.HALF_OPEN:
-                return stats.half_open_calls < self._config.half_open_max_calls
+        return stats.half_open_calls < self._config.half_open_max_calls
 
-            return False
+    def try_acquire(
+        self, address: str, allow_open: bool = False
+    ) -> Optional[CircuitPermit]:
+        """Atomically check availability and reserve a half-open probe when needed."""
+        with self._lock:
+            stats = self._get_or_create_stats(address)
+            if not self._is_available(stats, address):
+                if not (allow_open and stats.state == CircuitState.OPEN):
+                    return None
+            half_open = stats.state == CircuitState.HALF_OPEN
+            if half_open:
+                stats.half_open_calls += 1
+            return CircuitPermit(address, stats, stats._generation, half_open)
 
-    def record_failure(self, address: str) -> None:
+    def release(self, permit: CircuitPermit) -> None:
+        """Release a permit without changing a newer circuit generation."""
+        with self._lock:
+            if permit._released:
+                return
+            permit._released = True
+            stats = self._stats.get(permit.address)
+            if self._matches_permit(stats, permit) and permit._half_open:
+                stats.half_open_calls = max(0, stats.half_open_calls - 1)
+
+    @staticmethod
+    def _matches_permit(stats: Optional[CircuitStats], permit: CircuitPermit) -> bool:
+        return stats is permit._stats and stats._generation == permit._generation
+
+    def record_failure(
+        self, address: str, permit: Optional[CircuitPermit] = None
+    ) -> None:
         """
         Record a failure for the given address.
 
@@ -132,6 +171,11 @@ class CircuitBreaker:
             address: The address that experienced a failure.
         """
         with self._lock:
+            if permit is not None and (
+                permit._released
+                or not self._matches_permit(self._stats.get(address), permit)
+            ):
+                return
             stats = self._get_or_create_stats(address)
             current_time = time.monotonic()
 
@@ -148,7 +192,9 @@ class CircuitBreaker:
                 # Any failure in half-open state reopens the circuit
                 self._transition_to_open(stats, address, current_time)
 
-    def record_success(self, address: str) -> None:
+    def record_success(
+        self, address: str, permit: Optional[CircuitPermit] = None
+    ) -> None:
         """
         Record a success for the given address.
 
@@ -158,6 +204,11 @@ class CircuitBreaker:
             address: The address that experienced a success.
         """
         with self._lock:
+            if permit is not None and (
+                permit._released
+                or not self._matches_permit(self._stats.get(address), permit)
+            ):
+                return
             stats = self._get_or_create_stats(address)
             current_time = time.monotonic()
 
@@ -303,6 +354,7 @@ class CircuitBreaker:
     ) -> None:
         """Transition circuit to OPEN state. Must hold lock."""
         stats.state = CircuitState.OPEN
+        stats._generation += 1
         stats.open_time = current_time
         stats.half_open_calls = 0
         self._logger.warning(
@@ -312,6 +364,7 @@ class CircuitBreaker:
     def _transition_to_half_open(self, stats: CircuitStats, address: str) -> None:
         """Transition circuit to HALF_OPEN state. Must hold lock."""
         stats.state = CircuitState.HALF_OPEN
+        stats._generation += 1
         stats.half_open_calls = 0
         stats.consecutive_failures = 0
         stats.consecutive_successes = 0
@@ -320,6 +373,7 @@ class CircuitBreaker:
     def _transition_to_closed(self, stats: CircuitStats, address: str) -> None:
         """Transition circuit to CLOSED state. Must hold lock."""
         stats.state = CircuitState.CLOSED
+        stats._generation += 1
         stats.open_time = None
         stats.half_open_calls = 0
         stats.consecutive_failures = 0

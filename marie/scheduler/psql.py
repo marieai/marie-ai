@@ -3161,7 +3161,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         Hydrate a specific DAG from the database into the MemoryFrontier.
         Delegates to DAGManagementService.
 
-        :param dag_id: The ID of the DAG to hydrate
+        :param dag_id: The ID of the DAG to hydrateS
         :return: True if DAG was hydrated, False if not found or failed
         """
         return await self.dag_service.hydrate_single_dag(dag_id)

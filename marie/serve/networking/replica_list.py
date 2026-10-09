@@ -1,11 +1,17 @@
+import asyncio
 import threading
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Collection, Dict, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from grpc.aio import ClientInterceptor
-
 from marie.engine.circuit_breaker import CircuitBreakerConfig
-from marie.serve.networking.balancer.load_balancer import LoadBalancer, LoadBalancerType
+
+from marie.excepts import EstablishGrpcConnectionError
+from marie.serve.networking.balancer.load_balancer import (
+    ConnectionLease,
+    LoadBalancer,
+    LoadBalancerType,
+)
 from marie.serve.networking.connection_stub import create_async_channel_stub
 from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.utils import TLS_PROTOCOL_SCHEMES
@@ -62,6 +68,7 @@ class _ReplicaList:
             )
         # Thread safety lock for connection modifications
         self._lock = threading.Lock()
+        self._closed = False
 
     async def reset_connection(self, address: str, deployment_name: str):
         """
@@ -98,18 +105,16 @@ class _ReplicaList:
             stubs, channel = self._create_connection(address, deployment_name)
             self._address_to_channel[resolved_address] = channel
             self._connections[id_to_reset] = stubs
+            self.load_balancer.update_connections(self._connections)
 
         # Close old channel outside lock to avoid blocking (fix: prevent channel leak)
         if old_channel is not None:
             try:
-                await old_channel.close(0.5)
+                await asyncio.shield(old_channel.close(0.5))
             except Exception as e:
                 self._logger.warning(
                     f"Error closing old channel for {resolved_address}: {e}"
                 )
-
-        # Update load balancer outside lock (it handles its own locking)
-        self.load_balancer.update_connections(self._connections)
 
     def add_connection(self, address: str, deployment_name: str):
         """
@@ -121,19 +126,18 @@ class _ReplicaList:
         resolved_address = parsed_address.netloc if parsed_address.netloc else address
 
         with self._lock:
+            if self._closed:
+                raise EstablishGrpcConnectionError(
+                    f'Replica list closed for {deployment_name}'
+                )
             if resolved_address in self._address_to_connection_idx:
                 return  # Already exists
 
-            self._address_to_connection_idx[resolved_address] = len(self._connections)
             stubs, channel = self._create_connection(address, deployment_name)
+            self._address_to_connection_idx[resolved_address] = len(self._connections)
             self._address_to_channel[resolved_address] = channel
             self._connections.append(stubs)
-            # create a new set of stubs and channels for warmup to avoid
-            # loosing channel during remove_connection or reset_connection
-            stubs, _ = self._create_connection(address, deployment_name)
-
-        # Update load balancer outside lock (it handles its own locking)
-        self.load_balancer.update_connections(self._connections)
+            self.load_balancer.update_connections(self._connections)
 
     async def remove_connection(self, address: str):
         """
@@ -172,18 +176,16 @@ class _ReplicaList:
             # Atomic swap of data structures
             self._connections = new_connections
             self._address_to_connection_idx = new_idx_map
+            self.load_balancer.update_connections(self._connections)
 
         # Close channel outside of lock to avoid blocking
         if channel_to_close is not None:
             try:
-                await channel_to_close.close(0.5)
+                await asyncio.shield(channel_to_close.close(0.5))
             except Exception as e:
                 self._logger.warning(
                     f"Error closing channel for {resolved_address}: {e}"
                 )
-
-        # Update load balancer (it handles its own locking)
-        self.load_balancer.update_connections(self._connections)
 
     def _create_connection(self, address, deployment_name: str):
         self._logger.debug(
@@ -203,20 +205,37 @@ class _ReplicaList:
         )
         return stubs, channel
 
-    async def get_next_connection(self, num_retries=3):
+    async def get_next_connection(
+        self, num_retries: int = 3, exclude_addresses: Optional[Collection[str]] = None
+    ) -> Any:
         """
         Returns a connection from the list. Strategy is round robin
         :param num_retries: how many retries should be performed when all connections are currently unavailable
         :returns: A connection from the pool
         """
-        return await self.load_balancer.get_next_connection(num_retries=num_retries)
+        return await self.load_balancer.get_next_connection(
+            num_retries=num_retries, exclude_addresses=exclude_addresses
+        )
+
+    async def acquire_connection(
+        self, exclude_addresses: Optional[Collection[str]] = None
+    ) -> ConnectionLease:
+        """Select and count one request, reserving circuit admission if enabled."""
+        return await self.load_balancer.acquire_connection(
+            exclude_addresses=exclude_addresses
+        )
+
+    def release_connection(self, lease: ConnectionLease) -> None:
+        """Release a request acquisition exactly once."""
+        self.load_balancer.release_connection(lease)
 
     def get_all_connections(self):
         """
         Returns all available connections
         :returns: A complete list of all connections from the pool
         """
-        return self._connections
+        with self._lock:
+            return list(self._connections)
 
     def has_connection(self, address: str) -> bool:
         """
@@ -239,12 +258,17 @@ class _ReplicaList:
         """
         Close all connections and clean up internal state
         """
-        for address in self._address_to_channel:
-            await self._address_to_channel[address].close(0.5)
-        self._address_to_channel.clear()
-        self._address_to_connection_idx.clear()
-        self._connections.clear()
-        self.load_balancer.close()
+        with self._lock:
+            self._closed = True
+            channels = list(self._address_to_channel.values())
+            self._address_to_channel.clear()
+            self._address_to_connection_idx.clear()
+            self._connections.clear()
+            self.load_balancer.close()
+        if channels:
+            await asyncio.shield(
+                asyncio.gather(*(channel.close(0.5) for channel in channels))
+            )
 
     def incr_usage(self, address: str) -> int:
         """
