@@ -1,6 +1,9 @@
 import asyncio
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 import marie.scheduler.services.control_flow_execution_service as control_flow_module
 from marie.logging_core.logger import MarieLogger
@@ -12,6 +15,7 @@ from marie.query_planner.branching import (
 )
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.job_lock import AsyncJobLock
+from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.services.control_flow_execution_service import (
     ControlFlowExecutionOutcome,
@@ -324,3 +328,207 @@ async def test_switch_marks_selected_case_and_skips_other_case() -> None:
         'contract'
     ]
     service.frontier.on_jobs_skipped.assert_awaited_once_with(['contract'])
+
+
+async def build_routing_service(
+    node_type: str,
+) -> tuple[ControlFlowExecutionService, WorkInfo, dict[str, WorkState]]:
+    service = build_service()
+    definition = (
+        BranchQueryDefinition(
+            paths=[
+                BranchPath(path_id='selected-path', target_node_ids=['selected']),
+                BranchPath(path_id='inactive-path', target_node_ids=['inactive']),
+            ]
+        )
+        if node_type == 'branch'
+        else SwitchQueryDefinition(
+            switch_field='$.metadata.document_type',
+            cases={'invoice': ['selected'], 'contract': ['inactive']},
+        )
+    )
+    plan = QueryPlan(
+        nodes=[
+            Query(
+                task_id='route',
+                query_str='route',
+                node_type=QueryType.BRANCH
+                if node_type == 'branch'
+                else QueryType.SWITCH,
+                definition=definition,
+            ),
+            Query(task_id='selected', query_str='selected', dependencies=['route']),
+            Query(task_id='inactive', query_str='inactive', dependencies=['route']),
+            Query(
+                task_id='inactive-child', query_str='child', dependencies=['inactive']
+            ),
+            Query(
+                task_id='merger',
+                query_str='merger',
+                dependencies=['selected', 'inactive-child'],
+            ),
+        ]
+    )
+    jobs = []
+    for node in plan.nodes:
+        item = work_item(node.task_id)
+        item.state = WorkState.ACTIVE if node.task_id == 'route' else WorkState.CREATED
+        item.start_after = None
+        item.dependencies = node.dependencies
+        jobs.append(item)
+    item = jobs[0]
+    item.data['metadata'] = {'on': f'{node_type}://default', 'document_type': 'invoice'}
+    item.run_owner = 'scheduler-1'
+    item.run_attempt_id = 'attempt-1'
+    service.frontier = MemoryFrontier()
+    await service.frontier.add_dag(plan, jobs)
+    service.dag_service.active_dags = {'dag-1': plan}
+    service.dag_service.get_dag.return_value = plan
+    states = {job.id: job.state for job in jobs}
+
+    async def commit_branch_route(**kwargs: Any) -> tuple[bool, set[str]]:
+        skipped = set(kwargs['skipped_job_ids'])
+        for job_id in skipped:
+            states[job_id] = WorkState.SKIPPED
+        states[kwargs['job_id']] = WorkState.COMPLETED
+        return True, skipped
+
+    service.repository.commit_branch_route.side_effect = commit_branch_route
+    return service, item, states
+
+
+@pytest.mark.parametrize('node_type', ['branch', 'switch'])
+@pytest.mark.parametrize('failure', ['database', 'closure'])
+@pytest.mark.parametrize('batch', [False, True])
+async def test_routing_failure_blocks_children_until_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    node_type: str,
+    failure: str,
+    batch: bool,
+) -> None:
+    service, item, states = await build_routing_service(node_type)
+    commit = service.repository.commit_branch_route.side_effect
+    with monkeypatch.context() as patch:
+        error = RuntimeError(f'{failure} failed')
+        if failure == 'closure':
+            patch.setattr(
+                control_flow_module, 'exclusive_skip_closure', Mock(side_effect=error)
+            )
+        elif failure == 'database':
+            service.repository.commit_branch_route.side_effect = error
+
+        outcomes = (
+            await service.process_nodes([item])
+            if batch
+            else [await service.process_node(item)]
+        )
+
+    assert outcomes == [ControlFlowExecutionOutcome.FAILED]
+    service.repository.complete_job.assert_not_awaited()
+    assert states['route'] is WorkState.ACTIVE
+    assert await service.frontier.select_ready(10) == []
+    rebuilt = MemoryFrontier()
+    plan = service.dag_service.active_dags['dag-1']
+    terminal = {
+        WorkState.COMPLETED,
+        WorkState.FAILED,
+        WorkState.CANCELLED,
+        WorkState.SKIPPED,
+    }
+    # Hydration loads only schedulable rows and excludes terminal dependencies.
+    pending = [
+        job.model_copy(
+            update={
+                'state': states[job.id],
+                'dependencies': [
+                    dep for dep in job.dependencies or [] if states[dep] not in terminal
+                ],
+            },
+            deep=True,
+        )
+        for job in service.frontier.jobs_by_id.values()
+        if states[job.id] in (WorkState.CREATED, WorkState.RETRY)
+    ]
+    await rebuilt.add_dag(plan, pending)
+    assert await rebuilt.select_ready(10) == []
+
+    service.repository.commit_branch_route.side_effect = commit
+    # A recovered run attempt re-enters the frontier as a retry.
+    retry = item.model_copy(
+        update={
+            'state': WorkState.RETRY,
+            'run_owner': None,
+            'run_attempt_id': None,
+        },
+        deep=True,
+    )
+    states[item.id] = WorkState.RETRY
+    rebuilt = MemoryFrontier()
+    await rebuilt.add_dag(plan, [retry, *pending])
+    service.repository.activate_from_lease.return_value = {'route': 'attempt-2'}
+    service.frontier = rebuilt
+    assert await service.process_node(retry) is ControlFlowExecutionOutcome.COMPLETED
+    assert states['inactive'] is WorkState.SKIPPED
+    assert states['inactive-child'] is WorkState.SKIPPED
+    assert [job.id for job in await rebuilt.peek_ready(10)] == ['selected']
+    await rebuilt.on_job_completed('selected')
+    assert [job.id for job in await rebuilt.peek_ready(10)] == ['merger']
+
+
+@pytest.mark.parametrize('node_type', ['branch', 'switch'])
+async def test_routing_frontier_failure_keeps_durable_skips(
+    monkeypatch: pytest.MonkeyPatch,
+    node_type: str,
+) -> None:
+    service, item, states = await build_routing_service(node_type)
+    monkeypatch.setattr(
+        service.frontier,
+        'on_jobs_skipped',
+        AsyncMock(side_effect=RuntimeError('frontier failed')),
+    )
+
+    assert (
+        await service.process_node(item)
+        is ControlFlowExecutionOutcome.COMPLETED_WITH_ERROR
+    )
+    assert states['route'] is WorkState.COMPLETED
+    assert states['inactive'] is WorkState.SKIPPED
+    assert states['inactive-child'] is WorkState.SKIPPED
+
+
+@pytest.mark.parametrize('node_type', ['branch', 'switch'])
+async def test_stale_routing_attempt_does_not_update_frontier_or_metadata(
+    node_type: str,
+) -> None:
+    service, item, states = await build_routing_service(node_type)
+    service.repository.commit_branch_route.side_effect = None
+    service.repository.commit_branch_route.return_value = False, set()
+
+    assert (
+        await service.process_node(item)
+        is ControlFlowExecutionOutcome.COMPLETION_REJECTED
+    )
+    assert states['route'] is WorkState.ACTIVE
+    assert states['inactive'] is WorkState.CREATED
+    service.repository.update_job_metadata.assert_not_awaited()
+    assert await service.frontier.select_ready(10) == []
+
+
+@pytest.mark.parametrize('failure', ['database', 'closure'])
+async def test_branch_callback_blocks_children_on_skip_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    service, item, _ = await build_routing_service('branch')
+    error = RuntimeError('skip failed')
+    if failure == 'database':
+        service.repository.mark_jobs_as_skipped.side_effect = error
+    else:
+        monkeypatch.setattr(
+            control_flow_module, 'exclusive_skip_closure', Mock(side_effect=error)
+        )
+
+    with pytest.raises(RuntimeError, match='skip failed'):
+        await service.handle_successful_job_completion(item.id, item)
+
+    assert await service.frontier.select_ready(10) == []

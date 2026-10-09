@@ -2680,6 +2680,70 @@ class AsyncJobRepository:
             return 0, None
         return int(row[0]), row[1]
 
+    async def commit_branch_route(
+        self,
+        *,
+        job_id: str,
+        queue_name: str,
+        run_owner: str,
+        run_attempt_id: str,
+        branch_metadata: dict[str, Any],
+        skipped_job_ids: list[str],
+        skip_metadata: dict[str, Any],
+        schema: str = DEFAULT_SCHEMA,
+    ) -> tuple[bool, set[str]]:
+        """Commit an attempt's branch decision, skips, and completion together."""
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                completed = await conn.fetchrow(
+                    f"""
+                    UPDATE {schema}.job
+                    SET state = 'completed', completed_on = NOW(),
+                        output = %s, branch_metadata = %s,
+                        lease_owner = NULL, lease_expires_at = NULL,
+                        run_owner = NULL,
+                        run_lease_expires_at = NULL
+                    WHERE name = %s AND id = %s::uuid AND state = 'active'
+                      AND run_owner = %s AND run_attempt_id = %s::uuid
+                    RETURNING id
+                    """,
+                    Jsonb({"on_complete": "done"}),
+                    Jsonb(branch_metadata),
+                    queue_name,
+                    job_id,
+                    run_owner,
+                    run_attempt_id,
+                )
+                if completed is None:
+                    return False, set()
+
+                skipped_ids: set[str] = set()
+                if skipped_job_ids:
+                    rows = await conn.fetch(
+                        f"""
+                        UPDATE {schema}.job
+                        SET state = 'skipped', completed_on = NOW(), output = %s,
+                            branch_metadata = COALESCE(branch_metadata, '{{}}'::jsonb)
+                                || jsonb_build_object('skipped', TRUE, 'skip_reason', %s::jsonb),
+                            lease_owner = NULL, lease_expires_at = NULL,
+                            run_owner = NULL, run_attempt_id = NULL,
+                            run_lease_expires_at = NULL
+                        WHERE name = %s AND id = ANY(%s::uuid[])
+                          AND state IN ('created', 'retry', 'skipped')
+                        RETURNING id
+                        """,
+                        Jsonb({"on_skip": "skipped", **skip_metadata}),
+                        Jsonb(skip_metadata.get("skip_reason", {})),
+                        queue_name,
+                        skipped_job_ids,
+                    )
+                    skipped_ids = {str(row[0]) for row in rows}
+                    if skipped_ids != set(skipped_job_ids):
+                        raise RuntimeError(
+                            f"Branch {job_id} could not skip all unselected jobs"
+                        )
+        return True, skipped_ids
+
     async def mark_jobs_as_skipped(
         self,
         job_ids: list[str],
