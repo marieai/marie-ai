@@ -46,12 +46,11 @@ class EventPublisher:
 
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._subscribers: Dict[str, List[Callable[[str, T], None]]] = {}
         self._queue: asyncio.Queue = asyncio.Queue()
         self._dispatcher_task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
-        self.start()
 
     def subscribe(
         self, event_type: Union[str, List[str]], subscriber: Callable[[str, T], None]
@@ -108,12 +107,13 @@ class EventPublisher:
             except asyncio.CancelledError:
                 break
 
-    def start(self):
+    def start(self) -> None:
         """
         Start the dispatcher loop (must be called inside an event loop).
         """
         if self._dispatcher_task is None:
-            self._dispatcher_task = asyncio.create_task(self._dispatcher())
+            loop = asyncio.get_running_loop()
+            self._dispatcher_task = loop.create_task(self._dispatcher())
 
     async def stop(self):
         """
