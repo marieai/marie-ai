@@ -143,6 +143,38 @@ def test_scheduler_config_can_enable_priority_refresh() -> None:
             'job_event_queue_size',
         ),
         ({'dag_manager': {'max_concurrent_dags': 0}}, 'max_concurrent_dags'),
+        ({'maintenance_interval': 0}, 'maintenance_interval'),
+        ({'maintenance_interval': -1}, 'maintenance_interval'),
+        ({'dag_manager': {'dag_cache_size': 0}}, 'dag_cache_size'),
+        ({'dag_manager': {'dag_cache_size': -1}}, 'dag_cache_size'),
+        (
+            {'dag_manager': {'dag_resolution_retry_limit': 0}},
+            'dag_resolution_retry_limit',
+        ),
+        (
+            {'dag_manager': {'dag_resolution_retry_limit': -1}},
+            'dag_resolution_retry_limit',
+        ),
+        (
+            {'dag_manager': {'dag_resolution_retry_delay': -0.1}},
+            'dag_resolution_retry_delay',
+        ),
+        (
+            {'dag_manager': {'dag_resolution_retry_max_delay': -1}},
+            'dag_resolution_retry_max_delay',
+        ),
+        (
+            {
+                'dag_manager': {
+                    'dag_resolution_retry_delay': 2,
+                    'dag_resolution_retry_max_delay': 1,
+                }
+            },
+            'max_delay',
+        ),
+        ({'sla_warning_top_n': -1}, 'sla_warning_top_n'),
+        ({'priority_refresh_hydrate_limit': 0}, 'priority_refresh_hydrate_limit'),
+        ({'priority_refresh_hydrate_limit': -1}, 'priority_refresh_hydrate_limit'),
         (
             {'run_lease_renewal_interval_seconds': 0},
             'run_lease_renewal_interval_seconds',
@@ -175,3 +207,41 @@ def test_scheduler_config_derives_renewal_interval_from_run_ttl() -> None:
     )
 
     assert config.run_lease_renewal_interval_seconds == 10
+
+
+@pytest.mark.parametrize(
+    'key', ['dag_resolution_retry_delay', 'dag_resolution_retry_max_delay']
+)
+@pytest.mark.parametrize('value', ['nan', 'inf', '-inf'])
+def test_scheduler_config_rejects_nonfinite_retry_delays(key: str, value: str) -> None:
+    with pytest.raises(BadConfigSource, match=key):
+        PostgreSQLSchedulerConfig.from_dict(
+            {'queue_names': ['extract'], 'dag_manager': {key: value}}
+        )
+
+
+def test_scheduler_config_accepts_minimum_runtime_ranges() -> None:
+    config = PostgreSQLSchedulerConfig.from_dict(
+        {
+            'queue_names': ['extract'],
+            'maintenance_interval': '1',
+            'sla_warning_top_n': '0',
+            'priority_refresh_hydrate_limit': '1',
+            'dag_manager': {
+                'dag_cache_size': '1',
+                'dag_resolution_retry_limit': '1',
+                'dag_resolution_retry_delay': '0',
+                'dag_resolution_retry_max_delay': '0',
+            },
+        }
+    )
+
+    assert (
+        config.maintenance_interval,
+        config.sla_warning_top_n,
+        config.priority_refresh_hydrate_limit,
+        config.dag_cache_size,
+        config.dag_resolution_retry_limit,
+        config.dag_resolution_retry_delay,
+        config.dag_resolution_retry_max_delay,
+    ) == (1, 0, 1, 1, 1, 0.0, 0.0)

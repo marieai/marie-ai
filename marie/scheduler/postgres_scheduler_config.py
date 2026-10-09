@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 from marie.excepts import BadConfigSource
@@ -210,11 +211,37 @@ class PostgreSQLSchedulerConfig:
             raise BadConfigSource(
                 'dag_manager.max_concurrent_dags must be greater than zero'
             )
+        if self.dag_resolution_retry_limit <= 0:
+            raise BadConfigSource(
+                'dag_manager.dag_resolution_retry_limit must be greater than zero'
+            )
+        if (
+            not isfinite(self.dag_resolution_retry_delay)
+            or not isfinite(self.dag_resolution_retry_max_delay)
+            or self.dag_resolution_retry_delay < 0
+            or self.dag_resolution_retry_max_delay < self.dag_resolution_retry_delay
+        ):
+            raise BadConfigSource(
+                'dag_manager.dag_resolution_retry_delay and dag_resolution_retry_max_delay '
+                'must be finite and non-negative with max_delay >= delay'
+            )
+        if self.maintenance_interval <= 0:
+            raise BadConfigSource('maintenance_interval must be greater than zero')
+        if self.dag_cache_size <= 0:
+            raise BadConfigSource(
+                'dag_manager.dag_cache_size must be greater than zero'
+            )
+        if self.sla_warning_top_n < 0:
+            raise BadConfigSource('sla_warning_top_n must be non-negative')
         if self.priority_refresh_interval <= 0:
             raise BadConfigSource('priority_refresh_interval must be greater than zero')
         if self.priority_refresh_interval_seconds <= 0:
             raise BadConfigSource(
                 'priority_refresh_interval_seconds must be greater than zero'
+            )
+        if self.priority_refresh_hydrate_limit <= 0:
+            raise BadConfigSource(
+                'priority_refresh_hydrate_limit must be greater than zero'
             )
         if self.frontier_batch_size <= 0:
             raise BadConfigSource(
