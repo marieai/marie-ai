@@ -306,17 +306,6 @@ class DesiredStore(BaseStore):
                 time.sleep(0.01)
         raise RuntimeError(f"DesiredStore._create failed repeatedly for {k}")
 
-    def _update_phaseXXX(self, node: str, depl: str, phase: str) -> DesiredDoc:
-        existing = self.get(node, depl)
-        if not existing:
-            # If called without existing doc, create a new one with epoch=1
-            return self._create(node, depl, phase=phase, epoch=1, params={})
-        existing.phase = phase
-        existing.updated_at = _now_iso()
-        # NOTE: keep epoch unchanged here (important!)
-        self._put_json(self._desired_key(node, depl), asdict(existing))
-        return existing
-
     def _update_phase(self, node: str, depl: str, phase: str) -> DesiredDoc:
         """
         Atomic phase update (epoch unchanged).
