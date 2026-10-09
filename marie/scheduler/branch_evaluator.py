@@ -53,7 +53,7 @@ class BranchEvaluationContext:
             "priority": work_info.priority,
             "data": work_info.data,
             "metadata": work_info.data.get("metadata", {}),
-            "execution_results": execution_results,
+            "execution_results": self.execution_results,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 

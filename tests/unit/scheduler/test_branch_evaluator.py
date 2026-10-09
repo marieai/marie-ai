@@ -3,7 +3,11 @@ from typing import Any
 import pytest
 
 from marie.query_planner.base import Query, QueryPlan
-from marie.query_planner.branching import SwitchQueryDefinition
+from marie.query_planner.branching import (
+    BranchPath,
+    PythonBranchQueryDefinition,
+    SwitchQueryDefinition,
+)
 from marie.scheduler.branch_evaluator import BranchEvaluationContext, BranchEvaluator
 from marie.scheduler.models import WorkInfo
 
@@ -72,3 +76,43 @@ async def test_switch_unmatched_or_missing_value_uses_default(
     result = await BranchEvaluator().evaluate_switch(switch_def, switch_context(data))
 
     assert result == ['fallback']
+
+
+def route_on_prior_result(context: dict[str, Any]) -> str:
+    return 'prior-result' if context['execution_results'].get('extract') else 'no-results'
+
+
+@pytest.mark.parametrize(
+    ('context_kwargs', 'expected_path'),
+    [
+        pytest.param({}, 'no-results', id='omitted'),
+        pytest.param({'execution_results': None}, 'no-results', id='null'),
+        pytest.param({'execution_results': {}}, 'no-results', id='empty'),
+        pytest.param(
+            {'execution_results': {'extract': {'status': 'completed'}}},
+            'prior-result',
+            id='populated',
+        ),
+    ],
+)
+async def test_python_branch_reads_normalized_execution_results(
+    context_kwargs: dict[str, Any], expected_path: str
+) -> None:
+    node = Query(task_id='branch', query_str='branch')
+    context = BranchEvaluationContext(
+        work_info=WorkInfo.model_construct(name='extract', data={}),
+        dag_plan=QueryPlan(nodes=[node]),
+        branch_node=node,
+        **context_kwargs,
+    )
+    branch_def = PythonBranchQueryDefinition(
+        branch_function=f'{__name__}.route_on_prior_result',
+        paths=[
+            BranchPath(path_id='no-results', target_node_ids=['new-extract']),
+            BranchPath(path_id='prior-result', target_node_ids=['use-prior-result']),
+        ],
+    )
+
+    result = await BranchEvaluator().evaluate_branch(branch_def, context)
+
+    assert result == [expected_path]
