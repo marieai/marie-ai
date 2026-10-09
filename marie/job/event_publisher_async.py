@@ -75,13 +75,19 @@ class EventPublisher:
             if not self._subscribers[event_type]:
                 del self._subscribers[event_type]
 
-    async def publish(self, event_type: str, message: T):
+    async def publish(self, event_type: str, message: T) -> None:
         """
         Enqueue a message for dispatching (non-blocking).
 
         :param event_type: The type of event being published.
         :param message: The message payload to deliver.
         """
+        if (
+            self._stopped.is_set()
+            or self._dispatcher_task is None
+            or self._dispatcher_task.done()
+        ):
+            raise RuntimeError("EventPublisher is not running")
         await self._queue.put((event_type, message))
 
     async def _dispatcher(self):
@@ -111,13 +117,17 @@ class EventPublisher:
         """
         Start the dispatcher loop (must be called inside an event loop).
         """
-        if self._dispatcher_task is None:
-            loop = asyncio.get_running_loop()
-            self._dispatcher_task = loop.create_task(self._dispatcher())
+        if self._dispatcher_task is not None:
+            if self._stopped.is_set():
+                raise RuntimeError("EventPublisher is stopping")
+            return
+        loop = asyncio.get_running_loop()
+        self._stopped.clear()
+        self._dispatcher_task = loop.create_task(self._dispatcher())
 
-    async def stop(self):
+    async def stop(self) -> None:
         """
-        Stop the dispatcher gracefully.
+        Cancel the current delivery, retaining queued events for the next start.
         """
         self._stopped.set()
         if self._dispatcher_task:
