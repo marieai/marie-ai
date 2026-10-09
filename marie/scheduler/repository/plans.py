@@ -548,7 +548,7 @@ def fail_jobs(schema: str, where: str, output: dict):
           END,
         start_after = CASE
           WHEN retry_count = retry_limit THEN start_after
-          WHEN NOT retry_backoff THEN now() + retry_delay * interval '1'
+          WHEN NOT retry_backoff THEN now() + retry_delay * interval '1 second'
           ELSE {schema}.exponential_backoff(retry_delay, retry_count)
           END,
         output = {_jsonb_literal(output)},

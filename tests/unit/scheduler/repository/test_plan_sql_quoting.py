@@ -208,3 +208,44 @@ def test_insert_version_keeps_value_as_data(
     assert connection.execute(f'SELECT version FROM {schema}.version').fetchall() == [
         ("95'); SELECT 1; --",)
     ]
+
+
+@pytest.mark.parametrize(
+    'operation', ['fail_jobs_by_id', 'fail_jobs_by_attempt', 'fail_jobs_by_timeout']
+)
+@pytest.mark.parametrize('retry_delay', [0, 2, 30])
+@pytest.mark.parametrize('retries_remaining', [True, False])
+def test_fixed_retry_delay_is_in_seconds(
+    database: tuple[psycopg.Connection, str],
+    operation: str,
+    retry_delay: int,
+    retries_remaining: bool,
+) -> None:
+    connection, schema = database
+    seed_jobs(connection, schema, 'queue', 'active')
+    connection.execute(
+        f'''UPDATE {schema}.job
+            SET retry_count = %s, retry_limit = 2, retry_delay = %s,
+                retry_backoff = false, start_after = now() - interval '1 minute',
+                started_on = now() - interval '2 minutes', expire_in = interval '1 minute'
+            WHERE id = %s::uuid''',
+        (1 if retries_remaining else 2, retry_delay, JOB_ID),
+    )
+    query = (
+        plans.fail_jobs_by_timeout(schema)
+        if operation == 'fail_jobs_by_timeout'
+        else transition(operation, schema, 'queue', [JOB_ID])
+    )
+
+    result = connection.execute(query).fetchone()
+    delay = connection.execute(
+        f'SELECT extract(epoch FROM start_after - now()) FROM {schema}.job WHERE id = %s::uuid',
+        (JOB_ID,),
+    ).fetchone()[0]
+
+    assert result == (1, 'retry' if retries_remaining else 'failed')
+    assert delay == (retry_delay if retries_remaining else -60)
+    assert connection.execute(
+        f'SELECT state::text FROM {schema}.job WHERE id = %s::uuid',
+        (SIBLING_ID,),
+    ).fetchone() == ('active',)
