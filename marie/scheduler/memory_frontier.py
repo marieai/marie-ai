@@ -742,6 +742,14 @@ class MemoryFrontier:
                 if not self._entry_is_current(entry):
                     continue
                 if not self._still_ready(entry.jid):
+                    wi_deferred = self.jobs_by_id.get(entry.jid)
+                    if (
+                        wi_deferred is not None
+                        and self._is_schedulable_state(wi_deferred.state)
+                        and entry.jid in self._ready_set
+                        and self.unmet_count.get(entry.jid, 1) == 0
+                    ):
+                        skipped.append(entry)
                     continue
                 wi = self.jobs_by_id.get(entry.jid)
                 if wi is None or (filter_fn and not filter_fn(wi)):
