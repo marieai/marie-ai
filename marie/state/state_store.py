@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from grpc_health.v1.health_pb2 import HealthCheckResponse
@@ -72,13 +72,13 @@ class DesiredDoc:
     # Intent/spec (gateway-only)
     phase: str  # e.g., "SCHEDULED"
     epoch: int  # fencing counter
-    params: Dict[str, Any]  # arbitrary scheduler params
-    updated_at: str
+    params: Dict[str, Any] = field(default_factory=dict)  # scheduler params
+    updated_at: str = ""
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "DesiredDoc":
         data = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
-        return cls(**data)
+        return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
 
 
 @dataclass
@@ -88,14 +88,16 @@ class StatusDoc:
     status_name: str  # same as string for readability (e.g., "SERVING")
     owner: str  # worker id
     epoch: int  # must match desired.epoch when claimed
-    updated_at: str
-    heartbeat_at: str
+    updated_at: str = ""
+    heartbeat_at: str = ""
     details: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "StatusDoc":
         data = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
-        return cls(**data)
+        if "status_name" not in data and "status_code" in data:
+            data["status_name"] = _status_name(data["status_code"])
+        return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
 
 
 def _iter_node_depl_pairs(etcd, suffix: str) -> Iterator[Tuple[str, str]]:
