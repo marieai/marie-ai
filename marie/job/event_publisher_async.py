@@ -2,7 +2,10 @@ import asyncio
 import inspect
 from typing import Callable, Dict, List, TypeVar, Union
 
+from marie.logging_core.logger import MarieLogger
+
 T = TypeVar("T")
+logger = MarieLogger(__name__)
 
 
 class EventPublisher:
@@ -92,7 +95,7 @@ class EventPublisher:
             raise RuntimeError("EventPublisher is not running")
         await self._queue.put((event_type, message))
 
-    async def _dispatcher(self):
+    async def _dispatcher(self) -> None:
         """
         Dispatcher consumes events in strict FIFO order
         and processes subscribers synchronously to guarantee ordering.
@@ -110,8 +113,12 @@ class EventPublisher:
                                 await asyncio.get_running_loop().run_in_executor(
                                     None, subscriber, event_type, message
                                 )
-                        except Exception as e:
-                            print(f"Subscriber error: {e}")
+                        except Exception:
+                            logger.exception(
+                                "Subscriber %r failed for event %r",
+                                subscriber,
+                                event_type,
+                            )
             except asyncio.CancelledError:
                 break
 

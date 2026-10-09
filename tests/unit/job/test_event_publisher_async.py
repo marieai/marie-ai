@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 
@@ -131,3 +132,47 @@ def test_unsubscribe_is_safe_for_missing_and_removed_subscribers() -> None:
     publisher.unsubscribe("event", other_subscriber)
     publisher.unsubscribe("event", other_subscriber)
     assert "event" not in publisher._subscribers
+
+
+@pytest.mark.parametrize("asynchronous", [True, False])
+async def test_subscriber_failure_logs_context_and_preserves_delivery(
+    caplog, monkeypatch, asynchronous: bool
+) -> None:
+    publisher = EventPublisher()
+    delivered = asyncio.Event()
+    received: list[int] = []
+    failure = ValueError("subscriber failed")
+
+    def failing_subscriber(_event_type: str, _message: int) -> None:
+        raise failure
+
+    async def failing_async_subscriber(event_type: str, message: int) -> None:
+        failing_subscriber(event_type, message)
+
+    async def successful_subscriber(_event_type: str, message: int) -> None:
+        received.append(message)
+        if len(received) == 2:
+            delivered.set()
+
+    subscriber = failing_async_subscriber if asynchronous else failing_subscriber
+    publisher.subscribe("test-event", subscriber)
+    publisher.subscribe("test-event", successful_subscriber)
+    log = logging.getLogger("marie.job.event_publisher_async")
+    monkeypatch.setattr(log, "propagate", True)
+    try:
+        with caplog.at_level(logging.ERROR, logger=log.name):
+            publisher.start()
+            await publisher.publish("test-event", 1)
+            await publisher.publish("test-event", 2)
+            await asyncio.wait_for(delivered.wait(), timeout=1)
+        assert received == [1, 2]
+        records = [record for record in caplog.records if record.name == log.name]
+        assert len(records) == 2
+        for record in records:
+            assert "test-event" in record.getMessage()
+            assert subscriber.__name__ in record.getMessage()
+            assert record.exc_info is not None
+            assert record.exc_info[1] is failure
+            assert record.exc_info[2] is not None
+    finally:
+        await publisher.stop()
