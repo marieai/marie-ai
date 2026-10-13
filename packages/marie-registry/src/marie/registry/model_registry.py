@@ -1,12 +1,44 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
+import re
 from collections import OrderedDict
-from typing import Any, Dict, List, MutableMapping, Optional, Tuple, Union
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    MutableMapping,
+    Optional,
+    Tuple,
+    Union,
+)
 
-from marie.constants import __model_path__
+if TYPE_CHECKING:
+    from marie.registry.model_config import (
+        ModelConfigOverrides,
+        ModelMetadata,
+        ResolvedModelConfig,
+    )
 
 logger = logging.getLogger(__name__)
+
+
+def _model_root(kwargs: Dict[str, Any]) -> str:
+    explicit = kwargs.pop("__model_path__", None)
+    if explicit is not None:
+        return os.fspath(explicit)
+    if ModelRegistry._model_root is not None:
+        return os.fspath(ModelRegistry._model_root)
+    if mount := os.getenv("MARIE_DEFAULT_MOUNT"):
+        return os.path.join(mount, "model_zoo")
+    raise FileNotFoundError(
+        "Configure ModelRegistry.model_root or MARIE_DEFAULT_MOUNT "
+        "before resolving a model-zoo entry"
+    )
 
 
 class ModelRegistryHandler:
@@ -71,6 +103,34 @@ class ModelRegistryHandler:
         """
         raise NotImplementedError()
 
+    def get_reference(self, name: str, version: str | None = None) -> str | None:
+        """Resolve the reference an inference provider should load."""
+        resolved = self.get_local_path(
+            name, version, raise_exceptions_for_missing_entries=False
+        )
+        return os.fspath(resolved) if resolved is not None else None
+
+    def get_metadata(
+        self,
+        name: str,
+        version: str | None = None,
+        *,
+        local_files_only: bool = False,
+        **kwargs: Any,
+    ) -> ModelMetadata | None:
+        """Read metadata from artifacts resolved by this handler."""
+        from marie.registry.model_metadata import read_model_metadata
+
+        resolved = self.get_local_path(
+            name,
+            version,
+            raise_exceptions_for_missing_entries=False,
+            **kwargs,
+        )
+        if resolved is None:
+            return None
+        return read_model_metadata(resolved, version)
+
     def discover(self, **kwargs: Any) -> Dict[str, Union[str, os.PathLike]]:
         """
         Discover all models that this provider can locate
@@ -100,6 +160,7 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
     def __init__(self):
         self.resolved_models = {}
         self.discovered = False
+        self.model_root = None
 
     def _resolve(
         self,
@@ -111,14 +172,12 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
         full_filename = "marie.json"
         if os.path.isdir(_name_or_path):
             config = os.path.join(_name_or_path, full_filename)
+            if not os.path.isfile(config):
+                config = os.path.join(_name_or_path, "config.json")
         elif os.path.isfile(_name_or_path):
             config = _name_or_path
         else:
-            model_root = (
-                kwargs.pop("__model_path__")
-                if "__model_path__" in kwargs
-                else __model_path__
-            )
+            model_root = _model_root(kwargs)
             config = os.path.join(model_root, _name_or_path, full_filename)
             if not os.path.exists(config):
                 if raise_exceptions_for_missing_entries:
@@ -129,23 +188,21 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
                 else:
                     return None, None
 
+        if not os.path.isfile(config):
+            if raise_exceptions_for_missing_entries:
+                raise FileNotFoundError(f"Model definition not found: {config}")
+            return None, None
         logger.info(f"Found model definition in {config}")
         with open(config, "r", encoding="utf-8") as json_file:
             data = json.load(json_file)
             return os.path.dirname(config), data
 
     def discover(self, **kwargs: Any) -> Dict[str, Union[str, os.PathLike]]:
-        model_root = (
-            kwargs.pop("__model_path__")
-            if "__model_path__" in kwargs
-            else __model_path__
-        )
+        model_root = _model_root(kwargs)
         logger.info(f"Resolving native model from : {model_root}")
 
         # NOOP
-        use_auth_token = (
-            kwargs.pop("use_auth_token") if "use_auth_token" in kwargs else None
-        )
+        kwargs.pop("use_auth_token", None)
 
         self._check_kwargs(kwargs)
         resolved = {}
@@ -172,6 +229,7 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
                     resolved[name] = config_path
         self.resolved_models = resolved
         self.discovered = True
+        self.model_root = model_root
         return self.resolved_models
 
     def _get_supported_prefixes(self) -> List[str]:
@@ -188,7 +246,18 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
             _name_or_path, self._get_supported_prefixes()
         )
 
-        if not self.discovered:
+        if os.path.isdir(model_name_or_path) or os.path.isfile(model_name_or_path):
+            config_dir, _ = self._resolve(
+                model_name_or_path, raise_exceptions_for_missing_entries, **kwargs
+            )
+            return config_dir
+        try:
+            model_root = _model_root(dict(kwargs))
+        except FileNotFoundError:
+            if raise_exceptions_for_missing_entries:
+                raise
+            return None
+        if not self.discovered or self.model_root != model_root:
             self.discover(**kwargs)
         if model_name_or_path in self.resolved_models:
             return self.resolved_models[model_name_or_path]
@@ -209,6 +278,57 @@ class NativeModelRegistryHandler(ModelRegistryHandler):
 class HuggingFaceModelRegistry(ModelRegistryHandler):
     def _get_supported_prefixes(self) -> List[str]:
         return ["hf://", "transformer://"]
+
+    def get_reference(self, name: str, version: str | None = None) -> str:
+        return self.strip_prefix(name, self._get_supported_prefixes())
+
+    def get_metadata(
+        self,
+        name: str,
+        version: str | None = None,
+        *,
+        local_files_only: bool = False,
+        **kwargs: Any,
+    ) -> ModelMetadata:
+        """Resolve configuration files through Hugging Face without fetching weights."""
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
+        from marie.registry.model_metadata import read_model_metadata
+
+        self._check_kwargs(kwargs)
+        repo_id = self.get_reference(name, version)
+        config_path = Path(
+            hf_hub_download(
+                repo_id=repo_id,
+                filename="config.json",
+                revision=version,
+                local_files_only=local_files_only,
+            )
+        )
+        revision = version
+        if re.fullmatch(r"[0-9a-f]{40}", config_path.parent.name):
+            revision = config_path.parent.name
+        files = {}
+        for filename in (
+            "preprocessor_config.json",
+            "processor_config.json",
+            "tokenizer_config.json",
+            "generation_config.json",
+        ):
+            try:
+                files[filename] = Path(
+                    hf_hub_download(
+                        repo_id=repo_id,
+                        filename=filename,
+                        revision=revision,
+                        local_files_only=local_files_only,
+                    )
+                )
+            except EntryNotFoundError as exc:
+                if isinstance(exc, LocalEntryNotFoundError) and not local_files_only:
+                    raise
+                continue
+        return read_model_metadata(config_path, revision, metadata_files=files)
 
     def get_local_path(
         self,
@@ -263,6 +383,72 @@ class ModelRegistry:
 
     _PATH_HANDLERS: MutableMapping[str, ModelRegistryHandler] = OrderedDict()
     _NATIVE_PATH_HANDLER = NativeModelRegistryHandler()
+    _model_root: Path | None = None
+
+    @staticmethod
+    def configure(
+        *,
+        config_dir: str | Path | None = None,
+        model_root: str | Path | None = None,
+        catalog_path: str | Path | None = None,
+    ) -> None:
+        """Initialize registry paths without loading models or configuration files."""
+        from marie.registry.model_catalog import (
+            configure_model_catalog,
+            invalidate_model_catalog,
+        )
+
+        if model_root is not None:
+            selected_root = Path(model_root).expanduser()
+            if selected_root != ModelRegistry._model_root:
+                ModelRegistry._model_root = selected_root
+                for handler in [
+                    ModelRegistry._NATIVE_PATH_HANDLER,
+                    *ModelRegistry._PATH_HANDLERS.values(),
+                ]:
+                    if isinstance(handler, NativeModelRegistryHandler):
+                        handler.discovered = False
+                        handler.resolved_models = {}
+                        handler.model_root = None
+                invalidate_model_catalog()
+        if catalog_path is not None:
+            configure_model_catalog(catalog_path)
+        elif config_dir is not None:
+            configure_model_catalog(Path(config_dir) / "models.yaml")
+
+    @staticmethod
+    def resolve_config(
+        name_or_path: str,
+        provider: str,
+        *,
+        overrides: ModelConfigOverrides | None = None,
+    ) -> ResolvedModelConfig:
+        """Resolve complete model settings through the external catalog."""
+        from marie.registry.model_catalog import load_model_catalog
+
+        return load_model_catalog().resolve_config(
+            name_or_path, provider, overrides=overrides
+        )
+
+    @staticmethod
+    def _remote_fallback(name: str) -> bool:
+        return (
+            "://" not in name and not os.path.isabs(name) and not name.startswith(".")
+        )
+
+    @staticmethod
+    def resolve_reference(name_or_path: str, version: str | None = None) -> str:
+        """Return the inference reference supplied by the registered handler."""
+        reference = ModelRegistry.get_handler(name_or_path).get_reference(
+            name_or_path, version
+        )
+        if reference is not None:
+            return reference
+        if ModelRegistry._remote_fallback(name_or_path):
+            return ModelRegistry.get_handler("hf://" + name_or_path).get_reference(
+                name_or_path, version
+            )
+        raise FileNotFoundError(f"Model artifact not found: {name_or_path}")
 
     @staticmethod
     def get_handler(_name_or_path: str) -> ModelRegistryHandler:
@@ -347,6 +533,26 @@ class ModelRegistry:
                 return data
 
     @staticmethod
+    def metadata(
+        name_or_path: str,
+        version: str | None = None,
+        *,
+        local_files_only: bool = False,
+        **kwargs: Any,
+    ) -> ModelMetadata:
+        """Read metadata through the registered URI handler."""
+        metadata = ModelRegistry.get_handler(name_or_path).get_metadata(
+            name_or_path, version, local_files_only=local_files_only, **kwargs
+        )
+        if metadata is not None:
+            return metadata
+        if ModelRegistry._remote_fallback(name_or_path):
+            return ModelRegistry.get_handler("hf://" + name_or_path).get_metadata(
+                name_or_path, version, local_files_only=local_files_only
+            )
+        raise FileNotFoundError(f"Model metadata not found: {name_or_path}")
+
+    @staticmethod
     def checkpoint(
         name_or_path: str,
         version: Optional[str] = None,
@@ -421,7 +627,7 @@ class ModelRegistry:
                 discovered = handler.discover(**kwargs)
                 resolved = {**resolved, **discovered}
             except Exception as e:
-                logger.error(f"Handler {handler} failed during discovery", e)
+                logger.error("Handler %s failed during discovery: %s", handler, e)
         return resolved
 
 

@@ -1,12 +1,22 @@
+from pathlib import Path
+
+import pytest
 from marie.engine import EngineLM, check_if_multimodal
 from marie.engine.completion_contract import CompletionCallParams
 from marie.engine.llm_queue.scheduler_config import scheduler_config_from_mapping
 from marie.engine.output_parser import parse_json_markdown
 
 
-def test_public_engine_namespace_is_importable() -> None:
+def test_public_engine_namespace_is_importable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog_path = tmp_path / "models.yaml"
+    catalog_path.write_text(
+        "schema_version: 1\nmodels:\n  test_vision: {name: acme/vision, multimodal: true}\n"
+    )
+    monkeypatch.setenv("MARIE_MODEL_CATALOG", str(catalog_path))
     assert EngineLM.__module__ == "marie.engine.base"
-    assert check_if_multimodal("qwen2_5_vl_7b") is True
+    assert check_if_multimodal("test_vision") is True
 
 
 def test_portable_completion_contract_round_trips() -> None:

@@ -478,6 +478,7 @@ dependencies = [
     { name = "json-repair" },
     { name = "json5" },
     { name = "marie-instrumentation" },
+    { name = "marie-registry" },
     { name = "openinference-semantic-conventions" },
     { name = "opentelemetry-api" },
     { name = "pillow" },
@@ -506,21 +507,30 @@ openai = [
     { name = "torch" },
 ]
 queue = [
+    { name = "anyio" },
+    { name = "httpcore" },
+    { name = "httpx" },
     { name = "valkey" },
 ]
 transformers = [
+    { name = "marie-registry", extra = ["huggingface"] },
     { name = "torch" },
     { name = "transformers" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", marker = "extra == 'queue'", specifier = ">=4,<5" },
     { name = "diskcache", specifier = ">=5.6.0" },
+    { name = "httpcore", marker = "extra == 'queue'", specifier = ">=1.0.9,<1.1" },
+    { name = "httpx", marker = "extra == 'queue'", specifier = ">=0.28,<0.29" },
     { name = "json-repair", specifier = ">=0.55.0" },
     { name = "json5", specifier = ">=0.12.0" },
     { name = "marie-agent", marker = "extra == 'agent'", editable = "../marie-agent" },
     { name = "marie-agent", marker = "extra == 'dev'", editable = "../marie-agent" },
     { name = "marie-instrumentation", editable = "../marie-instrumentation" },
+    { name = "marie-registry", editable = "../marie-registry" },
+    { name = "marie-registry", extras = ["huggingface"], marker = "extra == 'transformers'", editable = "../marie-registry" },
     { name = "openai", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
     { name = "openinference-semantic-conventions", specifier = ">=0.1.30" },
@@ -589,6 +599,30 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "marie-registry"
+version = "0.1.0"
+source = { editable = "../marie-registry" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.optional-dependencies]
+huggingface = [
+    { name = "huggingface-hub" },
+    { name = "transformers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "huggingface-hub", marker = "extra == 'huggingface'", specifier = ">=0.30.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "transformers", marker = "extra == 'huggingface'", specifier = ">=4.49.0" },
+]
+provides-extras = ["huggingface"]
 
 [[package]]
 name = "markdown-it-py"

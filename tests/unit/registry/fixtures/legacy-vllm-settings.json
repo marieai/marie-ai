@@ -1,0 +1,786 @@
+{
+  "source_commit": "252f4fba5b3f26c3da0c1f0f9e5e7027abb43e1a",
+  "models": {
+    "qwen2_5_vl_3b": {
+      "name": "Qwen/Qwen2.5-VL-3B-Instruct",
+      "multimodal": true,
+      "factory": "config_qwen2_5_vl",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-VL-3B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        }
+      }
+    },
+    "qwen2_5_vl_7b": {
+      "name": "Qwen/Qwen2.5-VL-7B-Instruct",
+      "multimodal": true,
+      "factory": "config_qwen2_5_vl",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        }
+      }
+    },
+    "qwen2_5_vl_7b_awq": {
+      "name": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+      "multimodal": true,
+      "factory": "config_qwen2_5_vl",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        }
+      }
+    },
+    "qwen3_vl_4b": {
+      "name": "Qwen/Qwen3-VL-4B-Instruct",
+      "multimodal": true,
+      "factory": "config_qwen3_vl",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen3-VL-4B-Instruct",
+            "max_model_len": 16384,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen3-VL-4B-Instruct",
+            "max_model_len": 16384,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        }
+      }
+    },
+    "qwen3_vl_4b_merged_lora": {
+      "name": "qwen3_vl_4b_merged_lora",
+      "multimodal": true,
+      "factory": "config_qwen3_vl",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "qwen3_vl_4b_merged_lora",
+            "max_model_len": 16384,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "qwen3_vl_4b_merged_lora",
+            "max_model_len": 16384,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "min_pixels": 784,
+              "max_pixels": 1003520,
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "<|im_start|>system\nSYSTEM_PROMPT_PLACEHOLDER<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>\n<|im_start|>assistant\n",
+          "stop_token_ids": null,
+          "processor": {
+            "min_pixels": 784,
+            "max_pixels": 1003520,
+            "fps": 1
+          }
+        }
+      }
+    },
+    "qwen2_5_7b": {
+      "name": "Qwen/Qwen2.5-7B-Instruct",
+      "multimodal": false,
+      "factory": "config_qwen2_5",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "bitsandbytes",
+            "load_format": "bitsandbytes",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    },
+    "qwen2_5_3b": {
+      "name": "Qwen/Qwen2.5-3B-Instruct",
+      "multimodal": false,
+      "factory": "config_qwen2_5",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-3B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-3B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "bitsandbytes",
+            "load_format": "bitsandbytes",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    },
+    "qwen2_5_14b": {
+      "name": "Qwen/Qwen2.5-14B-Instruct",
+      "multimodal": false,
+      "factory": "config_qwen2_5",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-14B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "Qwen/Qwen2.5-14B-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "bitsandbytes",
+            "load_format": "bitsandbytes",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    },
+    "meta_llama_11b": {
+      "name": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+      "multimodal": true,
+      "factory": "config_mllama",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    },
+    "phi3_5_vl": {
+      "name": "microsoft/Phi-3.5-vision-instruct",
+      "multimodal": true,
+      "factory": "config_phi3v",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "microsoft/Phi-3.5-vision-instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "num_crops": 16
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false,
+            "trust_remote_code": true
+          },
+          "prompt": "<|user|>\n<|image_1|>\nQUESTION_PLACEHOLDER<|end|>\n<|assistant|>\n",
+          "stop_token_ids": null,
+          "processor": {
+            "num_crops": 16
+          }
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "microsoft/Phi-3.5-vision-instruct",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "num_crops": 16
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false,
+            "trust_remote_code": true
+          },
+          "prompt": "<|user|>\n<|image_1|>\nQUESTION_PLACEHOLDER<|end|>\n<|assistant|>\n",
+          "stop_token_ids": null,
+          "processor": {
+            "num_crops": 16
+          }
+        }
+      }
+    },
+    "pixtral_12b": {
+      "name": "mistralai/Pixtral-12B-2409",
+      "multimodal": true,
+      "factory": null,
+      "variants": {}
+    },
+    "mistral_7b": {
+      "name": "mistralai/Mistral-7B-Instruct-v0.2",
+      "multimodal": false,
+      "factory": "config_mistral",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "mistralai/Mistral-7B-Instruct-v0.2",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "fp8",
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "fp8",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "mistralai/Mistral-7B-Instruct-v0.2",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "fp8",
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "fp8",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    },
+    "opt_125m": {
+      "name": "facebook/opt-125m",
+      "multimodal": false,
+      "factory": "config_opt125",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "facebook/opt-125m",
+            "max_model_len": 2048,
+            "tensor_parallel_size": 1,
+            "quantization": "fp8",
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "fp8",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "QUESTION_PLACEHOLDER",
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "facebook/opt-125m",
+            "max_model_len": 2048,
+            "tensor_parallel_size": 1,
+            "quantization": "fp8",
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "fp8",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "QUESTION_PLACEHOLDER",
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    },
+    "phi4": {
+      "name": "microsoft/phi-4",
+      "multimodal": false,
+      "factory": "config_phi4",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "microsoft/phi-4",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "microsoft/phi-4",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "bitsandbytes",
+            "load_format": "bitsandbytes",
+            "enforce_eager": false,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    },
+    "llava_mistral_7b": {
+      "name": "llava-hf/llava-v1.6-mistral-7b-hf",
+      "multimodal": true,
+      "factory": "config_llava_next",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "llava-hf/llava-v1.6-mistral-7b-hf",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "fp8",
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "fp8",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "[INST] <image>\nQUESTION_PLACEHOLDER [/INST]",
+          "stop_token_ids": null,
+          "processor": {
+            "fps": 1
+          }
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "llava-hf/llava-v1.6-mistral-7b-hf",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "fp8",
+            "load_format": "auto",
+            "enforce_eager": false,
+            "dtype": "fp8",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {
+              "fps": 1
+            },
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false
+          },
+          "prompt": "[INST] <image>\nQUESTION_PLACEHOLDER [/INST]",
+          "stop_token_ids": null,
+          "processor": {
+            "fps": 1
+          }
+        }
+      }
+    },
+    "deepseek_r1_qwen_14b": {
+      "name": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+      "multimodal": false,
+      "factory": "config_deepseek_r1",
+      "variants": {
+        "bnb_absent": {
+          "llm_kwargs": {
+            "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": null,
+            "load_format": "auto",
+            "enforce_eager": true,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false,
+            "enable_reasoning": true
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        },
+        "bnb_present": {
+          "llm_kwargs": {
+            "model": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+            "max_model_len": 8192,
+            "tensor_parallel_size": 1,
+            "quantization": "bitsandbytes",
+            "load_format": "bitsandbytes",
+            "enforce_eager": true,
+            "dtype": "bfloat16",
+            "gpu_memory_utilization": 0.85,
+            "mm_processor_kwargs": {},
+            "enable_prefix_caching": false,
+            "max_num_seqs": 1,
+            "enable_chunked_prefill": false,
+            "enable_reasoning": true
+          },
+          "prompt": null,
+          "stop_token_ids": null,
+          "processor": null
+        }
+      }
+    }
+  }
+}

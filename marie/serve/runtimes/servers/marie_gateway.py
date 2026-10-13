@@ -23,6 +23,7 @@ from marie.engine.llm_queue.registry import (
     dispatch_runtime_live_state,
     dispatch_runtime_snapshot,
 )
+from marie.registry.model_registry import ModelRegistry
 from rich.traceback import install
 
 import marie.helper
@@ -473,6 +474,8 @@ class MarieServerGateway(CompositeServer):
         else:
             env_file = kwargs["env_file"]
         load_env_file(dotenv_path=env_file)
+
+        ModelRegistry.configure(config_dir=__config_dir__, model_root=__model_path__)
 
         context = {}
         for k, v in os.environ.items():

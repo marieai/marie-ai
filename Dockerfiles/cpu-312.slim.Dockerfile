@@ -40,6 +40,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         . \
         packages/marie-cli \
         packages/marie-engine \
+        packages/marie-registry \
         packages/marie-instrumentation \
         packages/marie-wasm && \
     /opt/venv/bin/python patches/patch-omegaconf-py312.py --no-confirm && \

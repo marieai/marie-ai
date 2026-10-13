@@ -152,6 +152,7 @@ dependencies = [
     "marie-instrumentation",
     "marie-agent",
     "marie-engine",
+    "marie-registry",
     "marie-wasm",
     "marie-mem0",
     "marie-mcp",
@@ -225,6 +226,7 @@ marie-extension = { path = "packages/marie-extension", editable = true }
 marie-instrumentation = { path = "packages/marie-instrumentation", editable = true }
 marie-agent = { path = "packages/marie-agent", editable = true }
 marie-engine = { path = "packages/marie-engine", editable = true }
+marie-registry = { path = "packages/marie-registry", editable = true }
 marie-wasm = { path = "packages/marie-wasm", editable = true }
 marie-mem0 = { path = "packages/marie-mem0", editable = true }
 marie-mcp = { path = "packages/marie-mcp", editable = true }

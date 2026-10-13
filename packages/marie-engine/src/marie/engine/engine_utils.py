@@ -98,6 +98,39 @@ def fetch_image(
     return image
 
 
+def resize_image(
+    image: Image.Image,
+    *,
+    min_pixels: int | None = None,
+    max_pixels: int | None = None,
+) -> Image.Image:
+    """Apply configured pixel bounds while preserving the image aspect ratio."""
+    for value in (min_pixels, max_pixels):
+        if value is not None and (type(value) is not int or value < 1):
+            raise ValueError("Image pixel bounds must be positive integers")
+    if min_pixels is not None and max_pixels is not None and min_pixels > max_pixels:
+        raise ValueError("Image minimum pixels must not exceed maximum pixels")
+    pixels = image.width * image.height
+    target = pixels
+    if min_pixels is not None:
+        target = max(target, min_pixels)
+    if max_pixels is not None:
+        target = min(target, max_pixels)
+    if target == pixels:
+        return image
+    scale = math.sqrt(target / pixels)
+    width = max(1, round(image.width * scale))
+    height = max(1, round(image.height * scale))
+    if min_pixels is not None and width * height < min_pixels:
+        width = math.ceil(min_pixels / height)
+    if max_pixels is not None and width * height > max_pixels:
+        height = min(height, max_pixels)
+        width = min(width, max(1, max_pixels // height))
+    if min_pixels is not None and width * height < min_pixels:
+        raise ValueError("Image pixel bounds are too narrow for the resized dimensions")
+    return image.resize((width, height), Image.Resampling.LANCZOS)
+
+
 def process_vision_info(
     conversations: list[dict] | list[list[dict]],
 ) -> tuple[list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None]:
@@ -168,7 +201,11 @@ def check_image_preparation_budget(images: List[Image.Image]) -> None:
 
 
 def open_ai_like_formatting(
-    content: List[Union[str, bytes, Image.Image]], remote: bool = False, **options
+    content: List[Union[str, bytes, Image.Image]],
+    remote: bool = False,
+    *,
+    use_defaults: bool = True,
+    **options,
 ) -> List[dict]:
     """Helper function to format a list of strings and bytes into a list of dictionaries to pass as messages to the API.
 
@@ -189,7 +226,7 @@ def open_ai_like_formatting(
         'max_pixels': 1280 * 28 * 28,  # 2560 1280 - > will be the default after update
     }
 
-    image_options = {**default_options, **options}
+    image_options = {**(default_options if use_defaults else {}), **options}
     formatted_content = []
 
     for item in content:
