@@ -29,12 +29,17 @@ class Channel:
         self.closing = asyncio.Event()
         self.gate = None
         self.closed = False
+        self.state = grpc.ChannelConnectivity.READY
+
+    def get_state(self):
+        return self.state
 
     async def close(self, grace):
         self.closing.set()
         if self.gate is not None:
             await self.gate.wait()
         self.closed = True
+        self.state = grpc.ChannelConnectivity.SHUTDOWN
 
 
 @pytest.fixture
@@ -536,3 +541,199 @@ async def test_circuit_rejection_preserves_classified_network_error(
         assert error.og_exception is root_error
         assert error.trailing_metadata() == (('backend', 'executor'),)
         assert error.dest_addr == {'a'}
+
+
+@pytest.mark.parametrize('kind', ['batch', 'stream', 'discovery'])
+@pytest.mark.parametrize(
+    'status',
+    [grpc.StatusCode.INTERNAL, grpc.StatusCode.UNKNOWN, grpc.StatusCode.CANCELLED],
+)
+async def test_terminal_rpc_error_is_never_lost(replicas, kind, status):
+    root_error = AioRpcError(
+        status, (), (('backend', 'executor'),), 'backend failure', 'test'
+    )
+
+    async def fail(**kwargs):
+        raise root_error
+
+    async def fail_stream(**kwargs):
+        raise root_error
+        yield
+
+    for connection in replicas.get_all_connections():
+        connection.send_requests = fail
+        connection.send_single_doc_request = fail_stream
+        connection.send_discover_endpoint = fail
+    pool = object.__new__(GrpcConnectionPool)
+    pool._logger = Mock()
+    pool.compression = None
+    request = SimpleNamespace(request_id='test')
+    if kind == 'batch':
+        error = await pool._send_requests([request], replicas, retries=0)
+    elif kind == 'stream':
+        responses = [
+            item
+            async for item in pool._send_single_doc_request(
+                request, replicas, retries=0
+            )
+        ]
+        assert len(responses) == 1
+        error = responses[0][0]
+    else:
+        with pytest.raises(InternalNetworkError) as caught:
+            await pool._send_discover_endpoint(replicas, retries=0)
+        error = caught.value
+    assert isinstance(error, InternalNetworkError)
+    assert error.og_exception is root_error
+    assert error.code() == status
+    assert error.trailing_metadata() == (('backend', 'executor'),)
+    assert replicas.get_load_balancer().get_active_counter() == {'a': 0, 'b': 0}
+
+
+async def test_stream_failure_after_output_is_not_replayed(replicas):
+    error = AioRpcError(grpc.StatusCode.UNAVAILABLE, (), (), 'not the leader', 'test')
+
+    async def first(**kwargs):
+        yield 'chunk-1', None
+        raise error
+
+    async def second(**kwargs):
+        yield 'chunk-1', None
+        yield 'chunk-2', None
+
+    a, b = replicas.get_all_connections()
+    a.send_single_doc_request = first
+    b.send_single_doc_request = second
+    pool = object.__new__(GrpcConnectionPool)
+    pool._logger = Mock()
+    pool.compression = None
+    result = [
+        item
+        async for item in pool._send_single_doc_request(
+            SimpleNamespace(request_id='test'), replicas, retries=2
+        )
+    ]
+    assert len(result) == 2
+    assert result[0] == ('chunk-1', None)
+    assert isinstance(result[1][0], InternalNetworkError)
+    assert result[1][0].og_exception is error
+
+
+async def test_stale_reset_does_not_close_replacement(replicas):
+    lease = await replicas.acquire_connection(exclude_addresses={'b'})
+    await replicas.reset_connection('a', 'executor')
+    replacement = replicas.get_all_connections()[0]
+    await replicas.reset_connection(
+        'a', 'executor', expected_connection=lease.connection
+    )
+    assert replicas.get_all_connections()[0] is replacement
+    assert not replacement.channel.closed
+    replicas.release_connection(lease)
+
+
+@pytest.mark.parametrize(
+    'state, replaced',
+    [
+        (grpc.ChannelConnectivity.READY, False),
+        (grpc.ChannelConnectivity.TRANSIENT_FAILURE, True),
+        (grpc.ChannelConnectivity.SHUTDOWN, True),
+    ],
+)
+async def test_unavailable_only_resets_failed_transport(replicas, state, replaced):
+    lease = await replicas.acquire_connection(exclude_addresses={'b'})
+    lease.connection.channel.state = state
+    error = AioRpcError(
+        grpc.StatusCode.UNAVAILABLE, (), (), 'backend unavailable', 'test'
+    )
+    pool = object.__new__(GrpcConnectionPool)
+    pool._logger = Mock()
+    result = await pool._handle_aiorpcerror(
+        error,
+        current_address='a',
+        current_deployment='executor',
+        connection_list=replicas,
+        connection_lease=lease,
+    )
+    assert isinstance(result, InternalNetworkError)
+    assert (replicas.get_all_connections()[0] is not lease.connection) == replaced
+    assert lease.connection.channel.closed == replaced
+    replicas.release_connection(lease)
+
+
+async def test_old_transport_error_keeps_new_connection(replicas):
+    lease = await replicas.acquire_connection(exclude_addresses={'b'})
+    await replicas.reset_connection('a', 'executor')
+    replacement = replicas.get_all_connections()[0]
+    error = AioRpcError(
+        grpc.StatusCode.UNAVAILABLE, (), (), 'old transport failed', 'test'
+    )
+    pool = object.__new__(GrpcConnectionPool)
+    pool._logger = Mock()
+    await pool._handle_aiorpcerror(
+        error,
+        current_address='a',
+        current_deployment='executor',
+        connection_list=replicas,
+        connection_lease=lease,
+    )
+    assert replicas.get_all_connections()[0] is replacement
+    assert not replacement.channel.closed
+    replicas.release_connection(lease)
+
+
+async def test_request_cancellation_keeps_shared_grpc_channel_usable():
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def handle(request, context):
+        if request == b'cancel':
+            await started.wait()
+            await context.abort(grpc.StatusCode.CANCELLED, 'request cancelled')
+        started.set()
+        await finish.wait()
+        return b'ok'
+
+    server = grpc.aio.server()
+    server.add_generic_rpc_handlers(
+        (
+            grpc.method_handlers_generic_handler(
+                'test', {'Call': grpc.unary_unary_rpc_method_handler(handle)}
+            ),
+        )
+    )
+    port = server.add_insecure_port('127.0.0.1:0')
+    await server.start()
+    address = f'127.0.0.1:{port}'
+    replicas = _ReplicaList(None, Mock(), 'test')
+
+    def create(address, deployment_name):
+        channel = grpc.aio.insecure_channel(address)
+        return SimpleNamespace(
+            address=address, deployment_name=deployment_name, channel=channel
+        ), channel
+
+    replicas._create_connection = create
+    replicas.add_connection(address, 'executor')
+    channel = replicas.get_all_connections()[0].channel
+    call = channel.unary_unary('/test/Call')
+    sibling = call(b'good')
+    cancelled = call(b'cancel')
+    pool = object.__new__(GrpcConnectionPool)
+    pool._logger = Mock()
+    try:
+        with pytest.raises(AioRpcError) as caught:
+            await cancelled
+        result = await pool._handle_aiorpcerror(
+            caught.value,
+            current_address=address,
+            current_deployment='executor',
+            connection_list=replicas,
+        )
+        assert isinstance(result, InternalNetworkError)
+        finish.set()
+        assert await sibling == b'ok'
+        assert replicas.get_all_connections()[0].channel is channel
+    finally:
+        finish.set()
+        await replicas.close()
+        await server.stop(None)

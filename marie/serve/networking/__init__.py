@@ -24,7 +24,6 @@ from marie.enums import PollingType
 from marie.excepts import EstablishGrpcConnectionError, InternalNetworkError
 from marie.logging_core.logger import MarieLogger
 from marie.proto import jina_pb2
-from marie.serve.helper import format_grpc_error
 from marie.serve.networking.balancer.load_balancer import ConnectionLease, LoadBalancer
 from marie.serve.networking.connection_pool_map import _ConnectionPoolMap
 from marie.serve.networking.connection_stub import create_async_channel_stub
@@ -355,37 +354,17 @@ class GrpcConnectionPool:
         task_type: str = "DataRequest",
         connection_lease: Optional[ConnectionLease] = None,
     ) -> "Optional[Union[AioRpcError, InternalNetworkError]]":
-        # connection failures, cancelled requests, and timed out requests should be retried
-        # all other cases should not be retried and will be raised immediately
-        # connection failures have the code grpc.StatusCode.UNAVAILABLE
-        # cancelled requests have the code grpc.StatusCode.CANCELLED
-        # timed out requests have the code grpc.StatusCode.DEADLINE_EXCEEDED
-        # if an Executor is down behind an API gateway, grpc.StatusCode.NOT_FOUND is returned
-        # requests usually gets cancelled when the server shuts down
-        # retries for cancelled requests will hit another replica in K8s
-
-        # Fix: avoid mutable default argument - initialize here if None
-        if tried_addresses is None:
-            tried_addresses = {""}
-
-        skip_resetting = False
-        if (
-            error.code() == grpc.StatusCode.UNAVAILABLE
-            and "not the leader" in error.details()
-        ):
-            self._logger.debug(
-                f"RAFT node of {current_deployment} is not the leader. Trying next replica, if available."
-            )
-            skip_resetting = True  # no need to reset, no problem with channel
-        else:
-            self._logger.debug(
-                f"gRPC call to {current_deployment} for {task_type} errored, with error {format_grpc_error(error)} and for the {retry_i + 1}th time."
-            )
+        tried_addresses = tried_addresses or set()
+        status = error.code()
+        not_leader = (
+            status == grpc.StatusCode.UNAVAILABLE
+            and 'not the leader' in error.details()
+        )
         if (
             connection_list
             and current_address
-            and not skip_resetting
-            and error.code()
+            and not not_leader
+            and status
             in {
                 grpc.StatusCode.UNAVAILABLE,
                 grpc.StatusCode.DEADLINE_EXCEEDED,
@@ -396,44 +375,42 @@ class GrpcConnectionPool:
             connection_list.get_load_balancer().record_failure(
                 current_address, lease=connection_lease
             )
-        errors_to_retry = [
+
+        retryable = status in {
             grpc.StatusCode.UNAVAILABLE,
             grpc.StatusCode.DEADLINE_EXCEEDED,
             grpc.StatusCode.NOT_FOUND,
-        ]
-        errors_to_handle = errors_to_retry + [
-            grpc.StatusCode.CANCELLED,
-            grpc.StatusCode.UNKNOWN,
             grpc.StatusCode.INTERNAL,
-        ]
-
-        if error.code() not in errors_to_handle:
+            grpc.StatusCode.UNKNOWN,
+        }
+        if not retryable and status != grpc.StatusCode.CANCELLED:
             return error
-        elif error.code() in errors_to_retry and retry_i >= total_num_tries - 1:
-            self._logger.debug(
-                f"gRPC call for {current_deployment} failed, retries exhausted"
-            )
-            from marie.excepts import InternalNetworkError
 
-            # after connection failure the gRPC `channel` gets stuck in a failure state for a few seconds
-            # removing and re-adding the connection (stub) is faster & more reliable than just waiting
-            if connection_list and not skip_resetting:
+        if (
+            status == grpc.StatusCode.UNAVAILABLE
+            and not not_leader
+            and connection_list is not None
+            and connection_lease is not None
+        ):
+            connection = connection_lease.connection
+            if connection.channel.get_state() in {
+                grpc.ChannelConnectivity.TRANSIENT_FAILURE,
+                grpc.ChannelConnectivity.SHUTDOWN,
+            }:
                 await connection_list.reset_connection(
-                    current_address, current_deployment
+                    current_address,
+                    current_deployment,
+                    expected_connection=connection,
                 )
 
+        if not retryable or retry_i >= total_num_tries - 1:
             return InternalNetworkError(
                 og_exception=error,
                 request_id=request_id,
-                dest_addr=tried_addresses,
+                dest_addr=set(tried_addresses),
                 details=error.details(),
             )
-        else:
-            if connection_list and not skip_resetting:
-                await connection_list.reset_connection(
-                    current_address, current_deployment
-                )
-            return None
+        return None
 
     async def _acquire_request_connection(
         self,
@@ -490,6 +467,7 @@ class GrpcConnectionPool:
         async def async_generator_wrapper():
             tried_addresses = set()
             last_error = None
+            emitted = False
             if retries is None or retries < 0:
                 total_num_tries = (
                     max(DEFAULT_MINIMUM_RETRIES, len(connections.get_all_connections()))
@@ -513,6 +491,7 @@ class GrpcConnectionPool:
                         compression=self.compression,
                         timeout=timeout,
                     ):
+                        emitted = True
                         yield resp, metadata_resp
                     # Record success in circuit breaker (if enabled)
                     connections.get_load_balancer().record_success(
@@ -529,7 +508,7 @@ class GrpcConnectionPool:
                         retry_i=i,
                         request_id=request.request_id,
                         tried_addresses=tried_addresses,
-                        total_num_tries=total_num_tries,
+                        total_num_tries=i + 1 if emitted else total_num_tries,
                         current_address=current_connection.address,
                         current_deployment=current_connection.deployment_name,
                         connection_list=connections,

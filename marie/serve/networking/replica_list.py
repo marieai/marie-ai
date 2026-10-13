@@ -21,6 +21,8 @@ if TYPE_CHECKING:
         OpenTelemetryClientInterceptor,
     )
 
+    from marie.serve.networking.connection_stub import _ConnectionStubs
+
 
 class _ReplicaList:
     """
@@ -70,7 +72,12 @@ class _ReplicaList:
         self._lock = threading.Lock()
         self._closed = False
 
-    async def reset_connection(self, address: str, deployment_name: str):
+    async def reset_connection(
+        self,
+        address: str,
+        deployment_name: str,
+        expected_connection: Optional['_ConnectionStubs'] = None,
+    ) -> None:
         """
         Removes and then re-adds a connection.
         Result is the same as calling :meth:`remove_connection` and then :meth:`add_connection`, but this allows for
@@ -78,6 +85,7 @@ class _ReplicaList:
 
         :param address: Target address of this connection
         :param deployment_name: Target deployment of this connection
+        :param expected_connection: Reset only if this failed connection is still current.
         """
         self._logger.debug(f"resetting connection for {deployment_name} to {address}")
         parsed_address = urlparse(address)
@@ -95,6 +103,11 @@ class _ReplicaList:
             # in contrast to remove_connection(), we don't 'shorten' the data structures below, instead
             # update the data structure with the new connection and close the old channel explicitly
             id_to_reset = self._address_to_connection_idx[resolved_address]
+            if (
+                expected_connection is not None
+                and self._connections[id_to_reset] is not expected_connection
+            ):
+                return
 
             # Save old channel for cleanup (fix: prevent channel leak)
             if resolved_address in self._address_to_channel:
