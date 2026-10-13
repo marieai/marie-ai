@@ -185,6 +185,7 @@ class AgentExecutor(MarieExecutor):
             route = AgentPluginRoute.model_validate(configured_route)
             self.embedded_plugins.validate_action(route.package, route.action)
             self._agent_routes[agent_ref] = route
+        self._preflight_plugins()
 
         # Initialize components
         self._backend: Optional[AgentBackend] = None
@@ -202,6 +203,22 @@ class AgentExecutor(MarieExecutor):
         self._before_chain: Optional["GuardrailChain"] = None
         self._after_chain: Optional["GuardrailChain"] = None
         self._tool_call_chain: Optional["GuardrailChain"] = None
+
+    def _preflight_plugins(self) -> None:
+        """Start the plugin daemon at boot so a misconfiguration is reported
+        here rather than on the first request. Failures are logged, never raised."""
+        packages = self.embedded_plugins.configured_packages
+        if not packages:
+            return
+        try:
+            self.embedded_plugins.ensure_started()
+        except Exception as error:
+            logger.error(
+                f'agent plugins {packages} failed to start ({error}); '
+                f'agent routes {sorted(self._agent_routes)} are unavailable'
+            )
+            return
+        logger.info(f'agent plugins ready: {packages}')
 
     def close(self) -> None:
         self.embedded_plugins.close()
