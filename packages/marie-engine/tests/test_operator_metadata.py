@@ -21,7 +21,9 @@ def test_runtime_snapshot_preserves_known_dispatcher_error_categories(category):
     }
 
 
-def test_v3_snapshot_selects_only_metadata_and_preserves_good_rows(store, monkeypatch):
+def test_queued_snapshot_selects_only_metadata_and_preserves_good_rows(
+    store, monkeypatch
+):
     from marie.engine.llm_queue.endpoint import RegisteredEndpoint
     from marie.engine.llm_queue.request_dispatcher import (
         DispatchLane,
@@ -61,6 +63,8 @@ def test_v3_snapshot_selects_only_metadata_and_preserves_good_rows(store, monkey
         ],
     )
     health = runtime.health()
+    assert health['mode'] == 'queued-dispatch'
+    assert health['sampling_available'] is True
     assert health['lanes'][0]['request_queue_depth'] == 2
     rows = runtime.sample_pending_requests(10)
     assert len(rows) == 1 and rows[0]['request_id'] == request.attempt_id
@@ -193,7 +197,7 @@ def test_status_polling_does_not_fetch_large_inline_image(store, monkeypatch, re
     url = json.loads(Path(os.environ['MARIE_LLM_QUEUE_TEST_STORES']).read_text())[
         engine
     ]['url']
-    large = RequestStore(url, fabric_id='large-' + uuid4().hex, version='v3')
+    large = RequestStore(url, fabric_id='large-' + uuid4().hex)
     runtime = None
     try:
         owner = large.acquire_owner('fixture', lease_ms=10000)
@@ -350,7 +354,7 @@ def test_live_projection_redacts_case_insensitive_url_fields(
     runtime = SimpleNamespace(
         store=store,
         health=lambda **kwargs: {
-            'contract_version': 'v3',
+            'mode': 'queued-dispatch',
             'request_queue_depth': 1,
             'model': sentinel,
             'waiting_reason': sentinel,

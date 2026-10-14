@@ -5,7 +5,7 @@ from test_request_store import store as store
 
 
 def test_longest_backlogged_interval_excludes_empty_gaps():
-    from tools.stress.llm_v3_aimock_e2e import longest_joint_backlog
+    from tools.stress.llm_queued_dispatch_aimock_e2e import longest_joint_backlog
 
     samples = [
         (0.0, True),
@@ -23,7 +23,7 @@ def test_longest_backlogged_interval_excludes_empty_gaps():
 def test_early_abort_reports_no_planned_submissions():
     from collections import Counter
 
-    from tools.stress.llm_v3_aimock_e2e import summarize_counts
+    from tools.stress.llm_queued_dispatch_aimock_e2e import summarize_counts
 
     counts = summarize_counts(Counter(), {}, submitted=0, provider_attempts=0)
     assert counts['submitted_logical'] == 0
@@ -40,7 +40,10 @@ def test_observed_terminal_outcomes_match_real_store_without_double_counting(
 
     from test_request_store import request_for, run_request
 
-    from tools.stress.llm_v3_aimock_e2e import observe_transition, summarize_counts
+    from tools.stress.llm_queued_dispatch_aimock_e2e import (
+        observe_transition,
+        summarize_counts,
+    )
 
     req = request_for(store)
     token, seq = run_request(store, req)
@@ -105,7 +108,7 @@ def test_sampler_only_failure_sets_report_and_cli_failure(
 ):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     args = qualification_args(tmp_path)
     args.stores.write_text(json.dumps(valid_manifest()))
@@ -171,7 +174,7 @@ def test_sampler_only_failure_sets_report_and_cli_failure(
 def test_cli_returns_failure_for_every_nonpassing_report(
     tmp_path, monkeypatch, status, expected
 ):
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     async def qualify(args):
         return {'run_id': 'synthetic', 'status': status}
@@ -202,7 +205,10 @@ def test_submission_accounting_stops_at_the_actual_aborted_batch():
     import threading
     from collections import Counter
 
-    from tools.stress.llm_v3_aimock_e2e import submit_calls, summarize_counts
+    from tools.stress.llm_queued_dispatch_aimock_e2e import (
+        submit_calls,
+        summarize_counts,
+    )
 
     class Producer:
         def execute(self, *, calls, **kwargs):
@@ -232,7 +238,7 @@ def test_module_entrypoint_exits_nonzero_for_nonpassing_report(
 ):
     import runpy
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     def return_report(coroutine):
         coroutine.close()
@@ -263,7 +269,7 @@ def test_module_entrypoint_exits_nonzero_for_nonpassing_report(
 
 
 def test_circuit_report_requires_serialized_successful_probes():
-    from tools.stress.llm_v3_aimock_e2e import summarize_circuit
+    from tools.stress.llm_queued_dispatch_aimock_e2e import summarize_circuit
 
     rows = [
         {
@@ -366,7 +372,7 @@ def test_circuit_report_requires_serialized_successful_probes():
 def test_owned_fixture_rejects_changed_identity_before_mutation(monkeypatch, mismatch):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     fixture = dict(
         container_id='owned',
@@ -453,8 +459,16 @@ def quiet_external_setup(monkeypatch):
     import json
     from types import SimpleNamespace
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
+    fixture_package_versions = {
+        'valkey': '1.0.0',
+        'httpx': '1.0.0',
+        'httpcore': '1.0.0',
+        'openai': '1.0.0',
+        'opentelemetry-sdk': '1.0.0',
+    }
+    monkeypatch.setattr(harness, 'version', fixture_package_versions.__getitem__)
     monkeypatch.setattr(
         harness,
         'source_manifest',
@@ -511,7 +525,7 @@ def test_invalid_manifest_returns_written_failure(tmp_path, monkeypatch, manifes
     import asyncio
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     args = qualification_args(tmp_path)
     if manifest is not None:
@@ -582,7 +596,7 @@ def test_manifest_rejected_before_external_calls(tmp_path, monkeypatch, mutation
     import asyncio
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     manifest = valid_manifest()
     redis = manifest['redis']
@@ -754,7 +768,7 @@ def valid_report():
         MAX_SNAPSHOT_READ_UNITS,
     )
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report['config']['limits'] = asdict(harness.StoreLimits(max_execution_items=4))
     report['config']['event_snapshot_limits'] = dict(
@@ -816,7 +830,7 @@ def valid_report():
 def test_literal_success_report_passes_actual_finalization(tmp_path):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     harness.finalize_report(report, tmp_path, items=80)
@@ -872,7 +886,7 @@ def test_literal_success_report_passes_actual_finalization(tmp_path):
 def test_finalization_rejects_mutated_success(tmp_path, mutation):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     if mutation == 'no_scenarios':
@@ -954,7 +968,7 @@ def test_finalization_rejects_mutated_success(tmp_path, mutation):
 def test_missing_admission_lane_is_explicit_measurement_failure():
     from collections import Counter, defaultdict
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     records = defaultdict(dict)
     harness.observe_transition(
@@ -975,7 +989,7 @@ def test_missing_admission_lane_is_explicit_measurement_failure():
 def test_serialization_failure_writes_safe_failed_report(tmp_path, bad_value):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     report['scenarios'][0]['broken'] = bad_value
@@ -1008,7 +1022,7 @@ def test_live_preflight_rejects_observed_drift(tmp_path, monkeypatch, mutation):
     import json
     from pathlib import Path
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     args = qualification_args(tmp_path)
     args.mock, args.admin = 'http://127.0.0.1:4140', 'http://127.0.0.1:4141'
@@ -1068,7 +1082,7 @@ def test_live_preflight_rejects_observed_drift(tmp_path, monkeypatch, mutation):
             pass
 
     monkeypatch.setattr(
-        'marie.engine.llm_queue.queue_io._build_sync_client',
+        'marie.engine.llm_queue.store_client._build_sync_client',
         lambda url, **kw: Client(url),
     )
 
@@ -1122,7 +1136,7 @@ def test_setup_and_cleanup_failures_restore_instrumentation(
 
     from marie.engine.llm_queue.registry import SnapshotReadBudget
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     args = qualification_args(tmp_path)
     args.mock, args.admin = 'http://127.0.0.1:4140', 'http://127.0.0.1:4141'
@@ -1239,7 +1253,7 @@ def test_report_write_failure_retries_with_failed_status(tmp_path, monkeypatch):
     import json
     from pathlib import Path
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     original = Path.write_text
@@ -1274,7 +1288,7 @@ def test_report_write_failure_retries_with_failed_status(tmp_path, monkeypatch):
 def test_source_manifest_never_reads_restricted_files(tmp_path, monkeypatch, path):
     from pathlib import Path
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     monkeypatch.setattr(
         harness.subprocess, 'check_output', lambda *a, **kw: path.encode() + b'\0'
@@ -1297,7 +1311,7 @@ def test_optimized_python_keeps_circuit_and_acceptance_guards(tmp_path):
     import sys
 
     script = '''
-from tools.stress.llm_v3_aimock_e2e import summarize_circuit, QualificationError
+from tools.stress.llm_queued_dispatch_aimock_e2e import summarize_circuit, QualificationError
 try:
     summarize_circuit([], producer_id='p', attempt_ids=[], capacity=4)
 except QualificationError:
@@ -1317,7 +1331,7 @@ else:
 def test_manifest_preserves_existing_url_derived_binding_contract(tmp_path):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     args = qualification_args(tmp_path)
     args.mock, args.admin = 'http://127.0.0.1:4140', 'http://127.0.0.1:4141'
@@ -1334,7 +1348,7 @@ def test_fixture_restoration_failure_preserves_primary_report(tmp_path, monkeypa
     import asyncio
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     report['scenario'] = 'redis-same-producer-nine-recovery'
@@ -1361,7 +1375,7 @@ def test_fixture_restoration_failure_preserves_primary_report(tmp_path, monkeypa
 def test_circular_serialization_data_leaves_failure_report(tmp_path):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     cycle = []
@@ -1380,7 +1394,7 @@ def test_empty_manifest_real_cli_writes_failure(tmp_path, optimized):
     import subprocess
     import sys
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     stores = tmp_path / 'stores.json'
     stores.write_text('{}')
@@ -1426,7 +1440,7 @@ def test_optimized_python_rejects_corrupted_final_counts(tmp_path):
     script = '''
 import json, sys
 from pathlib import Path
-from tools.stress.llm_v3_aimock_e2e import finalize_report
+from tools.stress.llm_queued_dispatch_aimock_e2e import finalize_report
 path = Path(sys.argv[1])
 report = json.loads(path.read_text())
 finalize_report(report, path.parent, items=80)
@@ -1468,7 +1482,7 @@ def test_cli_invalid_fixture_arguments_write_safe_failure(tmp_path, option, valu
     import subprocess
     import sys
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     stores = tmp_path / 'stores.json'
     stores.write_text(json.dumps(valid_manifest()))
@@ -1515,7 +1529,7 @@ def test_deep_serialization_data_leaves_bounded_failure_report(
     import json
     import sys
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     nested = 'leaf'
@@ -1535,7 +1549,7 @@ def test_deep_serialization_data_leaves_bounded_failure_report(
 def test_repair_exception_still_writes_minimal_safe_failure(tmp_path, monkeypatch):
     import json
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     report['scenarios'][0]['broken'] = {None: 1, 'one': 2}
@@ -1565,7 +1579,7 @@ def test_resource_sample_keeps_scope_across_await_and_ignores_stopped_runtime():
     import asyncio
     from types import SimpleNamespace
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     async def exercise():
         current = {'family': 'redis', 'scenario': 'redis-load', 'fabric': 'r'}
@@ -1609,7 +1623,7 @@ def test_resource_sample_keeps_scope_across_await_and_ignores_stopped_runtime():
 def test_transition_latency_scope_is_fixed_at_admission():
     from collections import Counter, defaultdict
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     records = defaultdict(dict)
     counters = Counter()
@@ -1645,7 +1659,7 @@ def test_provider_measurement_keeps_entry_scope_across_await():
     import asyncio
     from types import SimpleNamespace
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     async def exercise():
         scope = dict(family='redis', scenario='redis-load', fabric='r')
@@ -1673,7 +1687,7 @@ def test_provider_measurement_keeps_entry_scope_across_await():
 def test_cpu_measurement_counts_real_boundary_reads():
     from types import SimpleNamespace
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     class Process:
         def __init__(self):
@@ -1695,7 +1709,7 @@ def test_cpu_measurement_counts_real_boundary_reads():
 
 
 def test_scope_summary_excludes_other_family_and_marks_empty_latency():
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     scope = dict(
         family='redis',
@@ -1749,7 +1763,7 @@ def test_scope_summary_excludes_other_family_and_marks_empty_latency():
     ],
 )
 def test_scoped_measurement_guard_rejects_missing_or_false_evidence(mutation):
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     report = valid_report()
     row = report['measurements']['by_scenario']['redis-multimodal-two-lane-load']
@@ -1782,7 +1796,7 @@ async def test_sampler_info_shutdown_obeys_runtime_client_ownership(
     import threading
     from types import SimpleNamespace
 
-    from tools.stress import llm_v3_aimock_e2e as harness
+    from tools.stress import llm_queued_dispatch_aimock_e2e as harness
 
     runtime = harness.RequestDispatcher(
         store=store,

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import asdict
 from typing import Any
-from urllib.parse import urlsplit
 
 from marie.engine.llm_queue.admission_policy import AdmissionPolicy
 from marie.engine.llm_queue.endpoint import (
@@ -244,32 +243,3 @@ def build_policy_generation_snapshot(
         'admission': admission.to_snapshot(),
     }
     return snapshot, admission
-
-
-def validate_legacy_lane_endpoints(
-    scheduler_config: Any, runtime_base_url: str | None
-) -> None:
-    """V2 database lanes may only reuse the explicitly trusted runtime destination."""
-
-    def canonical(value: str) -> tuple[str, str, int, str]:
-        parsed = urlsplit(value)
-        if (
-            parsed.scheme not in {'http', 'https'}
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or '?' in value
-            or '#' in value
-        ):
-            raise ValueError('v2_endpoint_policy_requires_v3')
-        return (
-            parsed.scheme,
-            parsed.hostname.lower(),
-            parsed.port or (443 if parsed.scheme == 'https' else 80),
-            parsed.path.rstrip('/'),
-        )
-
-    base = canonical(runtime_base_url or 'https://api.openai.com/v1')
-    for lane in scheduler_config.lanes:
-        if lane.endpoint_url and canonical(lane.endpoint_url) != base:
-            raise ValueError('v2_endpoint_policy_requires_v3')

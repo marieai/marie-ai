@@ -3,22 +3,14 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import replace
-from functools import partial
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from marie.engine.llm_queue.config import LlmQueueRuntimeConfig, resolve_fabric_id
-from marie.engine.llm_queue.queue_io import StoreListQueueClient
-from marie.engine.llm_queue.scheduler import DrrLaneConfig
 from marie.engine.llm_queue.scheduler_config import (
     DatabaseSchedulerConfigSource,
     LlmQueueSchedulerConfig,
     SchedulerConfigSource,
     StaticSchedulerConfigSource,
-    ensure_default_pool,
-)
-from marie.engine.openai_compat import (
-    build_async_openai_client,
-    resolve_openai_base_url_from_env,
 )
 
 from marie.excepts import RuntimeFailToStart
@@ -37,49 +29,19 @@ class GatewayLlmDispatchRuntime:
         logger: Optional[MarieLogger] = None,
         config: Optional[dict[str, Any]] = None,
         queue_config: Optional[LlmQueueRuntimeConfig] = None,
-        queue_client_factory: Optional[Callable[[str], Any]] = None,
-        openai_client_factory: Optional[Callable[[str, Optional[str]], Any]] = None,
-        dispatcher_factory: Optional[Callable[..., Any]] = None,
         scheduler_config_source: Optional[SchedulerConfigSource] = None,
         fabric_group_id: Optional[str] = None,
     ) -> None:
         self.logger = logger or MarieLogger("GatewayLlmDispatchRuntime")
         self.runtime_config = config or {}
-        registered_policy = self.runtime_config.get('llm_dispatch')
-        contract_version = (
-            'v3'
-            if isinstance(registered_policy, dict) and registered_policy
-            else self.runtime_config.get('queue_contract_version')
+        self.config = queue_config or LlmQueueRuntimeConfig.from_env()
+        self._fabric_group_id = fabric_group_id
+        self._configured_fabric_group_id = self.config.fabric_group_id
+        effective_fabric = fabric_group_id or _scheduler_fabric_group_id(
+            self.config, self.runtime_config
         )
-        self.config = queue_config or LlmQueueRuntimeConfig.from_env(
-            queue_contract_version=contract_version
-        )
-        if self.config.queue_contract_version == 'v3':
-            scheduler = self.runtime_config.get('scheduler') or {}
-            effective_fabric = resolve_fabric_id(
-                fabric_group_id,
-                self.runtime_config.get('fabric_group_id'),
-                scheduler.get('fabric_group_id'),
-                self.config.fabric_group_id,
-                os.getenv('LLM_QUEUE_FABRIC_GROUP_ID'),
-            )
-        else:
-            effective_fabric = fabric_group_id or _scheduler_fabric_group_id(
-                self.config, self.runtime_config
-            )
         self.config = replace(self.config, fabric_group_id=effective_fabric)
-        self._queue_client_factory = queue_client_factory or StoreListQueueClient
-        self._openai_client_factory = openai_client_factory or build_async_openai_client
-        self._dispatcher_factory = dispatcher_factory or _build_dispatcher
-        self._scheduler_config_source = (
-            scheduler_config_source
-            or _build_scheduler_config_source(
-                config=self.runtime_config,
-                fabric_group_id=self.config.fabric_group_id,
-                default_total_concurrent_dispatch=self.config.max_batch_items,
-                logger=self.logger,
-            )
-        )
+        self._scheduler_config_source = scheduler_config_source
         self._queue_client = None
         self._dispatcher = None
         self._last_error: Optional[str] = None
@@ -98,6 +60,7 @@ class GatewayLlmDispatchRuntime:
         if self._dispatcher is not None:
             health = dict(self._dispatcher.health())
             health.setdefault("last_error", self._last_error)
+            health.setdefault("mode", self.mode)
             pool_ids = _pool_ids_from_health(health) or list(self._started_pool_ids)
             if pool_ids:
                 health.setdefault("pool_ids", pool_ids)
@@ -108,6 +71,7 @@ class GatewayLlmDispatchRuntime:
 
         return {
             "enabled": self.config.enabled,
+            "mode": self.mode,
             "pool_id": self.config.pool_id,
             "pool_ids": [self.config.pool_id],
             "pool_count": 1,
@@ -124,86 +88,31 @@ class GatewayLlmDispatchRuntime:
             self.logger.info("LLM dispatch runtime already started")
             return
 
-        if self.config.queue_contract_version == 'v3':
-            await self._start_v3()
-            return
-
-        queue_client = None
-        dispatcher = None
         try:
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise RuntimeFailToStart(
-                    "LLM dispatch runtime is enabled but OPENAI_API_KEY is not configured."
-                )
-            if not self.config.queue_url:
-                raise RuntimeFailToStart(
-                    "LLM dispatch runtime is enabled but LLM_QUEUE_URL (or LLM_QUEUE_VALKEY_URL) is not configured."
-                )
-
-            queue_client = self._queue_client_factory(self.config.queue_url)
-            scheduler_config = ensure_default_pool(self._scheduler_config_source.load())
-            pool_ids = _runtime_pool_ids(scheduler_config, self.config.pool_id)
-            for pool_id in pool_ids:
-                queue_client.request_queue_depth(pool_id)
-
-            openai_base_url = resolve_openai_base_url_from_env()
-            if isinstance(self._scheduler_config_source, DatabaseSchedulerConfigSource):
-                from marie.serve.runtimes.gateway.marie.dispatch_policy import (
-                    validate_legacy_lane_endpoints,
-                )
-
-                validate_legacy_lane_endpoints(scheduler_config, openai_base_url)
-
-            def client_factory_for_base_url(base_url: Optional[str]):
-                return partial(self._openai_client_factory, api_key, base_url)
-
-            dispatcher = self._dispatcher_factory(
-                queue_client=queue_client,
-                client=None,
-                client_factory=client_factory_for_base_url(openai_base_url),
-                client_factory_for_base_url=client_factory_for_base_url,
-                config=self.config,
-                scheduler_config=scheduler_config,
-                logger=self.logger,
-                backend_address=openai_base_url,
+            scheduler = self.runtime_config.get('scheduler') or {}
+            effective_fabric = resolve_fabric_id(
+                self._fabric_group_id,
+                self.runtime_config.get('fabric_group_id'),
+                scheduler.get('fabric_group_id'),
+                self._configured_fabric_group_id,
+                os.getenv('LLM_QUEUE_FABRIC_GROUP_ID'),
             )
-            dispatcher.start()
-
-            self._queue_client = queue_client
-            self._dispatcher = dispatcher
-            self._started_pool_ids = pool_ids
-            self._started_scheduler_policy = scheduler_config.policy
-            self._last_error = None
-            self.logger.info(
-                _format_started_runtime_log(
-                    scheduler_config=scheduler_config,
-                    fallback_pool_id=self.config.pool_id,
+            self.config = replace(self.config, fabric_group_id=effective_fabric)
+            if self._scheduler_config_source is None:
+                self._scheduler_config_source = _build_scheduler_config_source(
+                    config=self.runtime_config,
+                    fabric_group_id=effective_fabric,
+                    default_total_concurrent_dispatch=self.config.max_batch_items,
+                    logger=self.logger,
                 )
-            )
-        except Exception as exc:
-            self._last_error = 'startup_failed'
-            if dispatcher is not None:
-                try:
-                    dispatcher.stop()
-                except Exception:
-                    self.logger.exception(
-                        "Failed stopping partially started LLM dispatch runtime"
-                    )
-            if queue_client is not None:
-                try:
-                    queue_client.close()
-                except Exception:
-                    self.logger.exception(
-                        "Failed closing queue client after LLM dispatch startup error"
-                    )
-            if isinstance(exc, RuntimeFailToStart):
-                raise
+            await self._start_queued_dispatch()
+        except Exception:
+            self._last_error = 'dispatch_start_failed'
             raise RuntimeFailToStart(
-                'LLM dispatch startup policy or store unavailable'
+                'LLM dispatch policy, credentials, fabric, or store is unavailable'
             ) from None
 
-    async def _start_v3(self) -> None:
+    async def _start_queued_dispatch(self) -> None:
         from marie.engine.llm_queue.endpoint import (
             RegisteredEndpoint,
             RegisteredEndpointGroup,
@@ -216,7 +125,7 @@ class GatewayLlmDispatchRuntime:
         from marie.engine.llm_queue.store import RequestStore, StoreLimits
 
         if not self.config.queue_url:
-            raise RuntimeFailToStart('V3 dispatch requires LLM_QUEUE_URL')
+            raise ValueError('Dispatch requires queue storage')
         from marie.serve.runtimes.gateway.marie.dispatch_policy import (
             persisted_dispatch_policy,
             validate_dispatch_policy,
@@ -224,40 +133,34 @@ class GatewayLlmDispatchRuntime:
 
         configured = dict(self.runtime_config.get('llm_dispatch') or {})
         source = configured.pop('policy_source', 'static')
-        try:
-            if source == 'database':
-                if not isinstance(
-                    self._scheduler_config_source, DatabaseSchedulerConfigSource
-                ):
-                    raise ValueError(
-                        'Database policy source requires scheduler persistence'
-                    )
-                if (
-                    self._scheduler_config_source.fabric_group_id
-                    != self.config.fabric_group_id
-                ):
-                    raise ValueError('Database policy fabric identity mismatch')
-                repository = self._scheduler_config_source.repository
-                if hasattr(repository, 'load_runtime_dispatch_policy'):
-                    policy = await asyncio.to_thread(
-                        repository.load_runtime_dispatch_policy,
-                        self.config.fabric_group_id,
-                    )
-                else:
-                    data = await asyncio.to_thread(
-                        repository.load_scheduler_config,
-                        self.config.fabric_group_id,
-                    )
-                    policy = persisted_dispatch_policy(data)
-            elif source == 'static':
-                policy = validate_dispatch_policy(configured)
+        if source == 'database':
+            if not isinstance(
+                self._scheduler_config_source, DatabaseSchedulerConfigSource
+            ):
+                raise ValueError(
+                    'Database policy source requires scheduler persistence'
+                )
+            if (
+                self._scheduler_config_source.fabric_group_id
+                != self.config.fabric_group_id
+            ):
+                raise ValueError('Database policy fabric identity mismatch')
+            repository = self._scheduler_config_source.repository
+            if hasattr(repository, 'load_runtime_dispatch_policy'):
+                policy = await asyncio.to_thread(
+                    repository.load_runtime_dispatch_policy,
+                    self.config.fabric_group_id,
+                )
             else:
-                raise ValueError('Unknown dispatch policy source')
-        except Exception:
-            self._last_error = 'v3_start_failed'
-            raise RuntimeFailToStart(
-                'V3 dispatch policy is unavailable or invalid'
-            ) from None
+                data = await asyncio.to_thread(
+                    repository.load_scheduler_config,
+                    self.config.fabric_group_id,
+                )
+                policy = persisted_dispatch_policy(data)
+        elif source == 'static':
+            policy = validate_dispatch_policy(configured)
+        else:
+            raise ValueError('Unknown dispatch policy source')
 
         def resolve_policy(policy: dict) -> dict:
             endpoints = []
@@ -308,12 +211,12 @@ class GatewayLlmDispatchRuntime:
         resolved = resolve_policy(policy)
         endpoints, lanes = resolved['endpoints'], resolved['lanes']
         store = None
+        dispatcher = None
         try:
             store = await asyncio.to_thread(
                 RequestStore,
                 self.config.queue_url,
                 fabric_id=self.config.fabric_group_id,
-                version='v3',
                 limits=StoreLimits(**policy['limits']),
             )
             dispatcher = RequestDispatcher(
@@ -328,13 +231,22 @@ class GatewayLlmDispatchRuntime:
                 policy_digest=resolved['policy_digest'],
             )
             await dispatcher.start()
-        except (ValueError, RuntimeError):
+        except Exception:
+            if dispatcher is not None:
+                try:
+                    await dispatcher.stop()
+                except Exception:
+                    self.logger.error(
+                        'Failed stopping partially started LLM dispatch runtime'
+                    )
             if store is not None:
-                await asyncio.to_thread(store.close)
-            self._last_error = 'v3_start_failed'
-            raise RuntimeFailToStart(
-                'V3 dispatch configuration or store is unavailable'
-            ) from None
+                try:
+                    await asyncio.to_thread(store.close)
+                except Exception:
+                    self.logger.error(
+                        'Failed closing store after LLM dispatch startup error'
+                    )
+            raise
         self._queue_client = store
         self._dispatcher = dispatcher
         self._started_pool_ids = [lane.pool_id for lane in lanes if lane.enabled]
@@ -342,104 +254,16 @@ class GatewayLlmDispatchRuntime:
         self._last_error = None
 
     async def stop(self) -> None:
-        if self.config.queue_contract_version == 'v3':
-            dispatcher = self._dispatcher
-            if dispatcher is not None:
-                await dispatcher.stop()
-            self._dispatcher = None
-            self._queue_client = None
-            return
         dispatcher = self._dispatcher
-        queue_client = self._queue_client
-        pool_ids = self._started_pool_ids or [self.config.pool_id]
-        scheduler_policy = self._started_scheduler_policy or "fifo"
-
+        store = self._queue_client
+        if dispatcher is not None:
+            await dispatcher.stop()
         self._dispatcher = None
         self._queue_client = None
         self._started_pool_ids = []
         self._started_scheduler_policy = None
-
-        if dispatcher is not None:
-            try:
-                dispatcher.stop()
-            except Exception:
-                self.logger.exception("Failed stopping LLM dispatch runtime")
-
-        if queue_client is not None:
-            try:
-                queue_client.close()
-            except Exception:
-                self.logger.exception("Failed closing LLM dispatch queue client")
-
-        if self.enabled:
-            self.logger.info(
-                "Stopped LLM %s dispatch runtime for %s",
-                scheduler_policy.upper(),
-                _describe_pool_scope(pool_ids),
-            )
-
-
-def _build_dispatcher(
-    *,
-    queue_client,
-    client,
-    client_factory=None,
-    client_factory_for_base_url: Optional[
-        Callable[[Optional[str]], Callable[[], Any]]
-    ] = None,
-    config,
-    scheduler_config: Optional[LlmQueueSchedulerConfig] = None,
-    logger,
-    backend_address: Optional[str] = None,
-):
-    from marie.engine.llm_queue.adapters.openai_compatible import (
-        OpenAICompatibleExecutionAdapter,
-    )
-    from marie.engine.llm_queue.dispatcher import (
-        DrrQueuedBatchDispatcher,
-        QueuedBatchDispatcher,
-    )
-
-    adapter = OpenAICompatibleExecutionAdapter(
-        client=client,
-        client_factory=client_factory,
-        logger=logger,
-        default_timeout=None,
-        backend_address=backend_address,
-    )
-    scheduler_config = ensure_default_pool(
-        scheduler_config or LlmQueueSchedulerConfig()
-    )
-    if scheduler_config.is_drr:
-        execution_adapters_by_pool = {}
-        for lane in scheduler_config.lanes:
-            if not lane.endpoint_url:
-                continue
-            if client_factory_for_base_url is None:
-                continue
-            execution_adapters_by_pool[lane.pool_id] = OpenAICompatibleExecutionAdapter(
-                client_factory=client_factory_for_base_url(lane.endpoint_url),
-                logger=logger,
-                default_timeout=None,
-                backend_address=lane.endpoint_url,
-            )
-        return DrrQueuedBatchDispatcher(
-            queue_client=queue_client,
-            execution_adapter=adapter,
-            config=config,
-            logger=logger,
-            lanes=list(scheduler_config.lanes),
-            total_concurrent_dispatch=scheduler_config.total_concurrent_dispatch
-            or config.max_batch_items,
-            execution_adapters_by_pool=execution_adapters_by_pool,
-        )
-
-    return QueuedBatchDispatcher(
-        queue_client=queue_client,
-        execution_adapter=adapter,
-        config=config,
-        logger=logger,
-    )
+        if store is not None:
+            await asyncio.to_thread(store.close)
 
 
 def _build_scheduler_config_source(
@@ -462,21 +286,6 @@ def _build_scheduler_config_source(
     return StaticSchedulerConfigSource(LlmQueueSchedulerConfig())
 
 
-def _runtime_pool_ids(
-    scheduler_config: LlmQueueSchedulerConfig,
-    fallback_pool_id: str,
-) -> list[str]:
-    if not scheduler_config.is_drr:
-        return [fallback_pool_id]
-    return [lane.pool_id for lane in scheduler_config.lanes if lane.enabled]
-
-
-def _describe_pool_scope(pool_ids: list[str]) -> str:
-    if len(pool_ids) == 1:
-        return f"pool '{pool_ids[0]}'"
-    return f"{len(pool_ids)} pools: {', '.join(pool_ids)}"
-
-
 def _pool_ids_from_health(health: dict[str, object]) -> list[str]:
     lanes = health.get("lanes")
     if not isinstance(lanes, list):
@@ -489,48 +298,6 @@ def _pool_ids_from_health(health: dict[str, object]) -> list[str]:
         if isinstance(pool_id, str) and pool_id:
             pool_ids.append(pool_id)
     return pool_ids
-
-
-def _format_started_runtime_log(
-    *,
-    scheduler_config: LlmQueueSchedulerConfig,
-    fallback_pool_id: str,
-) -> str:
-    if not scheduler_config.is_drr:
-        return "\n".join(
-            [
-                "Started LLM FIFO dispatch runtime",
-                f"  pool: {fallback_pool_id}",
-            ]
-        )
-
-    lines = [
-        "Started LLM DRR dispatch runtime",
-        f"  pools: {len(_runtime_pool_ids(scheduler_config, fallback_pool_id))}",
-        "  routes:",
-    ]
-    for lane in scheduler_config.lanes:
-        if not lane.enabled:
-            continue
-        lines.append(f"    - {_format_lane_route(lane)}")
-    return "\n".join(lines)
-
-
-def _format_lane_route(lane: DrrLaneConfig) -> str:
-    endpoint_source = "explicit" if lane.endpoint_url else "runtime default"
-    max_concurrent = (
-        str(lane.max_concurrent) if lane.max_concurrent is not None else "unbounded"
-    )
-    max_burst = (
-        str(lane.max_burst_per_visit)
-        if lane.max_burst_per_visit is not None
-        else "default"
-    )
-    return (
-        f"{lane.pool_id} "
-        f"({endpoint_source}; quantum={lane.quantum}, "
-        f"protected={lane.min_concurrent}, max={max_concurrent}, burst={max_burst})"
-    )
 
 
 def _scheduler_fabric_group_id(

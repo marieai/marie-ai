@@ -438,7 +438,7 @@ async def process_batch(
             per-item page number is derived from each image filename when possible.
         system_prompt: Optional system instruction for every request in the batch.
         mm_processor_kwargs: Image options forwarded unchanged to the formatter.
-        prepare_item: Internal consuming V3 scanner seam. The batch contains only
+        prepare_item: Internal consuming queued-dispatch scanner seam. The batch contains only
             output metadata; this callback prepares one owned image on demand.
         preparation_lock: Scanner-shared lock held through preparation and encoding.
         cancellation: Scanner-shared cancellation signal for queued calls.
@@ -531,8 +531,8 @@ async def process_batch(
         if prepare_item is not None:
             from marie.engine.llm_queue.producer import PreparedCalls
 
-            if not engine.batch_processor.uses_v3_queue:
-                raise ValueError("Lazy image preparation requires V3")
+            if not engine.batch_processor.uses_queued_dispatch:
+                raise ValueError("Lazy image preparation requires queued dispatch")
             cancellation = cancellation or threading.Event()
             deadline = time.monotonic() + engine.batch_processor.batch_timeout
             build_kwargs = {"completion_params": completion_params}
@@ -1145,10 +1145,10 @@ async def ascan_and_process_images(
     processing_items = pending_items
 
     batch_processor = getattr(engine, "batch_processor", None)
-    uses_v3 = getattr(batch_processor, "uses_v3_queue", False)
-    scan_cancellation = threading.Event() if uses_v3 else None
+    uses_queued_dispatch = getattr(batch_processor, "uses_queued_dispatch", False)
+    scan_cancellation = threading.Event() if uses_queued_dispatch else None
     preparation_lock = threading.Lock()
-    if uses_v3:
+    if uses_queued_dispatch:
         # One source decode, prepared RGB and formatter copy; no image resize.
         for item in processing_items:
             with Image.open(os.path.join(source_dir, item.file_name)) as image:
@@ -1168,7 +1168,7 @@ async def ascan_and_process_images(
         file_batch = [item.file_name for item in batch]
         units_by_index = {i: item.unit for i, item in enumerate(batch)}
 
-        if uses_v3:
+        if uses_queued_dispatch:
 
             def prepare(index: int) -> list:
                 gen = prepare_batch_with_meta_units(
@@ -1246,7 +1246,7 @@ async def ascan_and_process_images(
         len(batched_items),
         (
             max(1, request_limit // mini_batch_size)
-            if uses_v3
+            if uses_queued_dispatch
             else max(1, (request_limit + mini_batch_size - 1) // mini_batch_size)
         ),
     )

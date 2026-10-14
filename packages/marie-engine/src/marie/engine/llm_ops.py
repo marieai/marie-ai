@@ -131,7 +131,7 @@ class LLMCall(Function):
         """
         cancellation = threading.Event()
         processor = getattr(self.engine, 'batch_processor', None)
-        if processor is not None and processor.uses_v3_queue:
+        if processor is not None and processor.uses_queued_dispatch:
             kwargs['cancellation'] = cancellation
             kwargs.setdefault(
                 'queue_deadline', time.monotonic() + processor.batch_timeout

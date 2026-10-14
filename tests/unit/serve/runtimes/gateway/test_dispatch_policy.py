@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
 from marie.engine.llm_queue.scheduler_config import DatabaseSchedulerConfigSource
 
 from marie.excepts import RuntimeFailToStart
@@ -172,9 +172,11 @@ def test_persisted_policy_rejects_unsafe_ambiguous_metadata(mutation):
         persisted_dispatch_policy(data)
 
 
+@pytest.mark.parametrize('policy_form', ['scheduler_metadata', 'activated_snapshot'])
 @pytest.mark.asyncio
-async def test_database_source_selected_at_v3_startup_without_yaml_fallback(
+async def test_database_source_selected_at_queued_dispatch_startup_without_yaml_fallback(
     monkeypatch,
+    policy_form,
 ):
     from marie.engine.llm_queue import request_dispatcher
     from marie.engine.llm_queue import store as store_module
@@ -186,10 +188,24 @@ async def test_database_source_selected_at_v3_startup_without_yaml_fallback(
             selected.append(fabric)
             return persisted()
 
-    source = DatabaseSchedulerConfigSource(Repository(), 'chosen')
-    config = LlmQueueConfig(
+    repository = Repository()
+    if policy_form == 'activated_snapshot':
+        from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+            persisted_dispatch_policy,
+        )
+
+        def load_runtime_dispatch_policy(fabric):
+            selected.append(fabric)
+            return dict(
+                persisted_dispatch_policy(persisted()),
+                policy_generation=7,
+                policy_digest='a' * 64,
+            )
+
+        repository.load_runtime_dispatch_policy = load_runtime_dispatch_policy
+    source = DatabaseSchedulerConfigSource(repository, 'chosen')
+    config = LlmQueueRuntimeConfig(
         enabled=True,
-        queue_contract_version='v3',
         fabric_group_id='chosen',
         queue_url='redis://test',
     )
@@ -235,14 +251,17 @@ async def test_database_source_selected_at_v3_startup_without_yaml_fallback(
     def fail(fabric):
         raise RuntimeError('database secret')
 
-    source.repository.load_scheduler_config = fail
+    if policy_form == 'activated_snapshot':
+        source.repository.load_runtime_dispatch_policy = fail
+    else:
+        source.repository.load_scheduler_config = fail
     with pytest.raises(RuntimeFailToStart) as caught:
         await runtime.start()
     assert 'secret' not in str(caught.value)
 
 
 @pytest.mark.asyncio
-async def test_v3_startup_resolves_replica_group_credentials(monkeypatch):
+async def test_queued_dispatch_startup_resolves_replica_group_credentials(monkeypatch):
     from marie.engine.llm_queue import request_dispatcher
     from marie.engine.llm_queue import store as store_module
 
@@ -277,9 +296,8 @@ async def test_v3_startup_resolves_replica_group_credentials(monkeypatch):
         SimpleNamespace(load_scheduler_config=lambda _: data), 'chosen'
     )
     runtime = GatewayLlmDispatchRuntime(
-        queue_config=LlmQueueConfig(
+        queue_config=LlmQueueRuntimeConfig(
             enabled=True,
-            queue_contract_version='v3',
             fabric_group_id='chosen',
             queue_url='redis://test',
         ),
@@ -360,10 +378,14 @@ def test_postgres_startup_does_not_disclose_connection_configuration(monkeypatch
 
 @pytest.mark.parametrize(
     'endpoint',
-    ['https://other.example/v1', 'https://inference.example/v1?credential=sentinel'],
+    [
+        'https://other.example/v1',
+        'https://inference.example/v1',
+        'https://inference.example/v1?credential=sentinel',
+    ],
 )
 @pytest.mark.asyncio
-async def test_v2_database_lane_cannot_receive_runtime_global_key(
+async def test_unregistered_database_lane_refuses_queued_dispatch(
     monkeypatch, endpoint
 ):
     source = DatabaseSchedulerConfigSource(
@@ -376,33 +398,20 @@ async def test_v2_database_lane_cannot_receive_runtime_global_key(
         ),
         'chosen',
     )
-    config = LlmQueueConfig(
+    config = LlmQueueRuntimeConfig(
         enabled=True,
-        queue_contract_version='v2',
         fabric_group_id='chosen',
         queue_url='redis://test',
     )
-    monkeypatch.setenv('OPENAI_API_KEY', 'runtime-fixture-key')
-    monkeypatch.setenv('OPENAI_API_BASE', 'https://inference.example/v1')
-    from marie.serve.runtimes.gateway.marie import llm_dispatch_runtime as module
-
-    monkeypatch.setattr(
-        module,
-        'resolve_openai_base_url_from_env',
-        lambda: 'https://inference.example/v1',
-    )
-    queue = SimpleNamespace(request_queue_depth=lambda _: 0, close=lambda: None)
     runtime = GatewayLlmDispatchRuntime(
         queue_config=config,
         scheduler_config_source=source,
-        queue_client_factory=lambda _: queue,
-        openai_client_factory=lambda *a: pytest.fail(
-            'client constructed for unauthorized target'
-        ),
+        config={'llm_dispatch': {'policy_source': 'database'}},
     )
     with pytest.raises(RuntimeFailToStart) as caught:
         await runtime.start()
     assert 'sentinel' not in str(caught.value)
+    assert runtime.health()['last_error'] == 'dispatch_start_failed'
 
 
 def test_persisted_fairness_and_total_reach_dispatch_policy():

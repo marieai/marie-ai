@@ -13,8 +13,8 @@ from uuid import uuid4
 
 import pytest
 from marie.engine.completion_contract import CompletionCallParams
-from marie.engine.llm_queue.config import LlmQueueConfig
-from marie.engine.llm_queue.producer import V3Producer
+from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
+from marie.engine.llm_queue.producer import QueuedDispatchProducer
 from marie.engine.llm_queue.store import (
     AdmissionConflict,
     ProducerDead,
@@ -22,7 +22,10 @@ from marie.engine.llm_queue.store import (
 )
 from test_request_dispatcher import dispatcher_for, eventually, http_endpoint, store
 
-from tools.stress.llm_v3_aimock_e2e import fixture_action, inspect_owned_fixture
+from tools.stress.llm_queued_dispatch_aimock_e2e import (
+    fixture_action,
+    inspect_owned_fixture,
+)
 
 
 def owned_fixture(store) -> dict:
@@ -110,13 +113,12 @@ async def test_store_restart_preserves_original_unsent_authority(
     lease = 2 if expires else 60
     batch_timeout = 25 if expires else 90
     runtime = dispatcher_for(store, url, owner_lease_ms=lease * 1000, drain_seconds=0.2)
-    producer = V3Producer(
-        config=LlmQueueConfig(
+    producer = QueuedDispatchProducer(
+        config=LlmQueueRuntimeConfig(
             enabled=True,
             queue_url=store.test_url,
             pool_id='pool',
             fabric_group_id=store.keys.fabric_id,
-            queue_contract_version='v3',
             producer_ttl_seconds=lease,
             producer_refresh_interval_seconds=0.25,
         )

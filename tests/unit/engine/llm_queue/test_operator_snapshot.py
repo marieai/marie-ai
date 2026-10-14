@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from marie.engine.llm_queue import registry
@@ -20,7 +21,8 @@ class Runtime:
             'fabric_group_id': self.config.fabric_group_id,
             'pool_id': 'default',
             'running': True,
-            'contract_version': 'v3',
+            'mode': 'queued-dispatch',
+            'sampling_available': True,
             'request_queue_depth': 10,
             'endpoint_url': 'https://secret',
             'last_error': 'PHI raw secret',
@@ -50,7 +52,8 @@ class RoutingRuntime(Runtime):
         self.calls += 1
         return {
             'fabric_group_id': self.config.fabric_group_id,
-            'contract_version': 'v3',
+            'mode': 'queued-dispatch',
+            'sampling_available': True,
             'running': True,
             'observed_at_ms': 2_000_000,
             'policy_generation': 4,
@@ -134,30 +137,47 @@ async def test_snapshot_timeout_keeps_event_loop_responsive_and_bounds_workers()
     await asyncio.sleep(0.22)
 
 
-def test_v2_sampling_never_reads_payload():
-    from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
+def test_queued_sampling_reads_metadata_without_request_payload() -> None:
+    from marie.engine.llm_queue.request_dispatcher import RequestDispatcher
+    from test_snapshot_read_budget import MetadataStore
+    from test_snapshot_read_budget import Runtime as MetadataRuntime
 
-    runtime = object.__new__(QueuedBatchDispatcher)
-    runtime.queue_client = SimpleNamespace(
-        sample_requests=lambda *a: pytest.fail('payload read')
-    )
-    runtime.config = SimpleNamespace(pool_id='default')
-    assert runtime.sample_pending_requests(5) == []
+    store = MetadataStore('default', malformed=False)
+    store._read = lambda *args: ['request']
+    store.request = lambda *args: pytest.fail('payload read')
+    runtime = MetadataRuntime(store)
+
+    rows = RequestDispatcher.sample_pending_requests(runtime, 5)
+
+    assert [row['request_id'] for row in rows] == ['request']
+    assert store.calls == [('metadata', 'request')]
 
 
 def test_drr_status_does_not_peek_payload():
-    from marie.engine.llm_queue.scheduler import DrrLaneConfig, DrrLaneScheduler
+    from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+    from test_snapshot_read_budget import MetadataStore
 
-    queue = SimpleNamespace(
-        request_queue_depth=lambda _: 2,
-        peek_request=lambda _: pytest.fail('payload read'),
+    store = MetadataStore('default', malformed=False)
+    store.request = lambda *args: pytest.fail('payload read')
+    store.route_status = lambda pool: {'reserved_items': 0, 'reserved_bytes': 0}
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[RegisteredEndpoint('endpoint', 'https://example.test')],
+        lanes=[DispatchLane('default', 'endpoint')],
     )
-    scheduler = DrrLaneScheduler(
-        queue_client=queue,
-        lanes=[DrrLaneConfig(pool_id='default')],
-        total_concurrent_dispatch=1,
-    )
-    assert scheduler.lane_snapshots()[0].head_cost_units is None
+    try:
+        assert runtime.health()['lanes'][0]['head_cost_units'] == 1
+    finally:
+        for worker in (
+            runtime._store_workers,
+            runtime._lease_worker,
+            runtime._refresh_worker,
+        ):
+            worker.shutdown()
 
 
 def test_total_control_and_sample_rows_obey_one_budget(monkeypatch):
@@ -181,33 +201,15 @@ async def test_cancelled_snapshot_stops_before_next_dispatcher():
     assert second.calls == 0
 
 
-def test_dispatch_error_trace_does_not_record_raw_exception():
-    from marie.engine.llm_queue.dispatcher import _set_dispatch_span_error_attributes
-
-    values = []
-    span = SimpleNamespace(
-        set_attribute=lambda *args: values.append(args),
-        record_exception=lambda *args: values.append(args),
-        set_status=lambda *args: values.append(args),
-    )
-    request = SimpleNamespace(submitted_at=time.time())
-    _set_dispatch_span_error_attributes(
-        span,
-        exc=RuntimeError('PHI data:image credential'),
-        started_monotonic=time.monotonic(),
-        request=request,
-    )
-    assert 'PHI' not in str(values) and 'data:image' not in str(values)
-
-
-def test_legacy_depth_failure_is_unavailable_not_successful_zero():
+def test_depth_failure_is_unavailable_not_successful_zero():
     runtime = Runtime()
     runtime.health = lambda **kwargs: {
+        'mode': 'queued-dispatch',
         'request_queue_depth': None,
         'request_queue_depth_error': 'queue_unavailable',
     }
     registry.register_dispatcher('failed', runtime)
-    with pytest.raises(registry.SnapshotUnavailable):
+    with pytest.raises(registry.SnapshotUnavailable, match='^runtime_read_failed$'):
         registry.dispatch_runtime_live_state(fabric_group_id='a')
 
 
@@ -283,3 +285,141 @@ def test_policy_observation_is_unknown_when_any_dispatcher_omits_identity():
         'observed_generation': None,
         'observed_digest': None,
     }
+
+
+def test_empty_registry_describes_queue_scope_without_inventing_metadata() -> None:
+    snapshot = registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+    assert snapshot['mode'] == 'queued-dispatch'
+    assert 'contract_version' not in snapshot
+    summary = snapshot['runtime_summary']
+    assert summary['registered_dispatchers'] == 0
+    assert summary['running_dispatchers'] == 0
+    assert summary['sampling_available'] is False
+    assert summary['metadata_available'] is False
+    assert summary['pending_request_count'] is None
+    assert snapshot['dispatchers'] == []
+    assert registry.dispatch_runtime_snapshot()['mode'] == 'queued-dispatch'
+
+
+@pytest.mark.parametrize('mode', [None, 'direct-batch', 'v3', 'mixed'])
+def test_registered_runtime_must_explicitly_declare_queued_dispatch(
+    mode: str | None,
+) -> None:
+    runtime = Runtime()
+    health = runtime.health
+
+    def invalid_health(**kwargs: Any) -> dict[str, Any]:
+        row = health(**kwargs)
+        if mode is None:
+            row.pop('mode')
+            row['contract_version'] = 'v3'
+        else:
+            row['mode'] = mode
+        return row
+
+    runtime.health = invalid_health
+    registry.register_dispatcher('valid', Runtime())
+    registry.register_dispatcher('invalid', runtime)
+
+    with pytest.raises(registry.SnapshotUnavailable, match='^runtime_mode_mismatch$'):
+        registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+
+@pytest.mark.asyncio
+async def test_async_snapshot_preserves_bounded_mode_mismatch() -> None:
+    runtime = Runtime()
+    runtime.health = lambda **kwargs: {'mode': 'direct-batch'}
+    registry.register_dispatcher('invalid', runtime)
+
+    with pytest.raises(registry.SnapshotUnavailable, match='^runtime_mode_mismatch$'):
+        await registry.read_runtime_snapshot(fabric_group_id='a')
+
+
+@pytest.mark.parametrize('capability', [False, None, 1, 'true'])
+def test_sampling_requires_explicit_true_from_every_runtime(
+    capability: bool | int | str | None,
+) -> None:
+    runtime = Runtime()
+    health = runtime.health
+
+    def unsupported_health(**kwargs: Any) -> dict[str, Any]:
+        row = health(**kwargs)
+        if capability is None:
+            row.pop('sampling_available')
+        else:
+            row['sampling_available'] = capability
+        return row
+
+    runtime.health = unsupported_health
+    registry.register_dispatcher('capable', Runtime())
+    registry.register_dispatcher('unsupported', runtime)
+
+    snapshot = registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+    assert snapshot['mode'] == 'queued-dispatch'
+    assert snapshot['runtime_summary']['sampling_available'] is False
+    assert snapshot['runtime_summary']['metadata_available'] is True
+
+
+def test_sampling_capability_does_not_imply_pending_metadata_available() -> None:
+    runtime = Runtime()
+    health = runtime.health
+
+    def unknown_depth(**kwargs: Any) -> dict[str, Any]:
+        row = health(**kwargs)
+        row['lanes'] = [{'pool_id': 'default'}]
+        return row
+
+    runtime.health = unknown_depth
+    registry.register_dispatcher('capable', runtime)
+
+    snapshot = registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+    assert snapshot['runtime_summary']['sampling_available'] is True
+    assert snapshot['runtime_summary']['metadata_available'] is False
+    assert snapshot['runtime_summary']['pending_request_count'] is None
+    assert snapshot['dispatchers'][0]['mode'] == 'queued-dispatch'
+
+
+@pytest.mark.parametrize('capability', [False, None])
+def test_unsupported_sampling_preserves_health_without_calling_samplers(
+    capability: bool | None,
+) -> None:
+    runtime = Runtime()
+    health = runtime.health
+
+    def unsupported_health(**kwargs: Any) -> dict[str, Any]:
+        row = health(**kwargs)
+        if capability is None:
+            row.pop('sampling_available')
+        else:
+            row['sampling_available'] = capability
+        return row
+
+    def unsupported_sampler(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        raise AssertionError('unsupported runtime sampler was invoked')
+
+    runtime.health = unsupported_health
+    runtime.sample_pending_requests = unsupported_sampler
+    runtime.inflight_requests_snapshot = unsupported_sampler
+    registry.register_dispatcher('unsupported', runtime)
+
+    snapshot = registry.dispatch_runtime_live_state(fabric_group_id='a')
+
+    assert snapshot['mode'] == 'queued-dispatch'
+    assert snapshot['dispatchers'][0]['running'] is True
+    assert snapshot['runtime_summary']['registered_dispatchers'] == 1
+    assert snapshot['runtime_summary']['running_dispatchers'] == 1
+    assert snapshot['runtime_summary']['sampling_available'] is False
+    assert snapshot['runtime_summary']['metadata_available'] is True
+    assert snapshot['runtime_summary']['pending_request_count'] == 10
+    assert snapshot['runtime_summary']['pending_request_sample_count'] == 0
+    assert snapshot['live_requests'] == []
+
+
+@pytest.mark.parametrize('category', ['dispatch_start_failed', 'runtime_mode_mismatch'])
+def test_runtime_observation_preserves_new_bounded_error_categories(
+    category: str,
+) -> None:
+    assert registry._clean({'last_error': category}) == {'last_error': category}

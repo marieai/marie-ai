@@ -22,7 +22,7 @@ from marie.engine.completion_contract import (
     recover_complete_json,
 )
 from marie.engine.exceptions import MaxTokensExceededError, RepetitionError
-from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.config import LlmQueueProducerConfig
 from marie.engine.llm_queue.producer import _batch_result
 
 from marie.excepts import BatchExecutionError, CircuitOpenError
@@ -76,7 +76,7 @@ def _build_processor(
     processor._gate_lock_loop = None
     processor._queue_client = None
     processor._queued_executor = None
-    processor._queue_config = LlmQueueConfig.from_env(enabled=False)
+    processor._queue_config = LlmQueueProducerConfig.from_env(enabled=False)
     processor._queue_mode_logged = False
     return processor
 
@@ -1222,7 +1222,7 @@ def test_scan_stops_new_work_and_finishes_active_batches(tmp_path):
     asyncio.run(run())
 
 
-def test_v3_scan_failure_cancels_active_batches(tmp_path):
+def test_queued_dispatch_scan_failure_cancels_active_batches(tmp_path):
     import unittest.mock as mock
     from types import SimpleNamespace
 
@@ -1265,7 +1265,7 @@ def test_v3_scan_failure_cancels_active_batches(tmp_path):
                     engine=SimpleNamespace(
                         batch_processor=SimpleNamespace(
                             max_concurrency=2,
-                            uses_v3_queue=True,
+                            uses_queued_dispatch=True,
                         )
                     ),
                     expect_output="json",

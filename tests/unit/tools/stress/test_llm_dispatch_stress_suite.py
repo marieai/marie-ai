@@ -774,6 +774,33 @@ def test_validate_report_requires_deferred_retry_for_503_phase() -> None:
         validate_report(phase, report)
 
 
+def test_unreachable_report_explains_ambiguous_published_port_failure() -> None:
+    phase, report = _failure_phase_report(
+        'unreachable', completed=6, failed=0, retries=0, refunded_cost=0
+    )
+    report['routing_qualification']['dispatcher_counters']['delta'][
+        'remote_outcomes_failed'
+    ] = 2
+
+    with pytest.raises(AssertionError) as caught:
+        validate_report(phase, report)
+
+    assert 'remote_outcomes_failed=2' in str(caught.value)
+    assert 'host-network' in str(caught.value)
+
+
+def test_unreachable_report_rejects_unknown_outcomes_despite_refunds() -> None:
+    phase, report = _failure_phase_report(
+        'unreachable', completed=6, failed=0, retries=0, refunded_cost=1
+    )
+    report['routing_qualification']['dispatcher_counters']['delta'][
+        'remote_outcomes_failed'
+    ] = 1
+
+    with pytest.raises(AssertionError, match='ambiguous remote outcomes'):
+        validate_report(phase, report)
+
+
 def test_validate_report_rejects_retry_after_ambiguous_hang() -> None:
     phase, report = _failure_phase_report(
         "hang", completed=0, failed=3, retries=0, refunded_cost=0
@@ -1129,9 +1156,7 @@ def test_result_row_reports_completed_job_throughput_and_open_circuit() -> None:
             "samples": [
                 {
                     "llm_dispatch": {
-                        "endpoint_groups": [
-                            {"replicas": [{"circuit": "open"}]}
-                        ]
+                        "endpoint_groups": [{"replicas": [{"circuit": "open"}]}]
                     }
                 }
             ]

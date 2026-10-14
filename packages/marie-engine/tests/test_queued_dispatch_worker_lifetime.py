@@ -7,9 +7,10 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+from queued_dispatch_qualification_evidence import record_evidence
+from test_queued_dispatch_producer import calls, processor_for
 from test_request_dispatcher import eventually, http_endpoint, store
-from test_v3_producer import calls, processor_for
-from v3_qualification_evidence import record_evidence
 
 
 def events(path):
@@ -24,10 +25,11 @@ async def start_worker(store, path, count):
         'fabric': store.keys.fabric_id,
         'events': str(path),
         'count': count,
+        'retain_terminal_results': count > 1,
     }
     return await asyncio.create_subprocess_exec(
         sys.executable,
-        str(Path(__file__).with_name('v3_worker_fixture.py')),
+        str(Path(__file__).with_name('queued_dispatch_worker_fixture.py')),
         json.dumps(config),
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
@@ -51,7 +53,7 @@ async def start_dispatcher(
     }
     return await asyncio.create_subprocess_exec(
         sys.executable,
-        str(Path(__file__).with_name('v3_worker_fixture.py')),
+        str(Path(__file__).with_name('queued_dispatch_worker_fixture.py')),
         json.dumps(config),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -77,6 +79,7 @@ async def test_killed_worker_loses_every_state_and_replacement_inherits_nothing(
 
     active = set()
     slow = asyncio.Event()
+    retry_seen = asyncio.Event()
     sent = []
 
     async def handle(reader, writer):
@@ -91,18 +94,27 @@ async def test_killed_worker_loses_every_state_and_replacement_inherits_nothing(
             body = json.loads(await reader.readexactly(int(headers['Content-Length'])))
             sent.append(body['model'])
             if body['model'] == 'item-1':
+                await retry_seen.wait()
                 server.close()
                 await slow.wait()
+            retriable = body['model'] == 'item-2'
             payload = json.dumps(
-                {'choices': [{'message': {'content': body['model']}}]}
+                {'error': 'owned retry fixture'}
+                if retriable
+                else {'choices': [{'message': {'content': body['model']}}]}
             ).encode()
+            status = b'503 Service Unavailable' if retriable else b'200 OK'
             writer.write(
-                b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: '
+                b'HTTP/1.1 '
+                + status
+                + b'\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: '
                 + str(len(payload)).encode()
                 + b'\r\n\r\n'
                 + payload
             )
             await writer.drain()
+            if retriable:
+                retry_seen.set()
         finally:
             writer.close()
             await writer.wait_closed()
@@ -171,7 +183,9 @@ async def test_killed_worker_loses_every_state_and_replacement_inherits_nothing(
         assert len([e for e in events(path) if e['event'] == 'output']) == 1
         live_task = asyncio.create_task(
             asyncio.to_thread(
-                live.batch_generate_calls, calls=calls(1), request_id='other-node'
+                live.batch_generate_calls,
+                calls=calls(1, store),
+                request_id='other-node',
             )
         )
         await eventually(
@@ -203,7 +217,7 @@ async def test_killed_worker_loses_every_state_and_replacement_inherits_nothing(
         assert not live_task.done()
         for ident in old_ids:
             record = store.client.hgetall(store.keys.request(ident))
-            assert b'payload' not in record and b'result' not in record
+            assert 'payload' not in record and 'result' not in record
         cleanup_seconds = time.monotonic() - killed_at
         assert cleanup_seconds < 5
         assert store.usage()['reserved_items'] == 1
@@ -227,7 +241,7 @@ async def test_killed_worker_loses_every_state_and_replacement_inherits_nothing(
         await eventually(lambda: not active)
         for ident in old_ids:
             record = store.client.hgetall(store.keys.request(ident))
-            assert b'payload' not in record and b'result' not in record
+            assert 'payload' not in record and 'result' not in record
         assert sent.count('item-1') == 1
         record_evidence(
             'worker-death',
@@ -273,20 +287,30 @@ async def test_killed_worker_loses_every_state_and_replacement_inherits_nothing(
         await asyncio.gather(*active, return_exceptions=True)
 
 
+def postpone_result_ack(monkeypatch):
+    from marie.engine.llm_queue.store import RequestStore, StoreUnavailable
+
+    def postpone(self, producer_id, attempt_id):
+        raise StoreUnavailable('owned fixture postpones terminal acknowledgement')
+
+    monkeypatch.setattr(RequestStore, 'ack_result', postpone)
+
+
 async def test_killed_dispatcher_recovers_only_unsent_claim_for_live_producer(
-    store, http_endpoint, tmp_path
+    store, http_endpoint, tmp_path, monkeypatch
 ):
     from test_request_dispatcher import dispatcher_for
 
     url, received, _, _ = http_endpoint
     path = tmp_path / 'dispatcher.jsonl'
     child = await start_dispatcher(store, path, url)
+    postpone_result_ack(monkeypatch)
     producer = processor_for(store, batch_timeout=15)
     runtime = dispatcher_for(store, url, owner_lease_ms=500)
     try:
         await eventually(lambda: store.resolve_route('pool'), seconds=15)
         task = asyncio.create_task(
-            asyncio.to_thread(producer.batch_generate_calls, calls=calls(1))
+            asyncio.to_thread(producer.batch_generate_calls, calls=calls(1, store))
         )
         await eventually(lambda: bool(events(path)), seconds=10)
         ident = events(path)[0]['attempt']
@@ -323,7 +347,7 @@ async def test_killed_dispatcher_recovers_only_unsent_claim_for_live_producer(
 
 
 async def test_killed_dispatcher_after_response_keeps_unknown_reservation(
-    store, http_endpoint, tmp_path
+    store, http_endpoint, tmp_path, monkeypatch
 ):
     from dataclasses import replace
     from uuid import uuid4
@@ -335,13 +359,13 @@ async def test_killed_dispatcher_after_response_keeps_unknown_reservation(
     store = RequestStore(
         store_url,
         fabric_id='uncertainty-' + uuid4().hex,
-        version='v3',
         limits=replace(store.limits, remote_uncertainty_ms=2000),
     )
     store.test_url = store_url
     url, received, _, _ = http_endpoint
     path = tmp_path / 'before-finish.jsonl'
     child = await start_dispatcher(store, path, url, barrier='before_finish')
+    postpone_result_ack(monkeypatch)
     producer = processor_for(store, batch_timeout=15)
     replacement = dispatcher_for(store, url, owner_lease_ms=500)
     delivered = []
@@ -351,7 +375,7 @@ async def test_killed_dispatcher_after_response_keeps_unknown_reservation(
         task = asyncio.create_task(
             asyncio.to_thread(
                 producer.batch_generate_calls,
-                calls=calls(1),
+                calls=calls(1, store),
                 request_id='post-response',
                 on_result=lambda *args: delivered.append(args),
             )
@@ -393,7 +417,7 @@ async def test_killed_dispatcher_after_response_keeps_unknown_reservation(
         await replacement.start()
         await eventually(lambda: replacement._owner_ready, seconds=15)
         recovered = store.metadata(before.attempt_id)
-        assert recovered.state == 'outcome_unknown'
+        assert recovered.state == 'executing'
         assert recovered.attempt_id == before.attempt_id
         assert recovered.claim_id == before.claim_id
         assert recovered.execution_seq == before.execution_seq
@@ -423,16 +447,24 @@ async def test_killed_dispatcher_after_response_keeps_unknown_reservation(
             if observation['server_time_ms'] >= recovered.uncertainty_until
         )
         still_unknown = store.metadata(before.attempt_id)
-        assert post_uncertainty['disposition'] == 'outcome_unknown'
+        assert post_uncertainty['disposition'] == 'finished'
         assert post_uncertainty['server_time_ms'] < before.expires_at_ms
-        assert still_unknown.state == 'outcome_unknown'
+        assert still_unknown.state == 'failed'
         assert still_unknown.attempt_id == before.attempt_id
         assert still_unknown.claim_id == before.claim_id
         assert still_unknown.execution_seq == before.execution_seq
         assert still_unknown.expires_at_ms == before.expires_at_ms
-        assert store.read_result(before.producer_id, before.attempt_id) is None
+        assert store.read_result(before.producer_id, before.attempt_id) == {
+            'error': 'remote_outcome_unknown',
+            'category': 'dispatcher_owner_lost',
+        }
         assert store.client.exists(store.keys.alive(before.producer_id))
-        assert not task.done() and delivered == []
+        from marie.engine.exceptions import BatchExecutionError
+
+        with pytest.raises(BatchExecutionError) as caught:
+            await task
+        assert caught.value.primary_error.category == 'dispatcher_owner_lost'
+        assert delivered == []
         assert len(received) == 1
         assert store.usage()['reserved_items'] == 1
         assert store.route_status('pool')['reserved_items'] == 1
@@ -449,7 +481,10 @@ async def test_killed_dispatcher_after_response_keeps_unknown_reservation(
         await eventually(lambda: store.usage()['reserved_items'] == 0)
         assert store.route_status('pool')['reserved_items'] == 0
         assert int(store.endpoint_status('endpoint')['reserved_items']) == 0
-        assert store.read_result(before.producer_id, before.attempt_id) is None
+        assert store.read_result(before.producer_id, before.attempt_id) == {
+            'error': 'remote_outcome_unknown',
+            'category': 'dispatcher_owner_lost',
+        }
         assert len(received) == 1 and delivered == []
         print(
             json.dumps(
@@ -482,13 +517,14 @@ async def test_killed_dispatcher_after_response_keeps_unknown_reservation(
 
 
 async def test_killed_dispatcher_after_durable_finish_delivers_once(
-    store, http_endpoint, tmp_path
+    store, http_endpoint, tmp_path, monkeypatch
 ):
     from test_request_dispatcher import dispatcher_for
 
     url, received, _, _ = http_endpoint
     path = tmp_path / 'after-finish.jsonl'
     child = await start_dispatcher(store, path, url, barrier='after_finish')
+    postpone_result_ack(monkeypatch)
     producer = processor_for(store, batch_timeout=15)
     replacement = dispatcher_for(store, url, owner_lease_ms=500)
     delivered = []
@@ -498,7 +534,7 @@ async def test_killed_dispatcher_after_durable_finish_delivers_once(
         task = asyncio.create_task(
             asyncio.to_thread(
                 producer.batch_generate_calls,
-                calls=calls(1),
+                calls=calls(1, store),
                 request_id='lost-finish-ack',
                 on_result=lambda *args: delivered.append(args),
             )

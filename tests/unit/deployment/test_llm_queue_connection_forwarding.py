@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import time
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -20,9 +19,7 @@ _COMPOSE_SERVICES = {
     _ROOT / 'Dockerfiles' / 'docker-compose.gateway.yml': ['marie-gateway'],
     _ROOT / 'Dockerfiles' / 'docker-compose.allinone.yml': ['marie-gateway'],
     _ROOT / 'Dockerfiles' / 'docker-compose.extract.yml': ['marie-extract-executor'],
-    _ROOT
-    / 'Dockerfiles'
-    / 'docker-compose.g5-annotators.yml': [
+    _ROOT / 'Dockerfiles' / 'docker-compose.g5-annotators.yml': [
         'annotator-g5-llm',
         'annotator-g5-table',
         'annotator-g5-parser',
@@ -30,6 +27,37 @@ _COMPOSE_SERVICES = {
         'annotator-g5-table-parser',
     ],
 }
+
+
+def test_programmatic_aimock_uses_direct_host_networking_by_default() -> None:
+    environment = os.environ.copy()
+    environment.update(AIMOCK_PORT='4010', AIMOCK_ADMIN_PORT='4011')
+    environment.pop('AIMOCK_HOST', None)
+    result = subprocess.run(
+        [
+            'docker',
+            'compose',
+            '--env-file',
+            '/dev/null',
+            '-f',
+            str(_ROOT / 'Dockerfiles/docker-compose.mock-llm-programmatic.yml'),
+            'config',
+            '--format',
+            'json',
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    configuration = json.loads(result.stdout)
+    service = configuration['services']['aimock-programmatic']
+    assert service['network_mode'] == 'host'
+    assert not service.get('ports')
+    assert not service.get('networks')
+    assert not configuration.get('networks')
+    assert service['environment']['AIMOCK_HOST'] == '127.0.0.1'
 
 
 def _queue_pool_values() -> dict[str, Any]:
@@ -386,7 +414,9 @@ def test_run_gateway_forwards_the_canonical_connection_to_legacy_images(
 
     assert result.returncode == 0, result.stderr
     arguments = docker_log.read_text().splitlines()
-    assert 'LLM_QUEUE_CONTRACT_VERSION=v2' in arguments
+    assert not any(
+        value.startswith('LLM_QUEUE_CONTRACT_VERSION=') for value in arguments
+    )
     assert 'LLM_QUEUE_URL=redis://canonical-queue:6380/9' in arguments
     assert 'LLM_QUEUE_VALKEY_URL=redis://canonical-queue:6380/9' in arguments
 
@@ -423,111 +453,108 @@ def test_bootstrap_hides_queue_connection_contents() -> None:
 
 
 @pytest.mark.parametrize('store', ['valkey', 'redis'])
-def test_v2_queue_round_trip_uses_configured_brand_neutral_url(store: str) -> None:
+def test_durable_queue_round_trip_uses_configured_brand_neutral_url(store: str) -> None:
     stores_file = os.environ.get('MARIE_LLM_QUEUE_TEST_STORES')
     if not stores_file:
-        pytest.skip(
-            'set MARIE_LLM_QUEUE_TEST_STORES to run against isolated queue stores'
-        )
-
-    stores = json.loads(Path(stores_file).read_text())
-    url = stores[store]['url']
+        pytest.skip('isolated queue store manifest required')
 
     from marie.engine.completion_contract import (
-        COMPLETION_QUEUE_CONTRACT_VERSION,
-        CompletionReplyEnvelope,
+        CompletionCallParams,
         QueuedCompletionEnvelope,
-        build_completion_call,
     )
-    from marie.engine.llm_queue.config import LlmQueueConfig
-    from marie.engine.llm_queue.queue_io import StoreListQueueClient
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
+    from marie.engine.llm_queue.store import RequestStore
 
-    suffix = uuid.uuid4().hex
-    pool_id = f'task2-{store}-{suffix}'
-    producer_id = f'task2-{store}-{suffix}'
-    config = LlmQueueConfig(enabled=True, queue_url=url, pool_id=pool_id)
-    client = StoreListQueueClient(config.queue_url)
+    url = json.loads(Path(stores_file).read_text())[store]['url']
+    fabric_id = 'deployment-' + uuid.uuid4().hex
+    config = LlmQueueRuntimeConfig(
+        enabled=True, queue_url=url, fabric_group_id=fabric_id
+    )
+    client = RequestStore(config.queue_url, fabric_id=fabric_id)
+    owner = client.acquire_owner('deployment-test', lease_ms=10_000)
+    client.configure_route(
+        owner,
+        'pool',
+        'endpoint',
+        revision='r1',
+        execution_limit=1,
+        execution_bytes=100_000,
+    )
+    producer_id = client.create_producer(lease_ms=10_000)
     request = QueuedCompletionEnvelope(
-        request_id=f'request-{suffix}',
+        fabric_group_id=fabric_id,
         producer_id=producer_id,
-        pool_id=pool_id,
-        submitted_at=time.time(),
-        call=build_completion_call(
+        attempt_id=uuid.uuid4().hex,
+        pool_id='pool',
+        endpoint_id='endpoint',
+        config_revision='r1',
+        logical_batch_id='deployment-batch',
+        logical_task_id='deployment-task',
+        item_index=0,
+        expires_at_ms=client.server_time_ms() + 5000,
+        call=CompletionCallParams(
             model='queue-round-trip-test',
             messages=[{'role': 'user', 'content': 'round trip'}],
-            stream=False,
         ),
     )
-
+    claim_id = uuid.uuid4().hex
     try:
-        client.push_request(request)
-        received_request = client.pop_request(pool_id, timeout=1)
-        assert received_request is not None
+        assert client.admit(request).disposition == 'admitted'
         assert (
-            received_request.contract_version
-            == COMPLETION_QUEUE_CONTRACT_VERSION
-            == 'v2'
+            client.claim(
+                owner, request.attempt_id, pool_id='pool', claim_id=claim_id
+            ).disposition
+            == 'claimed'
         )
-        assert received_request.call.messages == [
+        received = client.fetch_payload(owner, request.attempt_id, claim_id=claim_id)
+        assert received['schema_version'] == 1
+        assert received['call']['messages'] == [
             {'role': 'user', 'content': 'round trip'}
         ]
-
-        client.push_reply(
-            CompletionReplyEnvelope(
-                request_id=request.request_id,
-                producer_id=producer_id,
-                pool_id=pool_id,
-                status='ok',
-                completed_at=time.time(),
-                completion={'choices': [{'message': {'content': 'complete'}}]},
-            ),
-            ttl_seconds=60,
+        started = client.authorize_start(owner, request.attempt_id, claim_id=claim_id)
+        assert started.disposition == 'started'
+        assert (
+            client.finish(
+                owner,
+                request.attempt_id,
+                claim_id=claim_id,
+                execution_seq=started.execution_seq,
+                result={'choices': [{'message': {'content': 'complete'}}]},
+            ).disposition
+            == 'finished'
         )
-        received_reply = client.pop_reply(producer_id, timeout=1)
-        assert received_reply is not None
-        assert received_reply.contract_version == 'v2'
-        assert received_reply.completion == {
-            'choices': [{'message': {'content': 'complete'}}]
-        }
+        result = client.read_result(producer_id, request.attempt_id)
+        assert result == {'choices': [{'message': {'content': 'complete'}}]}
+        assert client.ack_result(producer_id, request.attempt_id).disposition == 'acked'
     finally:
+        client.release_owner(owner)
+        keys = list(client.client.scan_iter(match=client.keys.prefix + '*'))
+        if keys:
+            client.client.delete(*keys)
         client.close()
 
 
-@pytest.mark.parametrize('version', ['v2', 'v3'])
-def test_helm_forwards_explicit_contract_version(tmp_path: Path, version: str) -> None:
+def test_helm_enabled_queue_has_no_contract_selector(tmp_path: Path) -> None:
     documents = _render(
         tmp_path,
-        {
-            'global': {'llmQueue': {'enabled': True, 'contractVersion': version}},
-            **_queue_pool_values(),
-        },
+        {'global': {'llmQueue': {'enabled': True}}, **_queue_pool_values()},
     )
     for workload in _assert_queue_workloads(documents):
-        assert (
-            _queue_environment(workload)['LLM_QUEUE_CONTRACT_VERSION']['value']
-            == version
-        )
+        environment = _queue_environment(workload)
+        assert environment['LLM_QUEUE_ENABLED']['value'] == 'true'
+        assert 'LLM_QUEUE_CONTRACT_VERSION' not in environment
 
 
-def test_helm_rejects_unknown_contract_version(tmp_path: Path) -> None:
-    error = _render_failure(
-        tmp_path, {'global': {'llmQueue': {'enabled': True, 'contractVersion': 'v4'}}}
-    )
-    assert 'global.llmQueue.contractVersion must be v2 or v3' in error
-
-
-@pytest.mark.parametrize(
-    'environment,expected', [({}, 'v2'), ({'LLM_QUEUE_CONTRACT_VERSION': 'v3'}, 'v3')]
-)
-def test_compose_forwards_contract_selection(
-    tmp_path: Path, environment: dict[str, str], expected: str
+@pytest.mark.parametrize('enabled', ['true', 'false'])
+def test_compose_queue_enablement_has_no_contract_selector(
+    tmp_path: Path, enabled: str
 ) -> None:
     for source, services in _COMPOSE_SERVICES.items():
         config = _render_compose(
-            _minimal_compose_file(tmp_path, source, services), environment
+            _minimal_compose_file(tmp_path, source, services),
+            {'LLM_QUEUE_ENABLED': enabled},
         )
         for service in services:
-            assert (
-                config['services'][service]['environment']['LLM_QUEUE_CONTRACT_VERSION']
-                == expected
-            )
+            environment = config['services'][service]['environment']
+            assert environment['LLM_QUEUE_ENABLED'] == enabled
+            assert 'LLM_QUEUE_CONTRACT_VERSION' not in environment

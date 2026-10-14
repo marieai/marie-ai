@@ -91,7 +91,6 @@ class LlmQueueRuntimeConfig:
     max_inline_payload_bytes: int
     fabric_group_id: Optional[str] = None
     gateway_id: Optional[str] = None
-    queue_contract_version: str = "v2"
 
     def __init__(
         self,
@@ -112,7 +111,6 @@ class LlmQueueRuntimeConfig:
         gateway_id: Optional[str] = None,
         *,
         queue_url: Optional[str] = None,
-        queue_contract_version: str = "v2",
     ) -> None:
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(
@@ -154,11 +152,6 @@ class LlmQueueRuntimeConfig:
         )
         object.__setattr__(self, "fabric_group_id", fabric_group_id)
         object.__setattr__(self, "gateway_id", gateway_id)
-        object.__setattr__(
-            self,
-            "queue_contract_version",
-            resolve_queue_contract_version(queue_contract_version),
-        )
 
     @property
     def valkey_url(self) -> Optional[str]:
@@ -174,7 +167,6 @@ class LlmQueueRuntimeConfig:
         pool_id: Optional[str] = None,
         producer_id: Optional[str] = None,
         fabric_group_id: Optional[str] = None,
-        queue_contract_version: Optional[str] = None,
     ) -> "LlmQueueRuntimeConfig":
         alive_ttl = int(os.getenv("LLM_QUEUE_PRODUCER_TTL_SECONDS", "30"))
         refresh_interval = float(
@@ -190,9 +182,6 @@ class LlmQueueRuntimeConfig:
         max_batch_items = int(os.getenv("LLM_QUEUE_MAX_BATCH_ITEMS", "8"))
 
         return cls(
-            queue_contract_version=resolve_queue_contract_version(
-                queue_contract_version, os.getenv("LLM_QUEUE_CONTRACT_VERSION")
-            ),
             enabled=(llm_queue_enabled() if enabled is None else enabled),
             queue_url=_resolve_queue_url(
                 queue_url,
@@ -237,21 +226,8 @@ class LlmQueueRuntimeConfig:
         )
 
 
-# Compatibility name for trusted runtime and legacy-drain call sites.
-LlmQueueConfig = LlmQueueRuntimeConfig
-
-
 def _default_producer_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex}"
-
-
-def resolve_queue_contract_version(
-    explicit: Optional[str] = None, environment: Optional[str] = None
-) -> str:
-    value = _nonempty(explicit) or _nonempty(environment) or "v2"
-    if value not in {"v2", "v3"}:
-        raise ValueError("queue_contract_version must be v2 or v3")
-    return value
 
 
 def resolve_fabric_id(*values: Optional[str]) -> str:
@@ -263,7 +239,9 @@ def resolve_fabric_id(*values: Optional[str]) -> str:
         if value and value.strip()
     }
     if len(identities) != 1:
-        raise ValueError("V3 requires one nonempty, consistent fabric identity")
+        raise ValueError(
+            "Queued dispatch requires one nonempty, consistent fabric identity"
+        )
     return identities.pop()
 
 

@@ -61,6 +61,7 @@ class OpenAIEngine(EngineLM):
                 "queue_contract_version",
                 "llm_queue_contract_version",
                 "queue_producer_id",
+                "queue_client",
             )
         ):
             raise ValueError("caller_pool_forbidden")
@@ -90,7 +91,6 @@ class OpenAIEngine(EngineLM):
             batch_timeout=batch_timeout,
             backend_address=backend_address,
             queue_enabled=kwargs.get("queue_enabled"),
-            queue_client=kwargs.get("queue_client"),
             queue_url=kwargs.get("queue_url"),
             queue_valkey_url=kwargs.get("queue_valkey_url"),
             queue_fabric_group_id=kwargs.get("queue_fabric_group_id"),
@@ -103,7 +103,7 @@ class OpenAIEngine(EngineLM):
             )
 
     def build_queue_dispatcher(self):
-        return self.batch_processor.build_queue_dispatcher()
+        raise RuntimeError('LLM queue dispatchers are gateway-owned')
 
     def close(self) -> None:
         if self.batch_processor is not None:
@@ -192,7 +192,7 @@ class OpenAIEngine(EngineLM):
         guided_whitespace_pattern: Optional[str] = None,
         **kwargs,
     ):
-        if self.batch_processor.uses_v3_queue:
+        if self.batch_processor.uses_queued_dispatch:
             kwargs.setdefault(
                 "queue_deadline", time.monotonic() + self.batch_processor.batch_timeout
             )
@@ -268,7 +268,7 @@ class OpenAIEngine(EngineLM):
         """
         queue_deadline = kwargs.pop("queue_deadline", None)
         cancellation = kwargs.pop("cancellation", None)
-        if self.batch_processor.uses_v3_queue:
+        if self.batch_processor.uses_queued_dispatch:
             from marie.engine.llm_queue.producer import PreparedCalls
 
             queue_deadline = (
@@ -322,7 +322,7 @@ class OpenAIEngine(EngineLM):
         start_time = time.time()
         try:
             bp_kwargs = {}
-            if self.batch_processor.uses_v3_queue:
+            if self.batch_processor.uses_queued_dispatch:
                 bp_kwargs.update(
                     queue_deadline=queue_deadline, cancellation=cancellation
                 )

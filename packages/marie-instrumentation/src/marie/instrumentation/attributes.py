@@ -32,7 +32,7 @@ class MarieSpanAttributes:
     LLM_DISPATCH_MODEL = "marie.llm_dispatch.model"
     LLM_DISPATCH_QUEUE_WAIT_MS = "marie.llm_dispatch.queue_wait_ms"
     LLM_DISPATCH_MESSAGE_COUNT = "marie.llm_dispatch.message_count"
-    LLM_DISPATCH_CONTRACT_VERSION = "marie.llm_dispatch.contract_version"
+    LLM_DISPATCH_MODE = "marie.llm_dispatch.mode"
     LLM_DISPATCH_STATUS = "marie.llm_dispatch.status"
     LLM_DISPATCH_EXECUTION_MS = "marie.llm_dispatch.execution_ms"
     LLM_DISPATCH_TOTAL_LATENCY_MS = "marie.llm_dispatch.total_latency_ms"

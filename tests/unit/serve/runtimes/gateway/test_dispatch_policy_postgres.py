@@ -1,4 +1,4 @@
-"""Owned PostgreSQL schema066 plus actual V3 startup and producer policy join."""
+"""Owned PostgreSQL schema066 plus actual queued dispatch startup and producer policy join."""
 
 import asyncio
 import json
@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
 from marie.engine.llm_queue.scheduler_config import DatabaseSchedulerConfigSource
 from marie.engine.llm_queue.store import RequestStore
 from psycopg.types.json import Jsonb
@@ -228,7 +228,9 @@ def test_invalid_saved_revision_activation_keeps_current_policy(failure) -> None
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('engine', ['redis', 'valkey'])
-async def test_actual_postgres_policy_selects_v3_startup_and_producer_limits(engine):
+async def test_actual_postgres_policy_selects_queued_dispatch_startup_and_producer_limits(
+    engine,
+):
     port = os.getenv('MARIE_LLM_DISPATCH_TEST_POSTGRES_PORT')
     if not port:
         pytest.skip('Owned task7 PostgreSQL fixture required')
@@ -298,9 +300,8 @@ async def test_actual_postgres_policy_selects_v3_startup_and_producer_limits(eng
         assert binding.endpoint_group_id == 'primary'
         assert binding.revision == 'r1'
         runtime = GatewayLlmDispatchRuntime(
-            queue_config=LlmQueueConfig(
+            queue_config=LlmQueueRuntimeConfig(
                 enabled=True,
-                queue_contract_version='v3',
                 fabric_group_id=identity,
                 queue_url=queue_url,
             ),

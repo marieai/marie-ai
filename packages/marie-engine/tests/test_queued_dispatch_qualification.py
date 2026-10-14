@@ -1,4 +1,4 @@
-"""Final isolated admission, retention and contract cutover boundaries."""
+"""Final isolated admission, retention and namespace-isolation boundaries."""
 
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -8,11 +8,11 @@ from uuid import uuid4
 from test_request_store import request_for, store
 
 
-def test_atomic_partial_admission_cancel_expire_retention_and_v2_isolation(store):
-    from marie.engine.llm_queue.queue_keys import request_queue_key
-
-    legacy_key = request_queue_key('qualification-' + uuid4().hex)
-    store.client.rpush(legacy_key, 'synthetic-v2-sentinel')
+def test_atomic_partial_admission_cancel_expire_retention_and_namespace_isolation(
+    store,
+):
+    unrelated_key = 'qualification:unrelated:' + uuid4().hex
+    store.client.rpush(unrelated_key, 'synthetic-unrelated-sentinel')
     try:
         producer = store.create_producer(lease_ms=10_000)
         requests = [request_for(store, producer=producer) for _ in range(6)]
@@ -41,14 +41,16 @@ def test_atomic_partial_admission_cancel_expire_retention_and_v2_isolation(store
         time.sleep(0.06)
         store.cancel_or_expire(producer, expiring.attempt_id, expire=True)
         assert store.read_result(producer, expiring.attempt_id) == {'error': 'expired'}
-        assert store.client.lrange(legacy_key, 0, -1) == ['synthetic-v2-sentinel']
+        assert store.client.lrange(unrelated_key, 0, -1) == [
+            'synthetic-unrelated-sentinel'
+        ]
         store.close_producer(producer)
         store.expire_producer(producer)
         assert store.usage()['active_items'] == store.usage()['records'] == 0
-        # A V2 consumer still sees only the original version's queue after V3 drain.
-        assert store.client.lpop(legacy_key) == 'synthetic-v2-sentinel'
+        # Unrelated data is never consumed or discarded by queue operations.
+        assert store.client.lpop(unrelated_key) == 'synthetic-unrelated-sentinel'
     finally:
-        store.client.delete(legacy_key)
+        store.client.delete(unrelated_key)
 
 
 def test_same_pool_and_attempt_are_isolated_across_fabrics(store):
@@ -60,7 +62,6 @@ def test_same_pool_and_attempt_are_isolated_across_fabrics(store):
         + str(store.client.connection_pool.connection_kwargs['port'])
         + '/0',
         fabric_id='other-' + uuid4().hex,
-        version='v3',
         limits=store.limits,
     )
     try:

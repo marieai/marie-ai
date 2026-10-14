@@ -107,7 +107,8 @@ class Runtime:
         return {
             'pool_id': self.store.pool,
             'request_queue_depth': 10,
-            'contract_version': 'v3',
+            'mode': 'queued-dispatch',
+            'sampling_available': True,
         }
 
     def inflight_requests_snapshot(self):
@@ -243,28 +244,27 @@ def test_deadline_is_checked_between_metadata_reads_without_cancellation(monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('block_at', [1, 2])
-async def test_v2_health_stops_before_next_depth_read(block_at):
-    from marie.engine.llm_queue.config import LlmQueueConfig
-    from marie.engine.llm_queue.dispatcher import DrrQueuedBatchDispatcher
-    from marie.engine.llm_queue.scheduler import DrrLaneConfig
+async def test_queued_health_stops_before_next_depth_read(block_at: int) -> None:
+    from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import DispatchLane
 
+    store = MetadataStore('p1')
+    store.route_status = lambda pool: {'reserved_items': 0, 'reserved_bytes': 0}
     entered, release = threading.Event(), threading.Event()
     reads = []
 
-    def depth(pool):
+    def depth(pool: str) -> int:
         reads.append(pool)
         if len(reads) == block_at:
             entered.set()
             assert release.wait(2)
         return 1
 
-    runtime = DrrQueuedBatchDispatcher(
-        queue_client=SimpleNamespace(request_queue_depth=depth),
-        execution_adapter=object(),
-        logger=object(),
-        config=LlmQueueConfig(enabled=True, fabric_group_id='fabric'),
-        lanes=[DrrLaneConfig('p1'), DrrLaneConfig('p2')],
-        total_concurrent_dispatch=1,
+    store.ready_depth = depth
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[RegisteredEndpoint('endpoint', 'https://example.test')],
+        lanes=[DispatchLane('p1', 'endpoint'), DispatchLane('p2', 'endpoint')],
     )
     registry.register_dispatcher('runtime', runtime)
     task = asyncio.create_task(registry.read_runtime_snapshot(fabric_group_id='fabric'))
@@ -276,9 +276,16 @@ async def test_v2_health_stops_before_next_depth_read(block_at):
             await task
     finally:
         release.set()
-    await asyncio.get_running_loop().run_in_executor(
-        registry._READ_WORKER, lambda: None
-    )
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.get_running_loop().run_in_executor(
+            registry._READ_WORKER, lambda: None
+        )
+        for worker in (
+            runtime._store_workers,
+            runtime._lease_worker,
+            runtime._refresh_worker,
+        ):
+            worker.shutdown()
     assert reads == before
 
 

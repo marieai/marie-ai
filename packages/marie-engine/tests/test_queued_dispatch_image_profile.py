@@ -3,9 +3,9 @@
 Optional setup in an isolated profiling environment:
     python -m pip install memray==1.20.0
 With project source paths and MARIE_LLM_QUEUE_TEST_STORES configured:
-    python -m pytest packages/marie-engine/tests/test_v3_image_profile.py -q
-The module skips when Memray is absent. These profiles require the explicitly
-coordinated 512 MiB owned-store window described in the Task 6 report.
+    python -m pytest packages/marie-engine/tests/test_queued_dispatch_image_profile.py -q
+The module skips when Memray is absent. Enable MARIE_LLM_QUEUE_PROFILE_WINDOW=512m
+only for the coordinated 512 MiB owned-store profiling window.
 """
 
 import asyncio
@@ -24,15 +24,19 @@ from marie.engine.llm_queue.endpoint import RegisteredEndpoint
 from marie.engine.llm_queue.request_dispatcher import DispatchLane, RequestDispatcher
 from marie.engine.llm_queue.store import RequestStore
 from PIL import Image
+from queued_dispatch_qualification_evidence import record_evidence
+from test_queued_dispatch_producer import engine_for, registered_context
 from test_request_dispatcher import eventually, store
-from test_v3_producer import engine_for
-from v3_qualification_evidence import record_evidence
 
 from marie.extract.annotators import util
 
 memray = pytest.importorskip('memray')
 
 
+@pytest.mark.skipif(
+    os.getenv('MARIE_LLM_QUEUE_PROFILE_WINDOW') != '512m',
+    reason='Coordinated 512 MiB owned-store window required (MARIE_LLM_QUEUE_PROFILE_WINDOW=512m)',
+)
 @pytest.mark.parametrize('content', ['compressible', 'high_entropy'])
 async def test_representative_pages_release_between_batches_during_outage(
     store, monkeypatch, tmp_path, content
@@ -47,7 +51,7 @@ async def test_representative_pages_release_between_batches_during_outage(
         claim_lease_ms=10_000,
     )
     measured = RequestStore(
-        store.test_url, fabric_id='profile-' + uuid4().hex, version='v3', limits=limits
+        store.test_url, fabric_id='profile-' + uuid4().hex, limits=limits
     )
     measured.test_url = store.test_url
     source = tmp_path / 'source'
@@ -168,6 +172,7 @@ async def test_representative_pages_release_between_batches_during_outage(
                     SimpleNamespace(render=lambda _: 'synthetic'),
                     SimpleNamespace(source_metadata={'ocr': []}),
                     engine=engine,
+                    request_context=registered_context(measured),
                     is_multimodal=True,
                     expect_output='none',
                     mini_batch_size=5,

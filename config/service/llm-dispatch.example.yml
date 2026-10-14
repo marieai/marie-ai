@@ -1,8 +1,13 @@
-# Opt in only for a qualified fabric. Also set LLM_QUEUE_ENABLED=true and LLM_QUEUE_URL.
-# Producer V3 integration is a separate rollout requirement; the deployed default remains v2.
-queue_contract_version: v3
+# Enable queued dispatch with LLM_QUEUE_ENABLED=true and LLM_QUEUE_URL.
+# Provision endpoint credentials, lanes, limits, and consistent fabric identity before startup.
+# Quiesce old writers, drain old queues, and affirmatively settle remote calls before cutover.
 fabric_group_id: example-fabric
 llm_dispatch:
+  policy: drr
+  total_concurrent_dispatch: 8
+  limits:
+    max_execution_items: 8
+    max_execution_bytes: 67108864
   endpoints:
     - endpoint_id: primary
       base_url: https://inference.example/v1

@@ -1,4 +1,4 @@
-"""Opt-in V3 authoritative request storage; no provider or runtime integration."""
+"""Authoritative durable request storage for queued dispatch."""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ from uuid import uuid4
 
 from marie.engine.completion_contract import (
     CompletionCallParams,
-    QueuedCompletionEnvelopeV3,
+    QueuedCompletionEnvelope,
     require_terminal_completion,
 )
-from marie.engine.llm_queue.queue_io import _build_sync_client
 from marie.engine.llm_queue.queue_keys import QueueKeys, validate_identifier
+from marie.engine.llm_queue.store_client import _build_sync_client
 
 
 class StoreUnavailable(RuntimeError):
@@ -143,6 +143,8 @@ class PreparedAdmission:
     expires_at_ms: int
     call: CompletionCallParams
     estimated_cost_units: int
+    traceparent: str | None = None
+    tracestate: str | None = None
 
     @classmethod
     def create(
@@ -159,6 +161,8 @@ class PreparedAdmission:
         expires_at_ms: int,
         call: CompletionCallParams,
         estimated_cost_units: int,
+        traceparent: str | None = None,
+        tracestate: str | None = None,
     ) -> "PreparedAdmission":
         values = {
             "fabric_group_id": fabric_group_id,
@@ -190,6 +194,8 @@ class PreparedAdmission:
             expires_at_ms=expires_at_ms,
             call=call,
             estimated_cost_units=estimated_cost_units,
+            traceparent=traceparent,
+            tracestate=tracestate,
         )
 
     def expected_content_digest(self) -> str:
@@ -237,6 +243,9 @@ class RequestMetadata:
     replica_reserved: int = 0
     policy_generation: int = 0
     reserved: int = 0
+    traceparent: str | None = None
+    tracestate: str | None = None
+    schema_version: int = 1
 
 
 class RequestStore:
@@ -251,13 +260,10 @@ class RequestStore:
         url: str,
         *,
         fabric_id: str,
-        version: str,
         limits: StoreLimits | None = None,
         _join_existing: bool = False,
         io_timeout_seconds: float = 2,
     ) -> None:
-        if version != "v3":
-            raise ValueError("RequestStore requires explicit version v3")
         self.keys = QueueKeys(fabric_id)
         self.limits = limits or StoreLimits()
         self.client = _build_sync_client(
@@ -322,7 +328,6 @@ class RequestStore:
         return cls(
             url,
             fabric_id=fabric_id,
-            version="v3",
             _join_existing=True,
             io_timeout_seconds=io_timeout_seconds,
         )
@@ -809,13 +814,14 @@ class RequestStore:
             registry_ids=registry_ids,
         )
 
-    def admit(self, request: QueuedCompletionEnvelopeV3) -> StoreReply:
+    def admit(self, request: QueuedCompletionEnvelope) -> StoreReply:
         """Admit one canonical call or reconcile its prior immutable admission."""
         if (
-            request.contract_version != "v3"
+            type(request.schema_version) is not int
+            or request.schema_version != 1
             or QueueKeys(request.fabric_group_id) != self.keys
         ):
-            raise ValueError("Request version and fabric must match this V3 store")
+            raise ValueError("Request schema and fabric must match this dispatch store")
         payload, payload_bytes, digest, model = self._serialize_admission(request)
         return self._change(
             "admit",
@@ -833,10 +839,12 @@ class RequestStore:
             digest=digest,
             cost=request.estimated_cost_units,
             model=model,
+            traceparent=request.traceparent,
+            tracestate=request.tracestate,
         )
 
     def _serialize_admission(
-        self, request: QueuedCompletionEnvelopeV3
+        self, request: QueuedCompletionEnvelope
     ) -> tuple[str, int, str, str]:
         require_terminal_completion(request.call)
         for value in (
@@ -879,6 +887,12 @@ class RequestStore:
         del prepared
         canonical = asdict(request)
         canonical["fabric_group_id"] = self.keys.fabric_id
+        for key in ("traceparent", "tracestate"):
+            value = canonical[key]
+            if value is None:
+                canonical.pop(key)
+            elif not isinstance(value, str) or len(value) > 512:
+                raise ValueError(f"{key} must be a bounded W3C header")
         payload = json.dumps(
             canonical, separators=(",", ":"), sort_keys=True, allow_nan=False
         )
@@ -887,6 +901,8 @@ class RequestStore:
             raise ValueError("Inline request exceeds configured payload limit")
         # A retry cannot extend the stored deadline; it is not part of the content digest.
         canonical.pop("expires_at_ms")
+        canonical.pop("traceparent", None)
+        canonical.pop("tracestate", None)
         digest = hashlib.sha256(
             json.dumps(
                 canonical, separators=(",", ":"), sort_keys=True, allow_nan=False
@@ -898,7 +914,7 @@ class RequestStore:
         """Admit from one projected immutable logical route."""
         require_terminal_completion(request.call)
         if QueueKeys(request.fabric_group_id) != self.keys:
-            raise ValueError("Request fabric must match this V3 store")
+            raise ValueError("Request fabric must match this dispatch store")
         for value in (
             request.producer_id,
             request.attempt_id,
@@ -921,8 +937,7 @@ class RequestStore:
         projection = self.resolve_routing_manifest(request.job_id, request.work_unit_id)
         if projection is None:
             return StoreReply(disposition="routing_manifest_missing")
-        envelope = QueuedCompletionEnvelopeV3(
-            contract_version="v3",
+        envelope = QueuedCompletionEnvelope(
             fabric_group_id=self.keys.fabric_id,
             producer_id=request.producer_id,
             attempt_id=request.attempt_id,
@@ -935,6 +950,8 @@ class RequestStore:
             expires_at_ms=request.expires_at_ms,
             call=request.call,
             estimated_cost_units=request.estimated_cost_units,
+            traceparent=request.traceparent,
+            tracestate=request.tracestate,
         )
         payload, payload_bytes, _, model = self._serialize_admission(envelope)
         return self._change(
@@ -956,6 +973,8 @@ class RequestStore:
             digest=request.content_digest,
             cost=request.estimated_cost_units,
             model=model,
+            traceparent=request.traceparent,
+            tracestate=request.tracestate,
         )
 
     def metadata(self, attempt_id: str) -> RequestMetadata | None:
@@ -969,6 +988,8 @@ class RequestStore:
         if values[0] is None:
             return None
         data = dict(zip(names, values))
+        if data['schema_version'] != '1':
+            raise ValueError('Unsupported queued request schema')
         for name in (
             "execution_seq",
             "expires_at_ms",
@@ -984,6 +1005,7 @@ class RequestStore:
             "replica_reserved",
             "policy_generation",
             "reserved",
+            "schema_version",
         ):
             data[name] = int(data[name] or 0)
         if data["admitted_at_ms"] is not None:
@@ -1223,7 +1245,7 @@ class RequestStore:
         if result["disposition"] != "payload":
             raise TransitionRejected(result["disposition"])
         payload = json.loads(result["payload"])
-        QueuedCompletionEnvelopeV3.from_json(result["payload"])
+        QueuedCompletionEnvelope.from_json(result["payload"])
         return payload
 
     def authorize_start(
@@ -1405,7 +1427,7 @@ class RequestStore:
             "retention",
             "producers",
         }:
-            raise ValueError("Unsupported V3 index")
+            raise ValueError("Unsupported dispatch index")
         self._page(limit)
         if type(offset) is not int or not 0 <= offset <= self.limits.max_records:
             raise ValueError("Invalid bounded index offset")

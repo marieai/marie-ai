@@ -304,7 +304,7 @@ def test_maximum_store_cost_gets_credit_without_a_million_poll_cycles():
     from marie.engine.llm_queue.scheduler import DrrLaneConfig, DrrLaneScheduler
 
     scheduler = DrrLaneScheduler(
-        queue_client=None, lanes=[DrrLaneConfig('a')], total_concurrent_dispatch=1
+        lanes=[DrrLaneConfig('a')], total_concurrent_dispatch=1
     )
     scheduler.sync_reservations({}, 0, {'a'})
     assert scheduler.select_metadata({'a': 1_000_000}) == 'a'
@@ -391,8 +391,8 @@ async def test_producer_window_bounds_preparation_and_effective_image_cost(store
     import threading
 
     from marie.engine.completion_contract import CompletionCallParams, RequestContext
-    from marie.engine.llm_queue.config import LlmQueueConfig
-    from marie.engine.llm_queue.producer import PreparedCalls, V3Producer
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
+    from marie.engine.llm_queue.producer import PreparedCalls, QueuedDispatchProducer
     from marie.engine.llm_queue.store import RoutingManifestProjection
     from test_request_dispatcher import eventually
 
@@ -409,11 +409,10 @@ async def test_producer_window_bounds_preparation_and_effective_image_cost(store
         endpoint_revision='r1',
     )
     assert store.project_routing_manifest(route).disposition == 'projected'
-    producer = V3Producer(
-        config=LlmQueueConfig(
+    producer = QueuedDispatchProducer(
+        config=LlmQueueRuntimeConfig(
             enabled=True,
             queue_url=store.test_url,
-            queue_contract_version='v3',
             fabric_group_id=store.keys.fabric_id,
             max_buffered_requests_per_pool=2,
         )
@@ -808,7 +807,6 @@ def test_burst_limit_and_mixed_cost_credit_remain_bounded():
     from marie.engine.llm_queue.scheduler import DrrLaneConfig, DrrLaneScheduler
 
     scheduler = DrrLaneScheduler(
-        queue_client=None,
         lanes=[
             DrrLaneConfig('a', quantum=8, max_burst_per_visit=2),
             DrrLaneConfig('b', quantum=1),
@@ -1120,8 +1118,8 @@ async def test_producer_effective_cost_is_immutable_through_safe_retry(store):
     import threading
 
     from marie.engine.completion_contract import CompletionCallParams, RequestContext
-    from marie.engine.llm_queue.config import LlmQueueConfig
-    from marie.engine.llm_queue.producer import V3Producer
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
+    from marie.engine.llm_queue.producer import QueuedDispatchProducer
     from marie.engine.llm_queue.store import RoutingManifestProjection
     from test_request_dispatcher import eventually
 
@@ -1138,11 +1136,10 @@ async def test_producer_effective_cost_is_immutable_through_safe_retry(store):
         endpoint_revision='r1',
     )
     assert store.project_routing_manifest(route).disposition == 'projected'
-    producer = V3Producer(
-        config=LlmQueueConfig(
+    producer = QueuedDispatchProducer(
+        config=LlmQueueRuntimeConfig(
             enabled=True,
             queue_url=store.test_url,
-            queue_contract_version='v3',
             fabric_group_id=store.keys.fabric_id,
         )
     )

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from marie.engine.completion_contract import COMPLETION_QUEUE_CONTRACT_VERSION
+from marie.engine.llm_queue.queue_keys import validate_identifier
 
 
 class DispatchRuntime(Protocol):
@@ -65,7 +65,7 @@ class SnapshotReadBudget:
 
 
 _FIELDS = frozenset(
-    """contract_version fabric_group_id pool_id request_id attempt_id
+    """mode fabric_group_id pool_id request_id attempt_id
 endpoint_id config_revision dispatcher_id gateway_id model lifecycle_stage state_source
 submitted_at admitted_at_ms oldest_pending_admitted_at_ms popped_at expires_at_ms payload_bytes cost execution_seq next_eligible
 state_updated_at queue_wait_age_seconds inflight_age_seconds
@@ -80,12 +80,13 @@ execution_bytes protected_slots borrowed_slots config_generation waiting_reason 
 observed_at_ms policy_generation policy_digest endpoint_group_id revision replica_id group_id selected_replica_id
 charged_cost refunded_cost committed_charge accepted completed drain_references oldest_pending_age_seconds gate processing_truncated""".split()
     + """ charge_sequence refund_state endpoint_count endpoint_group_count details_truncated port
-held_reservations_sampled state_counts_truncated policy_refresh_inflight policy_refresh_timed_out""".split()
+held_reservations_sampled state_counts_truncated policy_refresh_inflight policy_refresh_timed_out
+state uncertainty_until release_after_ms""".split()
 )
 _ERRORS = frozenset(
     """connect_refused connect_timeout timeout outcome_unknown
 store_unavailable invalid_response response_too_large endpoint_policy request_rejected
-rate_limited authentication call_timeout connect_error invalid_request protocol_error provider_rejected read_error read_timeout route_or_model transport_unknown write_error write_timeout connect_unknown pool_pressure provider_unavailable provider_5xx replica_unavailable unsupported_streaming v3_start_failed owner_lost cancelled expired queue_unavailable dispatch_error owner_uncertain start_unconfirmed policy_refresh_unavailable binding_conflict binding_migration_required""".split()
+rate_limited authentication call_timeout connect_error invalid_request protocol_error provider_rejected read_error read_timeout route_or_model transport_unknown write_error write_timeout connect_unknown pool_pressure provider_unavailable provider_5xx replica_unavailable unsupported_streaming dispatch_start_failed runtime_mode_mismatch owner_lost cancelled expired queue_unavailable dispatch_error owner_uncertain start_unconfirmed policy_refresh_unavailable binding_conflict binding_migration_required""".split()
 )
 
 _NUMBER_FIELDS = frozenset(
@@ -99,6 +100,7 @@ inflight_request_count pool_count total_concurrent_dispatch metadata_unavailable
 reserved_bytes protected_slots borrowed_slots config_generation failures next_probe probe_successes open_until execution_limit execution_bytes last_error_at_ms""".split()
     + """ observed_at_ms policy_generation charged_cost refunded_cost committed_charge accepted completed charge_sequence drain_references oldest_pending_age_seconds""".split()
     + """ endpoint_count endpoint_group_count port held_reservations_sampled""".split()
+    + """ uncertainty_until release_after_ms""".split()
 )
 
 _STATE_NAMES = frozenset(
@@ -228,6 +230,25 @@ def unregister_dispatcher(dispatcher_id: str) -> None:
         _DISPATCHERS.pop(dispatcher_id, None)
 
 
+def release_held_reservation(fabric_group_id: str, attempt_id: str) -> str:
+    """Release a held reservation through whichever local dispatcher owns the fabric."""
+    validate_identifier(attempt_id)
+    with _REGISTRY_LOCK:
+        runtimes = [
+            runtime
+            for runtime in _DISPATCHERS.values()
+            if _fabric(runtime) == fabric_group_id
+        ]
+    for runtime in runtimes:
+        release = getattr(runtime, "release_hold", None)
+        if release is None:
+            continue
+        disposition = release(attempt_id)
+        if disposition != "not_owner":
+            return disposition
+    return "not_owner"
+
+
 def dispatch_runtime_live_state(
     limit_per_pool: int = 50,
     *,
@@ -262,7 +283,7 @@ def dispatch_runtime_live_state(
     dispatchers, pools, requests, endpoint_groups = [], [], [], []
     counted, sampled = set(), set()
     pending = 0
-    available = True
+    available = bool(items)
     for index, (identity, runtime) in enumerate(items):
         read_budget.check()
         read_budget.detail_rows_left = max(0, rows_left - read_budget.candidates_left)
@@ -271,6 +292,8 @@ def dispatch_runtime_live_state(
             raw = runtime.health(read_budget=read_budget)
         except Exception:
             raise SnapshotUnavailable("runtime_read_failed") from None
+        if raw.get("mode") != "queued-dispatch":
+            raise SnapshotUnavailable("runtime_mode_mismatch")
         if raw.get("request_queue_depth_error"):
             raise SnapshotUnavailable("runtime_read_failed")
         health = _clean(raw)
@@ -309,6 +332,11 @@ def dispatch_runtime_live_state(
             clean_lanes.append(clean)
         if isinstance(raw_lanes, list):
             health["lanes"] = clean_lanes
+        health["held_requests"] = [
+            _clean(row)
+            for row in (raw.get("held_requests") or [])[:MAX_SNAPSHOT_ROWS]
+            if isinstance(row, dict)
+        ]
         health["endpoints"] = {
             name: _clean(state)
             for name, state in list((raw.get("endpoints") or {}).items())[
@@ -326,6 +354,8 @@ def dispatch_runtime_live_state(
         dispatchers.append(
             bounded(health, 1 + len(health.get("lanes", [])) + len(health["endpoints"]))
         )
+        if health.get("sampling_available") is not True:
+            continue
         sample_key = (fabric, tuple(lane.get("pool_id") for lane in lanes))
         try:
             read_budget.check()
@@ -353,10 +383,6 @@ def dispatch_runtime_live_state(
             raise SnapshotUnavailable("runtime_read_failed") from None
         if hasattr(runtime, "metadata_unavailable"):
             health["metadata_unavailable"] = runtime.metadata_unavailable
-    versions = {
-        row.get("contract_version", COMPLETION_QUEUE_CONTRACT_VERSION)
-        for row in dispatchers
-    }
     observed_generations = {
         row.get("policy_generation")
         for row in dispatchers
@@ -391,13 +417,7 @@ def dispatch_runtime_live_state(
         for field in ("charged_cost", "refunded_cost", "committed_charge")
     }
     result = {
-        "contract_version": (
-            next(iter(versions))
-            if len(versions) == 1
-            else "mixed"
-            if versions
-            else COMPLETION_QUEUE_CONTRACT_VERSION
-        ),
+        "mode": "queued-dispatch",
         "fabric_group_id": fabric_group_id,
         "observation": {
             "observed_at_ms": observed_at_ms,
@@ -434,9 +454,8 @@ def dispatch_runtime_live_state(
             ),
             "live_request_sample_limit": limit,
             "metadata_available": available,
-            "sampling_available": all(
-                row.get("contract_version") == "v3" for row in dispatchers
-            ),
+            "sampling_available": bool(dispatchers)
+            and all(row.get("sampling_available") is True for row in dispatchers),
             **{
                 name: sum(int(row.get(name) or 0) for row in dispatchers)
                 for name in (
@@ -525,7 +544,7 @@ def routing_resource_references(
 def dispatch_runtime_snapshot(*, fabric_group_id: str | None = None) -> dict[str, Any]:
     state = dispatch_runtime_live_state(fabric_group_id=fabric_group_id)
     return {
-        "contract_version": state["contract_version"],
+        "mode": state["mode"],
         "registered_dispatchers": state["runtime_summary"]["registered_dispatchers"],
         "running_dispatchers": state["runtime_summary"]["running_dispatchers"],
         "dispatchers": state["dispatchers"],
@@ -550,6 +569,8 @@ async def read_runtime_snapshot(
                 _cancel=cancel,
                 _deadline=deadline,
             )
+        except SnapshotUnavailable:
+            raise
         except Exception:
             raise SnapshotUnavailable("runtime_read_failed") from None
         finally:

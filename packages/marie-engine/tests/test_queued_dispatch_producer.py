@@ -8,12 +8,31 @@ from uuid import uuid4
 
 import pytest
 from marie.engine.batch_processor import BatchProcessor
-from marie.engine.completion_contract import CompletionCallParams
+from marie.engine.completion_contract import CompletionCallParams, RequestContext
 from openai import AsyncOpenAI
 from test_request_dispatcher import dispatcher_for, eventually, http_endpoint, store
 
 
+def registered_context(store, *, job_id='synthetic-job', work_unit_id='synthetic-unit'):
+    from marie.engine.llm_queue.store import RoutingManifestProjection
+
+    store.project_routing_manifest(
+        RoutingManifestProjection(
+            job_id=job_id,
+            work_unit_id=work_unit_id,
+            fabric_group_id=store.keys.fabric_id,
+            policy_generation=1,
+            route_digest='d' * 64,
+            pool_id='pool',
+            endpoint_group_id='endpoint',
+            endpoint_revision='r1',
+        )
+    )
+    return RequestContext(job_id=job_id, work_unit_id=work_unit_id)
+
+
 def processor_for(store, **kwargs):
+    registered_context(store)
     return BatchProcessor(
         client=AsyncOpenAI(api_key='test', base_url='http://127.0.0.1:1/v1'),
         model_string='model',
@@ -26,8 +45,12 @@ def processor_for(store, **kwargs):
     )
 
 
-def calls(count):
-    return [CompletionCallParams(model=f'item-{i}', messages=[]) for i in range(count)]
+def calls(count, store):
+    context = registered_context(store)
+    return [
+        CompletionCallParams(model=f'item-{i}', messages=[], context=context)
+        for i in range(count)
+    ]
 
 
 async def test_batch_processor_retains_success_then_recovers_nine_in_order(
@@ -45,7 +68,7 @@ async def test_batch_processor_retains_success_then_recovers_nine_in_order(
         task = asyncio.create_task(
             asyncio.to_thread(
                 processor.batch_generate_calls,
-                calls=calls(9),
+                calls=calls(9, store),
                 request_id='original',
                 on_result=lambda ident, output: delivered.append((ident, output)),
             )
@@ -91,7 +114,7 @@ async def test_same_logical_batch_has_independent_attempts(store, http_endpoint)
                 endpoint_revision='r1',
             )
         )
-        request = calls(1)[0]
+        request = calls(1, store)[0]
         request.context = context
         result = await asyncio.gather(
             *[
@@ -126,7 +149,7 @@ def test_admission_backpressure_does_not_spin(store, monkeypatch):
     processor = processor_for(store, batch_timeout=0.15)
     try:
         with pytest.raises(BatchExecutionError):
-            processor.batch_generate_calls(calls=calls(1))
+            processor.batch_generate_calls(calls=calls(1, store))
         assert attempts <= 2
     finally:
         processor.close()
@@ -140,7 +163,7 @@ async def test_lost_admission_reply_reconciles_same_attempt(
     url, received, _, _ = http_endpoint
     runtime = dispatcher_for(store, url)
     processor = processor_for(store)
-    original = RequestStore.admit
+    original = RequestStore.admit_from_manifest
     seen = []
 
     def lose_one(self, envelope):
@@ -150,11 +173,13 @@ async def test_lost_admission_reply_reconciles_same_attempt(
             raise StoreUnavailable('lost reply')
         return reply
 
-    monkeypatch.setattr(RequestStore, 'admit', lose_one)
+    monkeypatch.setattr(RequestStore, 'admit_from_manifest', lose_one)
     await runtime.start()
     try:
         await eventually(lambda: store.resolve_route('pool'))
-        result = await asyncio.to_thread(processor.batch_generate_calls, calls=calls(3))
+        result = await asyncio.to_thread(
+            processor.batch_generate_calls, calls=calls(3, store)
+        )
         assert result == ['item-0', 'item-1', 'item-2']
         assert len(received) == 3
         assert len(set(seen)) == 3
@@ -181,7 +206,9 @@ async def test_callback_error_keeps_siblings_and_does_not_resend(store, http_end
         await eventually(lambda: store.resolve_route('pool'))
         with pytest.raises(BatchExecutionError) as raised:
             await asyncio.to_thread(
-                processor.batch_generate_calls, calls=calls(2), on_result=callback
+                processor.batch_generate_calls,
+                calls=calls(2, store),
+                on_result=callback,
             )
         assert len(delivered) == len(set(delivered)) == 2
         assert len(received) == 2
@@ -216,7 +243,11 @@ async def test_two_images_remain_one_ordered_request(store, http_endpoint):
         await eventually(lambda: store.resolve_route('pool'))
         assert await asyncio.to_thread(
             processor.batch_generate_calls,
-            calls=[CompletionCallParams(model='images', messages=messages)],
+            calls=[
+                CompletionCallParams(
+                    model='images', messages=messages, context=registered_context(store)
+                )
+            ],
         ) == ['images']
         assert len(received) == 1
         assert received[0][0]['messages'] == messages
@@ -260,6 +291,8 @@ def engine_for(store, monkeypatch, *, multimodal=False, timeout=5):
     from marie.engine.openai_engine import OpenAIEngine
 
     monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    registered_context(store)
+    registered_context(store, job_id='same-dag', work_unit_id='same-node')
     return OpenAIEngine(
         model_name='model',
         is_multimodal=multimodal,
@@ -288,7 +321,7 @@ async def test_async_cancellation_stops_future_admission_without_cancelling_sibl
     engine = engine_for(store, monkeypatch, multimodal=multimodal)
     entered = threading.Event()
     release_admission = threading.Event()
-    admit = RequestStore.admit
+    admit = RequestStore.admit_from_manifest
     attempts = []
 
     def blocked_admission(self, envelope):
@@ -299,7 +332,7 @@ async def test_async_cancellation_stops_future_admission_without_cancelling_sibl
             release_admission.wait(3)
         return result
 
-    monkeypatch.setattr(RequestStore, 'admit', blocked_admission)
+    monkeypatch.setattr(RequestStore, 'admit_from_manifest', blocked_admission)
     wrapper = MultimodalLLMCall(engine) if multimodal else LLMCall(engine)
     inputs = (
         [[Image.new('RGB', (2, 2)), 'prompt'] for _ in range(5)]
@@ -310,10 +343,18 @@ async def test_async_cancellation_stops_future_admission_without_cancelling_sibl
     try:
         await eventually(lambda: store.resolve_route('pool'))
         releases['model'] = asyncio.Event()
-        task = asyncio.create_task(wrapper.aforward(inputs))
+        task = asyncio.create_task(
+            wrapper.aforward(
+                inputs, request_contexts=[registered_context(store)] * len(inputs)
+            )
+        )
         await eventually(entered.is_set)
         sibling = asyncio.create_task(
-            asyncio.to_thread(engine.batch_generate, ['sibling'])
+            asyncio.to_thread(
+                engine.batch_generate,
+                ['sibling'],
+                request_contexts=[registered_context(store)],
+            )
         )
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -351,7 +392,11 @@ async def test_deadline_includes_preparation_and_admits_nothing_after_budget(
     try:
         await eventually(lambda: store.resolve_route('pool'))
         with pytest.raises(BatchExecutionError) as raised:
-            await asyncio.to_thread(engine.batch_generate, ['slow'])
+            await asyncio.to_thread(
+                engine.batch_generate,
+                ['slow'],
+                request_contexts=[registered_context(store)],
+            )
         assert raised.value.primary_error.category == 'deadline_exceeded'
         assert received == []
         assert store.usage()['records'] == 0
@@ -375,9 +420,15 @@ async def test_empty_multimodal_call_has_no_session_or_admission(store, monkeypa
 
 
 async def test_close_wakes_caller_and_deletes_owned_unsent_and_terminal_results(
-    store, http_endpoint
+    store, http_endpoint, monkeypatch
 ):
     from marie.engine.llm_queue.producer import ProducerClosed
+    from marie.engine.llm_queue.store import RequestStore, StoreUnavailable
+
+    def postpone_ack(self, producer_id, attempt_id):
+        raise StoreUnavailable("acknowledgement delayed")
+
+    monkeypatch.setattr(RequestStore, "ack_result", postpone_ack)
 
     url, _, releases, _ = http_endpoint
     runtime = dispatcher_for(store, url)
@@ -387,7 +438,7 @@ async def test_close_wakes_caller_and_deletes_owned_unsent_and_terminal_results(
         await eventually(lambda: store.resolve_route('pool'))
         releases['item-1'] = asyncio.Event()
         task = asyncio.create_task(
-            asyncio.to_thread(processor.batch_generate_calls, calls=calls(2))
+            asyncio.to_thread(processor.batch_generate_calls, calls=calls(2, store))
         )
         await eventually(
             lambda: store.usage()['active_items'] == 1 and store.usage()['records'] == 2
@@ -428,7 +479,11 @@ async def test_prepared_calls_released_after_admission_while_results_wait(
         await eventually(lambda: store.resolve_route('pool'))
         releases['model'] = asyncio.Event()
         task = asyncio.create_task(
-            asyncio.to_thread(engine.batch_generate, ['one', 'two', 'three'])
+            asyncio.to_thread(
+                engine.batch_generate,
+                ['one', 'two', 'three'],
+                request_contexts=[registered_context(store)] * 3,
+            )
         )
         await eventually(lambda: len(received) == 3)
         gc.collect()
@@ -471,7 +526,9 @@ async def test_expired_unknown_keeps_original_cause_and_successful_sibling(
         await eventually(lambda: store.resolve_route('pool'))
         releases['item-1'] = asyncio.Event()
         with pytest.raises(BatchExecutionError) as raised:
-            await asyncio.to_thread(processor.batch_generate_calls, calls=calls(2))
+            await asyncio.to_thread(
+                processor.batch_generate_calls, calls=calls(2, store)
+            )
         assert raised.value.primary_error.category == 'call_timeout'
         assert raised.value.successful_results[0].response == 'item-0'
         assert len(received) == 2
@@ -494,7 +551,7 @@ async def test_cancel_pending_delivery_recovers_within_original_budget(
     unavailable.set()
     cancel = RequestStore.cancel_or_expire
     attempts = []
-    admit = RequestStore.admit
+    admit = RequestStore.admit_from_manifest
 
     def record(self, envelope):
         reply = admit(self, envelope)
@@ -506,7 +563,7 @@ async def test_cancel_pending_delivery_recovers_within_original_budget(
             raise StoreUnavailable('connection unavailable')
         return cancel(self, producer, attempt, **kwargs)
 
-    monkeypatch.setattr(RequestStore, 'admit', record)
+    monkeypatch.setattr(RequestStore, 'admit_from_manifest', record)
     monkeypatch.setattr(RequestStore, 'cancel_or_expire', unavailable_cancel)
     cancellation = threading.Event()
     await runtime.start()
@@ -516,7 +573,7 @@ async def test_cancel_pending_delivery_recovers_within_original_budget(
         task = asyncio.create_task(
             asyncio.to_thread(
                 processor.batch_generate_calls,
-                calls=calls(1),
+                calls=calls(1, store),
                 cancellation=cancellation,
             )
         )
@@ -565,7 +622,7 @@ async def test_heartbeat_and_polls_survive_transient_store_error_then_confirm_ex
         await eventually(lambda: store.resolve_route('pool'))
         releases['item-0'] = asyncio.Event()
         task = asyncio.create_task(
-            asyncio.to_thread(processor.batch_generate_calls, calls=calls(1))
+            asyncio.to_thread(processor.batch_generate_calls, calls=calls(1, store))
         )
         await eventually(lambda: store.usage()['active_items'] == 1)
         session = processor._queued_executor.producer_id
@@ -636,7 +693,7 @@ async def test_permanent_invalid_item_preserves_other_original_items(
     url, received, _, _ = http_endpoint
     runtime = dispatcher_for(store, url)
     processor = processor_for(store)
-    inputs = calls(3)
+    inputs = calls(3, store)
     inputs[1].extra_body = {'invalid': float('nan')}
     await runtime.start()
     try:
@@ -700,7 +757,7 @@ async def test_call_timeout_cancels_unfinished_batch_items(store, http_endpoint)
         circuit_open_ms=5000,
     )
     processor = processor_for(store, batch_timeout=2)
-    for item in calls(9):
+    for item in calls(9, store):
         releases[item.model] = asyncio.Event()
     await runtime.start()
     try:
@@ -717,7 +774,7 @@ async def test_call_timeout_cancels_unfinished_batch_items(store, http_endpoint)
                 endpoint_revision='r1',
             )
         )
-        inputs = calls(9)
+        inputs = calls(9, store)
         for item in inputs:
             item.context = RequestContext(
                 job_id='timed-out-job', work_unit_id='timed-out-unit'
@@ -733,7 +790,10 @@ async def test_call_timeout_cancels_unfinished_batch_items(store, http_endpoint)
         assert raised.value.primary_error.category == 'call_timeout'
         assert time.monotonic() - started < 0.8
         assert len(received) < 9
-        await eventually(lambda: store.usage()['reserved_items'] == 0)
+        assert store.usage()['reserved_items'] > 0
+        held = store.usage()['reserved_items']
+        await asyncio.sleep(0.25)
+        assert store.usage()['reserved_items'] == held
     finally:
         for release in releases.values():
             release.set()
@@ -747,10 +807,24 @@ async def test_max_tokens_cancels_unfinished_batch_items(store, http_endpoint):
     from marie.engine.llm_queue.store import RoutingManifestProjection
 
     url, received, releases, _ = http_endpoint
-    runtime = dispatcher_for(store, url)
+    from marie.engine.llm_queue.endpoint import RegisteredEndpoint
+    from marie.engine.llm_queue.request_dispatcher import (
+        DispatchLane,
+        RequestDispatcher,
+    )
+
+    runtime = RequestDispatcher(
+        store=store,
+        endpoints=[
+            RegisteredEndpoint('endpoint', url, allow_loopback=True, execution_limit=2)
+        ],
+        lanes=[DispatchLane('pool', 'endpoint', execution_limit=2)],
+        poll_seconds=0.01,
+    )
     processor = processor_for(store, batch_timeout=2)
-    inputs = calls(9)
+    inputs = calls(9, store)
     inputs[0].model = 'max-tokens'
+    releases['max-tokens'] = asyncio.Event()
     for item in inputs[1:]:
         releases[item.model] = asyncio.Event()
     await runtime.start()
@@ -773,17 +847,26 @@ async def test_max_tokens_cancels_unfinished_batch_items(store, http_endpoint):
                 job_id='max-tokens-job', work_unit_id='max-tokens-unit'
             )
         started = time.monotonic()
-        with pytest.raises(BatchExecutionError) as raised:
-            await asyncio.to_thread(
+        task = asyncio.create_task(
+            asyncio.to_thread(
                 processor.batch_generate_calls,
                 calls=inputs,
                 request_id='max-tokens-batch',
             )
+        )
+        await eventually(lambda: len(received) == 2)
+        releases['max-tokens'].set()
+        with pytest.raises(BatchExecutionError) as raised:
+            await task
 
         assert isinstance(raised.value.primary_error, MaxTokensExceededError)
         assert time.monotonic() - started < 0.8
         assert len(received) < 9
-        await eventually(lambda: store.usage()['reserved_items'] == 0)
+        await eventually(lambda: not runtime._tasks)
+        assert store.usage()['reserved_items'] > 0
+        held = store.usage()['reserved_items']
+        await asyncio.sleep(0.25)
+        assert store.usage()['reserved_items'] == held
     finally:
         for release in releases.values():
             release.set()
@@ -825,13 +908,13 @@ async def test_cancelled_parallel_batches_release_next_admission_wave(
             cancellation = threading.Event()
 
             def run_page(index):
-                validation = calls(1)[0]
+                validation = calls(1, store)[0]
                 validation.model = 'max-tokens'
                 validation.context = context
 
                 def prepare(_):
                     with preparation_lock:
-                        prepared = calls(1)[0]
+                        prepared = calls(1, store)[0]
                         prepared.model = 'max-tokens'
                         prepared.context = context
                         return prepared
@@ -852,7 +935,7 @@ async def test_cancelled_parallel_batches_release_next_admission_wave(
 
             await eventually(lambda: not processor._queued_executor._pending)
 
-        followup = calls(1)[0]
+        followup = calls(1, store)[0]
         followup.context = context
         result = await asyncio.wait_for(
             asyncio.to_thread(
@@ -868,16 +951,13 @@ async def test_cancelled_parallel_batches_release_next_admission_wave(
         await runtime.stop()
 
 
-def test_engine_cache_tracks_effective_v3_policy_and_normalized_fabric(
-    store, monkeypatch
-):
+def test_engine_cache_tracks_queue_enablement_and_normalized_fabric(store, monkeypatch):
     from marie.extract.annotators import util
 
     monkeypatch.setenv('OPENAI_API_KEY', 'test')
     monkeypatch.setenv('OPENAI_API_BASE', 'http://127.0.0.1:1/v1')
     monkeypatch.setenv('LLM_QUEUE_URL', store.test_url)
     monkeypatch.setenv('LLM_QUEUE_ENABLED', 'true')
-    monkeypatch.setenv('LLM_QUEUE_CONTRACT_VERSION', 'v3')
     monkeypatch.setenv('LLM_QUEUE_FABRIC_GROUP_ID', store.keys.fabric_id)
     util.clear_engine_cache()
     try:
@@ -891,10 +971,10 @@ def test_engine_cache_tracks_effective_v3_policy_and_normalized_fabric(
         monkeypatch.setenv('LLM_QUEUE_FABRIC_GROUP_ID', 'other-' + uuid4().hex)
         other = util.route_llm_engine('model', False)
         assert other is not timed
-        monkeypatch.setenv('LLM_QUEUE_CONTRACT_VERSION', 'v2')
-        legacy = util.route_llm_engine('model', False)
-        assert legacy is not other
-        assert not legacy.batch_processor.uses_v3_queue
+        monkeypatch.setenv('LLM_QUEUE_ENABLED', 'false')
+        direct = util.route_llm_engine('model', False)
+        assert direct is not other
+        assert not direct.batch_processor.uses_queued_dispatch
     finally:
         util.close_all_engines()
 
@@ -914,7 +994,7 @@ async def test_process_batch_original_writes_survive_provider_outage(
         RequestDispatcher,
     )
     from PIL import Image
-    from v3_qualification_evidence import record_evidence
+    from queued_dispatch_qualification_evidence import record_evidence
 
     from marie.extract.annotators import util
 
@@ -998,13 +1078,17 @@ async def test_process_batch_original_writes_survive_provider_outage(
         await eventually(lambda: store.resolve_route('pool'))
         refs, phases = [], []
         if boundary == 'executor':
-            from test_v3_image_lifetime import executor_request
+            from test_queued_dispatch_image_lifetime import executor_request
 
             request, refs, phases = executor_request(tmp_path, monkeypatch, engine)
             tmp_path = tmp_path / 'agent-output' / 'test'
         else:
             request = util.process_batch(
-                batch, engine, str(tmp_path), expect_output='none'
+                batch,
+                engine,
+                str(tmp_path),
+                expect_output='none',
+                request_context=registered_context(store),
             )
         task = asyncio.create_task(request)
         await eventually(lambda: (tmp_path / 'page_0.md').exists())
@@ -1085,7 +1169,7 @@ async def test_slow_admission_never_starts_after_original_server_deadline(
     url, received, _, _ = http_endpoint
     runtime = dispatcher_for(store, url)
     processor = processor_for(store, batch_timeout=0.12)
-    original = RequestStore.admit
+    original = RequestStore.admit_from_manifest
     deadlines = []
 
     def delay(self, envelope):
@@ -1093,13 +1177,15 @@ async def test_slow_admission_never_starts_after_original_server_deadline(
         time.sleep(0.2)
         return original(self, envelope)
 
-    monkeypatch.setattr(RequestStore, 'admit', delay)
+    monkeypatch.setattr(RequestStore, 'admit_from_manifest', delay)
     await runtime.start()
     try:
         await eventually(lambda: store.resolve_route('pool'))
         started = time.monotonic()
         with pytest.raises(BatchExecutionError):
-            await asyncio.to_thread(processor.batch_generate_calls, calls=calls(3))
+            await asyncio.to_thread(
+                processor.batch_generate_calls, calls=calls(3, store)
+            )
         elapsed = time.monotonic() - started
         assert 0.2 <= elapsed < 0.6
         assert len(deadlines) == 1
@@ -1129,7 +1215,7 @@ def test_streaming_batch_rejected_before_any_producer_writes(store, overrides):
         with pytest.raises(UnsupportedQueueStreaming):
             processor.batch_generate_calls(
                 calls=[
-                    calls(1)[0],
+                    calls(1, store)[0],
                     CompletionCallParams(model='stream', messages=[], **overrides),
                 ]
             )
@@ -1165,7 +1251,7 @@ async def test_lost_terminal_read_delivers_callback_once(
         await eventually(lambda: store.resolve_route('pool'))
         assert await asyncio.to_thread(
             processor.batch_generate_calls,
-            calls=calls(1),
+            calls=calls(1, store),
             on_result=lambda *args: writes.append(args),
         ) == ['item-0']
         assert len(reads) == 2 and reads[0] == reads[1]
@@ -1215,7 +1301,7 @@ async def test_lost_ack_reply_is_reconciled_after_delivery(
                 endpoint_revision='r1',
             )
         )
-        request = calls(1)[0]
+        request = calls(1, store)[0]
         request.context = context
         assert await asyncio.to_thread(
             processor.batch_generate_calls, calls=[request]
@@ -1248,7 +1334,9 @@ async def test_blocked_callback_does_not_stop_heartbeat_or_other_result_polling(
         await eventually(lambda: store.resolve_route('pool'))
         task = asyncio.create_task(
             asyncio.to_thread(
-                processor.batch_generate_calls, calls=calls(2), on_result=callback
+                processor.batch_generate_calls,
+                calls=calls(2, store),
+                on_result=callback,
             )
         )
         await eventually(entered.is_set)
@@ -1293,7 +1381,6 @@ async def test_backpressure_uses_original_deadline_without_admitting_later_items
     limited = RequestStore(
         store.test_url,
         fabric_id='limited-' + uuid4().hex,
-        version='v3',
         limits=replace(store.limits, max_active_items=1),
     )
     limited.test_url = store.test_url
@@ -1306,7 +1393,9 @@ async def test_backpressure_uses_original_deadline_without_admitting_later_items
         releases['item-0'] = asyncio.Event()
         started = time.monotonic()
         with pytest.raises(BatchExecutionError):
-            await asyncio.to_thread(processor.batch_generate_calls, calls=calls(3))
+            await asyncio.to_thread(
+                processor.batch_generate_calls, calls=calls(3, limited)
+            )
         assert time.monotonic() - started < 0.5
         assert limited.usage()['records'] == 1
         assert len(received) == 1
@@ -1329,7 +1418,6 @@ def test_producer_capacity_waits_only_within_original_budget(store):
     limited = RequestStore(
         store.test_url,
         fabric_id='sessions-' + uuid4().hex,
-        version='v3',
         limits=replace(store.limits, max_producers=1),
     )
     limited.test_url = store.test_url
@@ -1338,7 +1426,7 @@ def test_producer_capacity_waits_only_within_original_budget(store):
     try:
         started = time.monotonic()
         with pytest.raises(BatchExecutionError) as raised:
-            processor.batch_generate_calls(calls=calls(1))
+            processor.batch_generate_calls(calls=calls(1, limited))
         assert 0.1 <= time.monotonic() - started < 0.6
         assert raised.value.primary_error.category == 'store_unavailable'
         assert limited.usage()['records'] == 0
@@ -1388,7 +1476,9 @@ def test_close_waits_for_inflight_startup_and_reclaims_late_resources(
     producer = processor._get_queued_executor()
     try:
         with ThreadPoolExecutor(max_workers=2) as workers:
-            caller = workers.submit(processor.batch_generate_calls, calls=calls(1))
+            caller = workers.submit(
+                processor.batch_generate_calls, calls=calls(1, store)
+            )
             assert entered.wait(2)
             shutdown = workers.submit(producer.close)
             until = time.monotonic() + 1
@@ -1442,7 +1532,7 @@ async def test_missing_cancel_remains_pending_until_delayed_admission_is_visible
     cancellation = threading.Event()
     transmitted = []
     missing_seen = threading.Event()
-    admit = RequestStore.admit
+    admit = RequestStore.admit_from_manifest
     cancel = RequestStore.cancel_or_expire
 
     def delay_admission_reply(self, envelope):
@@ -1456,13 +1546,13 @@ async def test_missing_cancel_remains_pending_until_delayed_admission_is_visible
             missing_seen.set()
         return reply
 
-    monkeypatch.setattr(RequestStore, 'admit', delay_admission_reply)
+    monkeypatch.setattr(RequestStore, 'admit_from_manifest', delay_admission_reply)
     monkeypatch.setattr(RequestStore, 'cancel_or_expire', observe_cancel)
     try:
         with pytest.raises(BatchExecutionError) as raised:
             await asyncio.to_thread(
                 processor.batch_generate_calls,
-                calls=calls(1),
+                calls=calls(1, store),
                 cancellation=cancellation,
             )
         assert raised.value.primary_error.category == 'cancellation_requested'
@@ -1489,7 +1579,7 @@ async def test_cancellation_tracker_stops_before_new_io_after_original_deadline(
 
     _enable_test_route(store)
     processor = processor_for(store, batch_timeout=0.08)
-    admit = RequestStore.admit
+    admit = RequestStore.admit_from_manifest
     cancel = RequestStore.cancel_or_expire
     cancellation_calls = []
 
@@ -1502,11 +1592,13 @@ async def test_cancellation_tracker_stops_before_new_io_after_original_deadline(
         cancellation_calls.append(time.monotonic())
         return cancel(self, *args, **kwargs)
 
-    monkeypatch.setattr(RequestStore, 'admit', slow_admission)
+    monkeypatch.setattr(RequestStore, 'admit_from_manifest', slow_admission)
     monkeypatch.setattr(RequestStore, 'cancel_or_expire', record_cancel)
     try:
         with pytest.raises(BatchExecutionError):
-            await asyncio.to_thread(processor.batch_generate_calls, calls=calls(1))
+            await asyncio.to_thread(
+                processor.batch_generate_calls, calls=calls(1, store)
+            )
         await eventually(lambda: not processor._queued_executor._pending)
         assert cancellation_calls == []
     finally:

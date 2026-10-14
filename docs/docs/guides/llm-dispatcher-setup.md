@@ -4,7 +4,7 @@ sidebar_position: 13
 
 # LLM dispatcher setup
 
-Run `tools/stress/llm_dispatch_deployment.py` to exercise the V3 LLM dispatcher through a real gateway, scheduler, and external Document Annotator deployment. The gateway dispatches queued completion requests to AIMock; the Annotator processes synthetic pages and writes results to an isolated MinIO bucket.
+Run `tools/stress/llm_dispatch_deployment.py` to exercise the durable LLM dispatcher through a real gateway, scheduler, and external Document Annotator deployment. The gateway dispatches queued completion requests to AIMock; the Annotator processes synthetic pages and writes results to an isolated MinIO bucket.
 
 The runner generates its own gateway configuration, credentials, fabric ID, and ports. Use the steps below to prepare the Python environment and Docker fixtures, start the deployment, inspect it, and stop it.
 
@@ -93,7 +93,7 @@ docker pull redis:7.4.2
 
 Use this programmatic AIMock image: the qualification calls its admin `/fault-profile` endpoint as well as its OpenAI completion endpoint. An unrelated mock server with only `/v1/chat/completions` is insufficient. The deployment runner inspects infrastructure images before startup, so build or pull them first.
 
-The fixture pins Valkey to `9.1.2` for reproducible qualification. Its manifest and live server version checks require that exact release. When updating the pin, update the fixture Compose file, `STORE_VERSIONS` in `tools/stress/llm_v3_aimock_e2e.py`, and the manifest together. Start a fresh fixture project and regenerate its manifest when moving from an older version.
+The fixture pins Valkey to `9.1.2` for reproducible qualification. Its manifest and live server version checks require that exact release. When updating the pin, update the fixture Compose file, `STORE_VERSIONS` in `tools/stress/llm_queued_dispatch_aimock_e2e.py`, and the manifest together. Start a fresh fixture project and regenerate its manifest when moving from an older version.
 
 ## Start the fixture stack
 
@@ -186,7 +186,7 @@ print(path)
 PY
 ```
 
-Both entries use the `redis://` URL scheme. The deployment runner uses the Valkey entry and its AIMock ports. The Redis entry also makes the manifest compatible with the separate V3 store qualification tools. If you recreate fixture containers, regenerate this manifest.
+Both entries use the `redis://` URL scheme. The deployment runner uses the Valkey entry and its AIMock ports. The Redis entry also makes the manifest compatible with the separate durable store qualification tools. If you recreate fixture containers, regenerate this manifest.
 
 ## Start and exercise the deployment
 
@@ -201,7 +201,7 @@ export DEPLOYMENT_RUN="$QUAL_ROOT/deployment"
   --start-only
 ```
 
-The runner creates three containers with a unique `marie-deployment-*` Compose project, chooses free loopback ports, and starts the gateway and Annotator as source Python processes. It generates V3 configuration with the `document-small` pool, the `aimock` endpoint, one concurrent dispatch, and synthetic annotation templates. PostgreSQL credentials, the gateway API key, and MinIO credentials are generated automatically.
+The runner creates three containers with a unique `marie-deployment-*` Compose project, chooses free loopback ports, and starts the gateway and Annotator as source Python processes. It generates queued dispatch configuration with the `document-small` pool, the `aimock` endpoint, one concurrent dispatch, and synthetic annotation templates. PostgreSQL credentials, the gateway API key, and MinIO credentials are generated automatically.
 
 Check readiness without printing credentials:
 
@@ -323,14 +323,110 @@ docker compose --env-file /dev/null \
 | `reused_valkey_identity` | Regenerate the manifest from the running fixture project; verify its image and ownership labels. |
 | `FileExistsError` for the output directory | Use a new directory for a fresh deployment or `--resume` for an existing run. |
 | `Gateway readiness timeout` | Inspect executor and gateway logs in `commands/`, the latest report, and Valkey/AIMock health. |
+| `Address already in use` on a gateway port | Inspect all TCP connections, including outbound connections, and [reserve the gateway ports on Linux](#reserve-gateway-ports-on-linux). |
+| `prewrite retry evidence missing` in the local stress suite | Use [direct AIMock networking](#use-direct-aimock-networking-for-the-local-stress-suite). A published Docker port can produce an ambiguous read failure rather than a connection refusal. |
 | `Deployment coverage has not executed` | Select an explicit startup or qualification mode. Stop resources from the failed invocation before retrying. |
 | OOM scope setup or identity fails | Check cgroup v2 and the systemd user session; use `--death` to test worker death without allocating the OOM scope. |
 | Current-source matrix verification fails after edits | Rerun the cases against the current source; retained evidence is tied to the startup source inventory. |
 
 ## Configure a regular gateway separately
 
-For an ordinary deployment, use `config/service/llm-dispatch-v3.example.yml` as the dispatcher configuration reference. Enable the queue with `LLM_QUEUE_ENABLED=true`, set `LLM_QUEUE_URL` to the intended store, and select `queue_contract_version: v3` or `LLM_QUEUE_CONTRACT_VERSION=v3` consistently in the gateway and producer. The default queue contract remains V2.
+For an ordinary deployment, use `config/service/llm-dispatch.example.yml` as the dispatcher configuration reference. Enable the queue with `LLM_QUEUE_ENABLED=true` and set `LLM_QUEUE_URL` to the intended store. Queue enablement selects durable queued dispatch. A disabled queue uses direct batch execution. Enabled startup requires a complete registered policy; ordinary scheduler defaults or pool URLs do not provide endpoint registration.
 
-Configure a fabric ID, endpoint credentials through `credential_env`, and a lane mapping each pool to its endpoint. Enable loopback only for a local fixture. Those settings are generated by the qualification runner above; exporting them in your shell will not override its isolated deployment configuration.
+Configure one consistent fabric ID in the gateway and producer, endpoint credentials through `credential_env`, lane bindings, and store/execution limits. Use explicit static policy or complete registered policy from scheduler persistence. Missing credentials, invalid policy, inconsistent fabric identity, or unavailable storage refuses enabled startup. Enable loopback only for a local fixture. Those settings are generated by the qualification runner above; exporting them in your shell will not override its isolated deployment configuration.
+
+This is a fresh-install setup. The store initializes current fabric policy in
+`llm:dispatch:{fabric:<id>}:`; producers attach to that policy. Startup does not
+scan historical queue namespaces or require a legacy migration procedure.
+
+### Use direct AIMock networking for the local stress suite
+
+The local mixed-pool suite's `unreachable` phase qualifies an unsent retry:
+the provider connection must fail before transmission and the dispatcher must
+refund its scheduling charge. Stopping the inference listener inside a
+bridge-networked container does not stop Docker's published-port proxy. That
+proxy can accept the connection and produce `read_error` after transmission,
+which retains an uncertain reservation instead of refunding the charge.
+
+Programmatic AIMock uses host networking by default for a local gateway on Linux.
+Run from the checkout root and use the same Compose project
+name as your existing AIMock service (`marie` in this example):
+
+```bash
+docker compose --env-file /dev/null -p marie \
+  -f Dockerfiles/docker-compose.mock-llm-programmatic.yml \
+  up -d --build --force-recreate aimock-programmatic
+```
+
+This recreates the local mock service. The Compose file binds inference and admin
+listeners directly to host loopback ports `4010` and `4011`, without bridge
+membership or published ports. Set `AIMOCK_PORT` and `AIMOCK_ADMIN_PORT` if your
+registered policy and suite use different ports. Set `AIMOCK_HOST` explicitly if
+clients must reach the mock through another host interface; clients in isolated
+bridge containers cannot use their own loopback address to reach this service.
+See [Docker host networking](https://docs.docker.com/engine/network/drivers/host/).
+
+Once the test fabric is clean, rerun the failed phase with a new artifact ID:
+
+```bash
+.venv/bin/python tools/stress/llm_dispatch_stress_suite.py \
+  --runtime-mode queued-dispatch \
+  --suite-id local-baseline-prewrite-recheck \
+  --phases unreachable
+```
+
+Keep the refund assertion: successful document jobs alone do not qualify an
+unsent retry. The suite also rejects ambiguous remote outcomes in this phase,
+even if other calls were refunded. The timed outage must overlap actual dispatch;
+if it ends before requests arrive, there is no failure evidence to qualify.
+
+Changing networking or restarting a process does not settle reservations already
+left by a failed run. Use affirmative provider evidence to reconcile those
+attempts under the normal settlement procedure, or provision a separate clean
+test fabric after confirming the old test executions have ended. Do not erase
+held reservations or reinterpret read failures as unsent requests.
+
+### Reserve gateway ports on Linux
+
+The regular gateway uses HTTP port `51000` and gRPC port `52000`. These ports
+fall within the usual Linux ephemeral range (`32768–60999`), so a browser or
+another outbound client can occupy them before the gateway starts. Reserve the
+configured gateway ports on the host where the gateway binds them.
+
+Check the host's allocation range and existing reservations:
+
+```bash
+sysctl net.ipv4.ip_local_port_range net.ipv4.ip_local_reserved_ports
+```
+
+If the reserved-port list is empty, persist both gateway ports and apply the
+setting immediately:
+
+```bash
+printf '%s\n' 'net.ipv4.ip_local_reserved_ports = 51000,52000' \
+  | sudo tee /etc/sysctl.d/99-marie-gateway-ports.conf
+
+sudo sysctl -p /etc/sysctl.d/99-marie-gateway-ports.conf
+sysctl net.ipv4.ip_local_reserved_ports
+```
+
+If the host already reserves ports, include those ports or ranges alongside
+`51000,52000` in the configuration value. Writing this setting replaces the
+entire reservation list. Use the actual gateway ports if your deployment uses
+different ones, and keep any existing sysctl configuration consistent with this
+file. Reservations exclude ports from automatic outbound allocation while
+allowing explicit server binds; see the [Linux kernel IP sysctl documentation](https://docs.kernel.org/networking/ip-sysctl.html#ip-variables).
+
+Reservations do not close existing connections. If startup still reports
+`Address already in use`, inspect all TCP states rather than only listeners:
+
+```bash
+ss -tanp '( sport = :51000 or sport = :52000 )'
+```
+
+An outbound connection can block a wildcard gateway bind even when no server is
+listening. Close the conflicting connection or stop its owning application,
+then retry once the port is free. A closed connection may remain in `TIME_WAIT`
+until the kernel releases it.
 
 See [LLM tracking and observability](./llm-tracking.md) for telemetry configuration in a regular deployment. This qualification disables OpenTelemetry export.

@@ -59,8 +59,8 @@ global:
       enabled: false
       existingSecret: ""
       existingSecretPasswordKey: password
+  # Enabled queues require registered endpoint credentials, lanes, limits, and fabric identity.
   llmQueue:
-    contractVersion: v2
     enabled: false
     url: ""
     existingSecret: ""

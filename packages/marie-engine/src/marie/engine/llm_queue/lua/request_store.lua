@@ -213,8 +213,8 @@ if redis.call('EXISTS',R) == 1 then
     local state = h(R,'state')
     local states = {ready=true,claimed=true,executing=true,delayed=true,outcome_unknown=true,
         succeeded=true,failed=true,cancelled=true,expired=true,abandoned=true}
-    if not states[state] or (state ~= 'abandoned' and h(R,'version') ~= 'v3') then
-        return redis.error_reply('invalid request version or state')
+    if not states[state] or h(R,'schema_version') ~= '1' then
+        return redis.error_reply('invalid request schema or state')
     end
     if n(usage,'records') < 1 or n(usage,'storage_bytes') < n(R,'storage_charge') or
         (h(R,'active') == '1' and (n(usage,'active_items') < 1 or n(usage,'payload_bytes') < n(R,'payload_bytes'))) then
@@ -320,10 +320,10 @@ local function abandon()
         local values = redis.call('HMGET',R,'producer_id','pool_id','endpoint_id','claim_id',
             'execution_seq','owner_generation','owner_id','reservation_bytes','uncertainty_until','feedback_seq',
             'charged_cost','charge_sequence','charged_owner_generation','refund_state','refunded_on',
-            'replica_id','replica_reserved','replica_reservation_bytes')
+            'replica_id','replica_reserved','replica_reservation_bytes','traceparent','tracestate')
         local charge = n(R,'storage_charge')
         redis.call('DEL',R)
-        redis.call('HSET',R,'state','abandoned','producer_id',values[1],'pool_id',values[2],
+        redis.call('HSET',R,'schema_version',1,'state','abandoned','producer_id',values[1],'pool_id',values[2],
             'endpoint_id',values[3],'claim_id',values[4],'execution_seq',values[5],
             'owner_generation',values[6],'owner_id',values[7],'reservation_bytes',values[8],
             'uncertainty_until',values[9],'feedback_seq',values[10] or '0',
@@ -332,6 +332,8 @@ local function abandon()
             'refunded_on',values[15] or '0','replica_id',values[16] or '',
             'replica_reserved',values[17] or '0','replica_reservation_bytes',values[18] or '0',
             'reserved',1,'storage_charge',a.limits.metadata_bytes)
+        if values[19] then redis.call('HSET',R,'traceparent',values[19]) end
+        if values[20] then redis.call('HSET',R,'tracestate',values[20]) end
         inc('storage_bytes',a.limits.metadata_bytes-charge)
     else
         release()
@@ -449,6 +451,12 @@ elseif op == 'route' then
         'execution_bytes',a.execution_bytes)
     return reply('configured')
 elseif op == 'admit' or op == 'admit_manifest' then
+    for _, field in ipairs({'traceparent','tracestate'}) do
+        local value = a[field]
+        if value ~= nil and value ~= cjson.null and (type(value) ~= 'string' or #value > 512) then
+            return redis.error_reply('invalid trace context')
+        end
+    end
     if op == 'admit_manifest' then
         local projected_digest = h(manifest,'route_digest')
         if not projected_digest then return reply('routing_manifest_missing') end
@@ -480,12 +488,15 @@ elseif op == 'admit' or op == 'admit_manifest' then
         n(usage,'storage_bytes')+charge > a.limits.max_storage_bytes or
         n(usage,'ready_ids') >= a.limits.max_ready_ids then return reply('backpressure') end
     if n(route,'accepted') >= 2^53-1 then return redis.error_reply('activity accounting exhausted') end
-    redis.call('HSET',R,'version','v3','fabric_group_id',a.fabric_id,'attempt_id',a.id,'producer_id',a.producer_id,'pool_id',a.pool_id,
+    redis.call('HSET',R,'schema_version',1,'fabric_group_id',a.fabric_id,'attempt_id',a.id,'producer_id',a.producer_id,'pool_id',a.pool_id,
         'endpoint_id',a.endpoint_id,'config_revision',a.config_revision,'digest',a.digest,
         'logical_batch_id',a.logical_batch_id,'logical_task_id',a.logical_task_id,'item_index',a.item_index,
         'expires_at_ms',a.expires_at_ms,'payload',a.payload,'payload_bytes',a.payload_bytes,
         'model',a.model,'admitted_at_ms',now,'cost',a.cost,'state','ready','execution_seq',0,'active',1,'reserved',0,
         'storage_charge',charge,'result_allowance',a.limits.result_allowance,'admission_counted',1)
+    for _, field in ipairs({'traceparent','tracestate'}) do
+        if type(a[field]) == 'string' then redis.call('HSET',R,field,a[field]) end
+    end
     if op == 'admit_manifest' then
         redis.call('HSET',R,'job_id',a.job_id,'work_unit_id',a.work_unit_id,'route_digest',a.manifest_digest,
             'policy_generation',n(manifest,'policy_generation'))
@@ -578,6 +589,15 @@ if op == 'purge' then
     if live() and now < n(R,'retain_until') then return reply('not_due') end
     abandon()
     return reply('purged')
+end
+-- No call outlives the maximum request deadline, so its held capacity cannot either.
+if op == 'recover' and n(R,'reserved') == 1 and n(R,'uncertainty_until') > 0 and
+    now >= n(R,'uncertainty_until') + a.limits.max_deadline_ms and
+    (terminal() or h(R,'state') == 'abandoned') then
+    local result = reply('hold_expired')
+    release()
+    if h(R,'state') == 'abandoned' then erase() end
+    return result
 end
 if op == 'return_untransmitted' and (terminal() or h(R,'state') == 'abandoned' or
     not live() or now >= n(R,'expires_at_ms')) then

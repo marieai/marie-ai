@@ -12,6 +12,7 @@ from marie.engine.llm_queue.admission_policy import (
     AdmissionMatchError,
     AdmissionPolicyError,
 )
+from marie.engine.llm_queue.queue_keys import validate_identifier
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from marie.auth.api_key_manager import APIKeyManager
@@ -279,6 +280,34 @@ def add_runtime_routes(
     @app.get('/api/debug')
     async def debug(fabric_group_id: str = Depends(authorize)):
         return await read(fabric_group_id, 50, debug=True)
+
+    @app.post('/api/llm-dispatch/holds/{attempt_id}/release')
+    async def release_hold(
+        attempt_id: str,
+        authorization: tuple[str, str] = Depends(authorize_routing_admin),
+    ) -> dict[str, object]:
+        """Release capacity held by a call the operator confirms has stopped."""
+        fabric_group_id, _ = authorization
+        try:
+            validate_identifier(attempt_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail='invalid_attempt_id') from None
+        try:
+            disposition = await asyncio.to_thread(
+                registry.release_held_reservation, fabric_group_id, attempt_id
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=503, detail='hold_release_unavailable'
+            ) from None
+        if disposition == 'missing':
+            raise HTTPException(status_code=404, detail='hold_not_found')
+        if disposition not in {'settled', 'existing'}:
+            raise HTTPException(status_code=409, detail=f'hold_{disposition}')
+        return {
+            'status': 'OK',
+            'result': {'attempt_id': attempt_id, 'disposition': disposition},
+        }
 
     @app.post('/api/llm-dispatch/policy/preview')
     async def preview_policy(

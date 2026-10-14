@@ -762,7 +762,19 @@ def validate_report(
             int(pool["delta"].get("refunded_cost") or 0)
             for pool in routing["drr"].values()
         )
-        assert refunded_cost > 0, "prewrite retry evidence"
+        remote_failures = int(dispatcher_delta.get("remote_outcomes_failed") or 0)
+        assert refunded_cost > 0, (
+            "prewrite retry evidence missing "
+            f"(refunded_cost={refunded_cost}, remote_outcomes_failed={remote_failures}). "
+            "The unreachable phase requires a failure before transmission. "
+            "Use programmatic AIMock's Linux host-network Compose setup; published ports "
+            "can produce ambiguous read errors during an inference outage. "
+            "The outage must also overlap dispatch."
+        )
+        assert remote_failures == 0, (
+            "unreachable phase produced ambiguous remote outcomes; "
+            f"remote_outcomes_failed={remote_failures}"
+        )
     elif phase.retry_evidence == "deferred_retry":
         assert retry_count > 0, "deferred retry evidence"
     elif phase.retry_evidence == "no_retry":

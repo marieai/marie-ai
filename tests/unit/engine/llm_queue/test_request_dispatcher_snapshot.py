@@ -50,7 +50,7 @@ def test_inflight_snapshot_retains_claimed_request_metadata(monkeypatch):
             'request_id': 'attempt-1',
             'attempt_id': 'attempt-1',
             'fabric_group_id': 'default',
-            'contract_version': 'v3',
+            'mode': 'queued-dispatch',
             'lifecycle_stage': 'dispatching',
             'state_source': 'dispatcher',
             'dispatcher_id': 'dispatcher-1',

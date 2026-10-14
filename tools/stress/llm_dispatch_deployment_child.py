@@ -125,7 +125,7 @@ def install(root: Path) -> None:
     executor_module.__config_dir__ = str(root / 'generated-config')
     annotator_module.__config_dir__ = str(root / 'generated-config')
 
-    from marie.engine.llm_queue.producer import V3Producer
+    from marie.engine.llm_queue.producer import QueuedDispatchProducer
     from marie.engine.llm_queue.store import RequestStore
 
     from marie.extract.annotators import util
@@ -133,13 +133,13 @@ def install(root: Path) -> None:
         GatewayLlmDispatchRuntime,
     )
 
-    original_start = V3Producer._start
+    original_start = QueuedDispatchProducer._start
     original_admit = RequestStore.admit
     original_write = util._write_single_result
     original_request = (
         executor_module.DocumentAnnotatorExecutor._process_annotation_request
     )
-    original_gateway = GatewayLlmDispatchRuntime._start_v3
+    original_gateway = GatewayLlmDispatchRuntime._start_queued_dispatch
 
     def start(self: Any, *args: Any, **kwargs: Any) -> Any:
         result = original_start(self, *args, **kwargs)
@@ -218,11 +218,11 @@ def install(root: Path) -> None:
         await original_gateway(self)
         emit(root, 'gateway_dispatch', fabric=self.config.fabric_group_id)
 
-    V3Producer._start = start
+    QueuedDispatchProducer._start = start
     RequestStore.admit = admit
     util._write_single_result = write
     executor_module.DocumentAnnotatorExecutor._process_annotation_request = request
-    GatewayLlmDispatchRuntime._start_v3 = gateway
+    GatewayLlmDispatchRuntime._start_queued_dispatch = gateway
     emit(
         root,
         'imports',

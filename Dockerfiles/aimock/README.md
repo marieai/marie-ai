@@ -44,6 +44,15 @@ npm start
 
 ## Endpoints
 
+Programmatic AIMock uses Linux host networking and binds to loopback by default;
+only `docker-compose.mock-llm-programmatic.yml` is needed. The inference/admin
+ports are `4010`/`4011`, configurable through `AIMOCK_PORT`/`AIMOCK_ADMIN_PORT`.
+This supports the [local queued-dispatch stress suite](../../docs/docs/guides/llm-dispatcher-setup.md#use-direct-aimock-networking-for-the-local-stress-suite):
+published bridge ports can turn a stopped inference listener into an ambiguous
+read failure, which cannot qualify its pre-write refund check. Set `AIMOCK_HOST`
+explicitly for clients that need another host interface; isolated bridge clients
+must use a reachable host address rather than their own loopback.
+
 | Endpoint | Description |
 |----------|-------------|
 | `http://localhost:4010/v1` | OpenAI-compatible API |
@@ -452,7 +461,7 @@ from marie.engine.batch_processor import BatchProcessor
 # Host-network/local process example:
 #   api_base="http://127.0.0.1:4010/v1"
 # Docker bridge-network example:
-#   api_base="http://aimock-programmatic:4010/v1"
+#   api_base="http://aimock:4010/v1"  # fixture-based mock service
 processor = BatchProcessor(api_base="http://127.0.0.1:4010/v1", api_key="mock")
 
 # Deterministic responses for testing

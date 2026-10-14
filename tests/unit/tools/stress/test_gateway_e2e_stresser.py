@@ -1224,9 +1224,7 @@ def test_routing_qualification_captures_route_policy_charge_and_replica() -> Non
 
 
 def test_routing_counters_wait_for_completed_store_commit() -> None:
-    def snapshot(
-        stage: str, *, accepted: int, completed: int, inflight: int
-    ) -> object:
+    def snapshot(stage: str, *, accepted: int, completed: int, inflight: int) -> object:
         return _build_debug_snapshot(
             stage=stage,
             payload={
@@ -1491,7 +1489,7 @@ def test_build_debug_snapshot_extracts_scheduler_fields() -> None:
             "counters": {"fetch_counter": 11},
             "queues": {"event_queue_size": 1},
             "llm_dispatch": {
-                "contract_version": "v2",
+                "mode": "queued-dispatch",
                 "registered_dispatchers": 2,
                 "running_dispatchers": 1,
             },

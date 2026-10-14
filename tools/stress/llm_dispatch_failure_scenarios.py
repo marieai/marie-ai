@@ -19,13 +19,13 @@ from uuid import uuid4
 
 import httpx
 from marie.engine.completion_contract import CompletionCallParams
-from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
 from marie.engine.llm_queue.endpoint import ExecutionOutcome, RegisteredEndpoint
-from marie.engine.llm_queue.producer import V3Producer
+from marie.engine.llm_queue.producer import QueuedDispatchProducer
 from marie.engine.llm_queue.request_dispatcher import DispatchLane, RequestDispatcher
 from marie.engine.llm_queue.store import RequestStore, StoreLimits
 
-from tools.stress.llm_v3_aimock_e2e import (
+from tools.stress.llm_queued_dispatch_aimock_e2e import (
     QualificationError,
     eventually,
     inspect_owned_fixture,
@@ -419,8 +419,8 @@ async def run_cell(
     tests = str(Path(__file__).resolve().parents[2] / 'packages/marie-engine/tests')
     if tests not in sys.path:
         sys.path.insert(0, tests)
-    from test_v3_image_lifetime import executor_request
-    from test_v3_producer import engine_for
+    from test_queued_dispatch_image_lifetime import executor_request
+    from test_queued_dispatch_producer import engine_for
 
     inspect_owned_fixture(fixture, running=True)
     mock_fixture = dict(
@@ -464,7 +464,6 @@ async def run_cell(
         store = RequestStore(
             fixture['url'],
             fabric_id=row['fabric'],
-            version='v3',
             limits=StoreLimits(
                 max_execution_items=2, remote_uncertainty_ms=100, delivery_grace_ms=1000
             ),
@@ -520,13 +519,12 @@ async def run_cell(
                 mock_fixture,
             )
         else:
-            producer = V3Producer(
-                config=LlmQueueConfig(
+            producer = QueuedDispatchProducer(
+                config=LlmQueueRuntimeConfig(
                     enabled=True,
                     queue_url=fixture['url'],
                     pool_id='pool',
                     fabric_group_id=store.keys.fabric_id,
-                    queue_contract_version='v3',
                 )
             )
             await run_failure(
@@ -600,7 +598,7 @@ async def run_recovery(
     runtime: RequestDispatcher,
     seam: OwnedFailureListener,
     http: httpx.AsyncClient,
-    producer: V3Producer,
+    producer: QueuedDispatchProducer,
     engine: Any,
     patch: Any,
     admissions: dict,
@@ -717,7 +715,7 @@ async def run_failure(
     runtime: RequestDispatcher,
     seam: OwnedFailureListener,
     http: httpx.AsyncClient,
-    producer: V3Producer,
+    producer: QueuedDispatchProducer,
     admissions: dict,
     tasks: list[asyncio.Task],
 ) -> None:

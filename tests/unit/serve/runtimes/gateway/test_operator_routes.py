@@ -801,10 +801,10 @@ async def test_mounted_gateway_operator_auth_envelope_and_challenge(monkeypatch)
         ({}, None, None, 'default'),
     ],
 )
-async def test_v2_effective_fabric_reaches_scheduler_operator_and_events(
+async def test_disabled_effective_fabric_reaches_scheduler_operator_and_events(
     monkeypatch, runtime_config, explicit, queued, expected
 ):
-    from marie.engine.llm_queue.config import LlmQueueConfig
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
 
     from marie.serve.runtimes.gateway.marie import llm_dispatch_runtime as module
     from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
@@ -821,10 +821,9 @@ async def test_v2_effective_fabric_reaches_scheduler_operator_and_events(
     runtime = GatewayLlmDispatchRuntime(
         config=runtime_config,
         fabric_group_id=explicit,
-        queue_config=LlmQueueConfig(enabled=True, fabric_group_id=queued),
+        queue_config=LlmQueueRuntimeConfig(enabled=False, fabric_group_id=queued),
     )
-    assert runtime.config.queue_contract_version == 'v2'
-    assert selected == [expected]
+    assert selected == []
     assert runtime.config.fabric_group_id == expected
     event = _llm_dispatch_runtime_event_message(
         snapshot={'runtime_summary': {}, 'live_requests': [], 'dispatchers': []},
@@ -865,10 +864,9 @@ async def test_v2_effective_fabric_reaches_scheduler_operator_and_events(
 
 
 @pytest.mark.asyncio
-async def test_v2_environment_fabric_reaches_runtime_and_operator(monkeypatch):
+async def test_environment_fabric_reaches_runtime_and_operator(monkeypatch):
     from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
 
-    monkeypatch.setenv('LLM_QUEUE_CONTRACT_VERSION', 'v2')
     monkeypatch.setenv('LLM_QUEUE_FABRIC_GROUP_ID', 'env-fabric')
     runtime = GatewayLlmDispatchRuntime()
     assert runtime.config.fabric_group_id == 'env-fabric'
@@ -900,14 +898,76 @@ async def test_v2_environment_fabric_reaches_runtime_and_operator(monkeypatch):
         ).status_code == 200
 
 
-def test_v3_runtime_preserves_conflicting_fabric_rejection(monkeypatch):
-    from marie.engine.llm_queue.config import LlmQueueConfig
+@pytest.mark.asyncio
+async def test_queued_runtime_preserves_conflicting_fabric_rejection(monkeypatch):
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
+
+    from marie.excepts import RuntimeFailToStart
 
     monkeypatch.setenv('LLM_QUEUE_FABRIC_GROUP_ID', 'env-fabric')
-    with pytest.raises(ValueError, match='consistent fabric identity'):
-        GatewayLlmDispatchRuntime(
-            config={'fabric_group_id': 'runtime-fabric'},
-            queue_config=LlmQueueConfig(
-                enabled=True, queue_contract_version='v3', fabric_group_id='env-fabric'
-            ),
-        )
+    runtime = GatewayLlmDispatchRuntime(
+        config={'fabric_group_id': 'runtime-fabric'},
+        queue_config=LlmQueueRuntimeConfig(enabled=True, fabric_group_id='env-fabric'),
+    )
+    with pytest.raises(RuntimeFailToStart):
+        await runtime.start()
+    assert runtime.health()['last_error'] == 'dispatch_start_failed'
+
+
+@pytest.mark.asyncio
+async def test_release_hold_requires_admin_scope_and_maps_outcomes(monkeypatch):
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a')
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    observer = 'mas_' + 'o' * 54
+    admin = 'mas_' + 'a' * 54
+    APIKeyManager.add_key(
+        {
+            'name': 'observer',
+            'api_key': observer,
+            'scopes': ['runtime-observability'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    APIKeyManager.add_key(
+        {
+            'name': 'routing-admin',
+            'api_key': admin,
+            'scopes': ['runtime-routing-admin'],
+            'allowed_fabrics': ['a'],
+        }
+    )
+    outcomes = {'1' * 32: 'settled', '2' * 32: 'missing', '3' * 32: 'in_flight'}
+    calls = []
+
+    def release(fabric_group_id, attempt_id):
+        calls.append((fabric_group_id, attempt_id))
+        return outcomes[attempt_id]
+
+    monkeypatch.setattr(registry, 'release_held_reservation', release)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+
+        def post(attempt_id, token):
+            return client.post(
+                f'/api/llm-dispatch/holds/{attempt_id}/release',
+                params={'fabric_group_id': 'a'},
+                headers={'Authorization': f'Bearer {token}'},
+            )
+
+        assert (await post('1' * 32, observer)).status_code == 403
+        assert calls == []
+        response = await post('1' * 32, admin)
+        assert response.status_code == 200
+        assert response.json()['result'] == {
+            'attempt_id': '1' * 32,
+            'disposition': 'settled',
+        }
+        assert (await post('2' * 32, admin)).status_code == 404
+        assert (await post('3' * 32, admin)).status_code == 409
+        assert (await post('not-an-id!', admin)).status_code == 400
+        assert calls == [('a', '1' * 32), ('a', '2' * 32), ('a', '3' * 32)]

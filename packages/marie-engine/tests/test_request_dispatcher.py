@@ -1,4 +1,4 @@
-"""V3 dispatch against isolated real stores and loopback HTTP fixtures."""
+"""Queued dispatch against isolated real stores and loopback HTTP fixtures."""
 
 import asyncio
 import importlib.util
@@ -18,14 +18,13 @@ def test_runtime_boundary_exists():
     )
 
 
-def test_explicit_contract_and_fabric(monkeypatch):
-    from marie.engine.llm_queue.config import LlmQueueConfig, resolve_fabric_id
+def test_single_queue_mode_and_explicit_fabric(monkeypatch):
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig, resolve_fabric_id
 
-    assert LlmQueueConfig(enabled=True).queue_contract_version == 'v2'
-    monkeypatch.setenv('LLM_QUEUE_CONTRACT_VERSION', 'v3')
-    assert LlmQueueConfig.from_env().queue_contract_version == 'v3'
-    with pytest.raises(ValueError):
-        LlmQueueConfig(enabled=True, queue_contract_version='v4')
+    monkeypatch.setenv('LLM_QUEUE_ENABLED', 'true')
+    config = LlmQueueRuntimeConfig.from_env()
+    assert config.enabled
+    assert not hasattr(config, 'queue_contract_version')
     assert resolve_fabric_id('FABRIC', 'fabric', None) == 'fabric'
     for values in [(None, ''), ('one', 'two')]:
         with pytest.raises(ValueError):
@@ -43,7 +42,6 @@ def store(request):
     store = RequestStore(
         url,
         fabric_id='runtime-' + uuid4().hex,
-        version='v3',
         limits=StoreLimits(claim_lease_ms=150, remote_uncertainty_ms=200),
     )
     store.test_url = url
@@ -155,14 +153,16 @@ def admit_request(
     producer_id=None,
     call=None,
     deadline_ms=5000,
+    traceparent=None,
+    tracestate=None,
 ):
     from marie.engine.completion_contract import (
         CompletionCallParams,
-        QueuedCompletionEnvelopeV3,
+        QueuedCompletionEnvelope,
     )
 
-    req = QueuedCompletionEnvelopeV3(
-        contract_version='v3',
+    req = QueuedCompletionEnvelope(
+        schema_version=1,
         fabric_group_id=store.keys.fabric_id,
         producer_id=producer_id or store.create_producer(lease_ms=10000),
         attempt_id=uuid4().hex,
@@ -173,6 +173,8 @@ def admit_request(
         logical_task_id='task',
         item_index=0,
         expires_at_ms=store.server_time_ms() + deadline_ms,
+        traceparent=traceparent,
+        tracestate=tracestate,
         call=call
         or CompletionCallParams(
             model='model', messages=[{'role': 'user', 'content': 'sentinel'}]
@@ -512,7 +514,7 @@ import time
 from pathlib import Path
 from marie.engine.llm_queue.store import RequestStore, StoreLimits
 url, fabric, limits, path = sys.argv[1:]
-store = RequestStore(url, fabric_id=fabric, version='v3', limits=StoreLimits(**json.loads(limits)))
+store = RequestStore(url, fabric_id=fabric, limits=StoreLimits(**json.loads(limits)))
 producer = store.create_producer(lease_ms=500)
 Path(path).write_text(producer)
 while True:
@@ -561,11 +563,78 @@ while True:
         await runtime.stop()
 
 
+def held_request(store, owner):
+    """Admit, send, and abandon one request so it holds capacity without local work."""
+    store.configure_route(
+        owner,
+        'pool',
+        'endpoint',
+        revision='r1',
+        execution_limit=2,
+        execution_bytes=100_000,
+    )
+    req = admit_request(store)
+    claim_id = uuid4().hex
+    claim = store.claim(owner, req.attempt_id, pool_id='pool', claim_id=claim_id)
+    assert claim.disposition == 'claimed'
+    store.fetch_payload(owner, req.attempt_id, claim_id=claim_id)
+    started = store.authorize_start(owner, req.attempt_id, claim_id=claim_id)
+    store.mark_unknown(
+        owner,
+        req.attempt_id,
+        claim_id=claim_id,
+        execution_seq=started.execution_seq,
+        category='call_timeout',
+    )
+    store.ack_result(req.producer_id, req.attempt_id)
+    assert store.metadata(req.attempt_id).state == 'abandoned'
+    return req
+
+
+def test_operator_releases_a_held_reservation_through_the_owner(store):
+    from marie.engine.llm_queue import registry
+
+    owner = store.acquire_owner('dispatcher', lease_ms=10_000)
+    req = held_request(store, owner)
+    runtime = dispatcher_for(store, 'http://127.0.0.1:9')
+    runtime.owner = owner
+    registry.register_dispatcher(runtime.dispatcher_id, runtime)
+    fabric = store.keys.fabric_id
+    try:
+        held = runtime.health()['held_requests']
+        assert [(row['attempt_id'], row['state']) for row in held] == [
+            (req.attempt_id, 'abandoned')
+        ]
+        assert held[0]['release_after_ms'] == (
+            store.metadata(req.attempt_id).uncertainty_until
+            + store.limits.max_deadline_ms
+        )
+        snapshot = registry.dispatch_runtime_live_state(fabric_group_id=fabric)
+        assert [
+            row['attempt_id'] for row in snapshot['dispatchers'][0]['held_requests']
+        ] == [req.attempt_id]
+
+        assert registry.release_held_reservation(fabric, 'f' * 32) == 'missing'
+        assert registry.release_held_reservation(fabric, req.attempt_id) == 'settled'
+        assert store.usage()['reserved_items'] == 0
+        assert store.endpoint_status('endpoint')['reserved_items'] == '0'
+        assert store.metadata(req.attempt_id) is None
+        assert registry.release_held_reservation(fabric, req.attempt_id) == 'missing'
+        assert runtime.health()['held_requests'] == []
+        assert runtime.health()['counters']['operator_holds_released'] == 1
+
+        runtime.owner = None
+        assert registry.release_held_reservation(fabric, req.attempt_id) == 'not_owner'
+    finally:
+        registry.unregister_dispatcher(runtime.dispatcher_id)
+        store.release_owner(owner)
+
+
 async def test_killed_dispatcher_keeps_hold_until_confirmed_remote_completion(
     store, http_endpoint, tmp_path
 ):
     from marie.engine.completion_contract import CompletionCallParams
-    from test_v3_worker_lifetime import kill_and_reap, start_dispatcher
+    from test_queued_dispatch_worker_lifetime import kill_and_reap, start_dispatcher
 
     url, received, releases, _ = http_endpoint
     releases['unfinished'] = asyncio.Event()
@@ -984,7 +1053,7 @@ async def test_persistent_repetition_fails_without_circuit_or_durable_retry(
     history = []
     monkeypatch.setattr(
         'marie.engine.llm_queue.request_dispatcher._emit_execution_history',
-        lambda attributes, outcome, *_args: history.append(
+        lambda attributes, outcome, *_args, **_kwargs: history.append(
             (
                 attributes['marie.llm_dispatch.request_id'],
                 outcome.category,
@@ -1450,7 +1519,6 @@ async def test_two_owners_and_lost_start_ack_never_send(store, http_endpoint):
     other_store = RequestStore(
         store.test_url,
         fabric_id=store.keys.fabric_id,
-        version='v3',
         limits=store.limits,
     )
     first = dispatcher_for(store, url)
@@ -2092,16 +2160,19 @@ def test_queue_stream_guard_precedes_all_producer_writes():
         CompletionCallParams,
         UnsupportedQueueStreaming,
     )
-    from marie.engine.llm_queue.config import LlmQueueConfig
-    from marie.engine.llm_queue.submitter import QueuedBatchExecutor
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
+    from marie.engine.llm_queue.producer import QueuedDispatchProducer
 
-    class NoWrites:
-        def __getattr__(self, name):
-            raise AssertionError('queue accessed before streaming rejection')
-
-    executor = QueuedBatchExecutor(
-        queue_client=NoWrites(), config=LlmQueueConfig(enabled=True), logger=None
+    executor = QueuedDispatchProducer(
+        config=LlmQueueRuntimeConfig(
+            enabled=True, queue_url='redis://unused:6379/0', fabric_group_id='fabric'
+        )
     )
+
+    def forbid_start(*args):
+        raise AssertionError('queue accessed before streaming rejection')
+
+    executor._start = forbid_start
     with pytest.raises(UnsupportedQueueStreaming):
         executor.execute(
             calls=[
@@ -2142,10 +2213,10 @@ def test_disabled_and_unknown_routes_fail_closed(store):
     assert store.resolve_route('pool') is None
 
 
-async def test_gateway_selects_v3_with_effective_fabric_without_global_key(
+async def test_gateway_uses_durable_dispatch_and_fails_closed_on_identity(
     store, http_endpoint, monkeypatch
 ):
-    from marie.engine.llm_queue.config import LlmQueueConfig
+    from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
 
     from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
         GatewayLlmDispatchRuntime,
@@ -2156,8 +2227,9 @@ async def test_gateway_selects_v3_with_effective_fabric_without_global_key(
     url, _, _, _ = http_endpoint
     # Gateway owns a distinct default-limits fabric and its complete lifecycle.
     fabric = 'gateway-' + uuid4().hex
-    config = LlmQueueConfig(
-        enabled=True, queue_url=store.test_url, queue_contract_version='v3'
+    config = LlmQueueRuntimeConfig(
+        enabled=True,
+        queue_url=store.test_url,
     )
     runtime = GatewayLlmDispatchRuntime(
         queue_config=config,
@@ -2175,10 +2247,10 @@ async def test_gateway_selects_v3_with_effective_fabric_without_global_key(
     owned_store = runtime._queue_client
     try:
         await eventually(lambda: owned_store.resolve_route('pool'))
-        assert runtime.health()['contract_version'] == 'v3'
+        assert runtime.health()['mode'] == 'queued-dispatch'
         from marie.engine.llm_queue.registry import dispatch_runtime_snapshot
 
-        assert dispatch_runtime_snapshot()['contract_version'] == 'v3'
+        assert dispatch_runtime_snapshot()['mode'] == 'queued-dispatch'
         assert runtime.health()['fabric_group_id'] == fabric
         req = admit_request(owned_store)
         await eventually(
@@ -2190,12 +2262,16 @@ async def test_gateway_selects_v3_with_effective_fabric_without_global_key(
         if keys:
             owned_store.client.delete(*keys)
         owned_store.close()
-    with pytest.raises(ValueError):
-        GatewayLlmDispatchRuntime(
-            queue_config=config,
-            fabric_group_id='explicit',
-            config={'fabric_group_id': 'yaml'},
-        )
+    from marie.excepts import RuntimeFailToStart
+
+    mismatched = GatewayLlmDispatchRuntime(
+        queue_config=config,
+        fabric_group_id='explicit',
+        config={'fabric_group_id': 'yaml'},
+    )
+    with pytest.raises(RuntimeFailToStart):
+        await mismatched.start()
+    assert mismatched.health()['last_error'] == 'dispatch_start_failed'
 
 
 async def test_actual_outage_recovers_through_three_shared_probes(store):
@@ -2435,7 +2511,6 @@ async def test_restart_retires_old_route_and_reclaims_its_ready_limit(
     limited = RequestStore(
         store.test_url,
         fabric_id='retired-' + uuid4().hex,
-        version='v3',
         limits=replace(store.limits, max_ready_ids=1),
     )
     runtime = dispatcher_for(limited, url)

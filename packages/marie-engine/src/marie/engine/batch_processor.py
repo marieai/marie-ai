@@ -30,9 +30,7 @@ from marie.engine.exceptions import (
 )
 from marie.engine.llm_queue.config import (
     LlmQueueProducerConfig,
-    LlmQueueRuntimeConfig,
 )
-from marie.engine.llm_queue.queue_io import ListQueueClient, StoreListQueueClient
 from marie.engine.llm_queue.result_types import BatchResult
 from marie.engine.openai_compat import execute_completion_call
 from marie.instrumentation import (
@@ -142,7 +140,6 @@ class BatchProcessor:
         batch_timeout: Optional[float] = None,
         backend_address: Optional[str] = None,
         queue_enabled: Optional[bool] = None,
-        queue_client: Optional[ListQueueClient] = None,
         queue_url: Optional[str] = None,
         queue_valkey_url: Optional[str] = None,
         queue_fabric_group_id: Optional[str] = None,
@@ -186,7 +183,6 @@ class BatchProcessor:
         # Async gate lock so HALF_OPEN slot reservation is serialized
         self._gate_lock: Optional[asyncio.Lock] = None
         self._gate_lock_loop: Optional[asyncio.AbstractEventLoop] = None
-        self._queue_client = queue_client
         self._queued_executor = None
         self._queued_executor_lock = threading.Lock()
         self._queue_pid = os.getpid()
@@ -199,11 +195,8 @@ class BatchProcessor:
         self._queue_mode_logged = False
 
     @property
-    def uses_v3_queue(self) -> bool:
-        return self._queue_config.enabled and not (
-            isinstance(self._queue_config, LlmQueueRuntimeConfig)
-            and self._queue_config.queue_contract_version == "v2"
-        )
+    def uses_queued_dispatch(self) -> bool:
+        return self._queue_config.enabled
 
     def _log_queue_mode_once(self) -> None:
         if self._queue_mode_logged:
@@ -221,70 +214,24 @@ class BatchProcessor:
                 env_enabled,
             )
 
-    def _get_queue_client(self) -> ListQueueClient:
-        if self._queue_client is not None:
-            return self._queue_client
-        if not self._queue_config.queue_url:
-            raise ValueError(
-                "LLM queue is enabled but LLM_QUEUE_URL (or LLM_QUEUE_VALKEY_URL, "
-                "queue_url, or queue_valkey_url) is not configured."
-            )
-        self._queue_client = StoreListQueueClient(self._queue_config.queue_url)
-        return self._queue_client
-
     def _get_queued_executor(self):
-        if (
-            isinstance(self._queue_config, LlmQueueRuntimeConfig)
-            and self._queue_config.queue_contract_version == "v2"
-        ):
-            if self._queued_executor is None:
-                from marie.engine.llm_queue.submitter import QueuedBatchExecutor
-
-                self._queued_executor = QueuedBatchExecutor(
-                    queue_client=self._get_queue_client(),
-                    config=self._queue_config,
-                    logger=self.logger,
-                )
-            return self._queued_executor
         if self._queue_pid != os.getpid():
             self._queue_pid = os.getpid()
             self._queued_executor = None
             self._queued_executor_lock = threading.Lock()
         with self._queued_executor_lock:
             if self._queued_executor is None:
-                from marie.engine.llm_queue.producer import V3Producer
+                from marie.engine.llm_queue.producer import QueuedDispatchProducer
 
-                self._queued_executor = V3Producer(config=self._queue_config)
+                self._queued_executor = QueuedDispatchProducer(
+                    config=self._queue_config
+                )
             return self._queued_executor
-
-    def build_queue_dispatcher(self):
-        if not isinstance(self._queue_config, LlmQueueRuntimeConfig):
-            raise RuntimeError("LLM queue dispatchers are gateway-owned")
-        from marie.engine.llm_queue.adapters.openai_compatible import (
-            OpenAICompatibleExecutionAdapter,
-        )
-        from marie.engine.llm_queue.dispatcher import QueuedBatchDispatcher
-
-        return QueuedBatchDispatcher(
-            queue_client=self._get_queue_client(),
-            execution_adapter=OpenAICompatibleExecutionAdapter(
-                client=self.client,
-                logger=self.logger,
-                default_timeout=self.batch_timeout,
-                backend_address=self.backend_address,
-            ),
-            config=self._queue_config,
-            logger=self.logger,
-        )
 
     def close(self) -> None:
         if self._queued_executor is not None:
             self._queued_executor.close()
             self._queued_executor = None
-
-        if self._queue_client is not None:
-            self._queue_client.close()
-            self._queue_client = None
 
         if isinstance(self.client, AsyncOpenAI) and not self.client.is_closed():
             runner = self._direct_runner or self._get_direct_runner()
@@ -652,7 +599,7 @@ class BatchProcessor:
             asyncio.TimeoutError: When the batch exceeds the configured timeout.
         """
         queue_deadline = kwargs.get("queue_deadline")
-        if self.uses_v3_queue:
+        if self.uses_queued_dispatch:
             queue_deadline = queue_deadline or time.monotonic() + self.batch_timeout
         request_id = str(uuid.uuid4())
         self.logger.info(
@@ -710,7 +657,7 @@ class BatchProcessor:
                 ),
             )
 
-        if self.uses_v3_queue:
+        if self.uses_queued_dispatch:
             from marie.engine.llm_queue.producer import PreparedCalls
 
             calls = PreparedCalls(
@@ -750,11 +697,11 @@ class BatchProcessor:
         queue_deadline: float | None = None,
         cancellation: threading.Event | None = None,
     ) -> List[str]:
-        if self.uses_v3_queue and not calls:
+        if self.uses_queued_dispatch and not calls:
             if batch_span is not None:
                 batch_span.end()
             return []
-        if self.uses_v3_queue and queue_deadline is None:
+        if self.uses_queued_dispatch and queue_deadline is None:
             queue_deadline = time.monotonic() + self.batch_timeout
         request_id = request_id or str(uuid.uuid4())
         start_time = start_time or time.time()
@@ -790,7 +737,7 @@ class BatchProcessor:
                     len(calls),
                 )
                 controls: dict[str, Any] = {}
-                if self.uses_v3_queue:
+                if self.uses_queued_dispatch:
                     controls = dict(
                         queue_deadline=queue_deadline, cancellation=cancellation
                     )

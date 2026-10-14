@@ -6,7 +6,7 @@ import re
 from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any, Optional
 
-COMPLETION_QUEUE_CONTRACT_VERSION = "v2"
+COMPLETION_QUEUE_SCHEMA_VERSION = 1
 
 
 def normalize_guided_json(
@@ -292,67 +292,6 @@ def build_dispatch_profile_key(call: CompletionCallParams) -> str:
     return call.model
 
 
-@dataclass
-class QueuedCompletionEnvelope:
-    request_id: str
-    producer_id: str
-    pool_id: str
-    submitted_at: float
-    call: CompletionCallParams
-    contract_version: str = COMPLETION_QUEUE_CONTRACT_VERSION
-    timeout_seconds: Optional[float] = None
-    traceparent: Optional[str] = None
-    tracestate: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
-    dispatch_profile_key: Optional[str] = None
-    estimated_cost_units: Optional[int] = None
-
-    @property
-    def model(self) -> str:
-        return self.call.model
-
-    @property
-    def batch_key(self) -> str:
-        return self.dispatch_profile_key or self.call.model
-
-    def to_json(self) -> str:
-        data = {item.name: getattr(self, item.name) for item in fields(self)}
-        data["call"] = self.call.to_dict()
-        return json.dumps(data, separators=(",", ":"), sort_keys=True)
-
-    @classmethod
-    def from_json(cls, payload: str) -> "QueuedCompletionEnvelope":
-        data = json.loads(payload)
-        _validate_contract_version(data, envelope_type="request")
-        data["call"] = CompletionCallParams.from_dict(data["call"])
-        return cls(**data)
-
-
-@dataclass
-class CompletionReplyEnvelope:
-    request_id: str
-    producer_id: str
-    pool_id: str
-    status: str
-    completed_at: float
-    contract_version: str = COMPLETION_QUEUE_CONTRACT_VERSION
-    completion: Optional[Any] = None
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
-    error_source: Optional[str] = None
-    dispatcher_id: Optional[str] = None
-    execution_backend_address: Optional[str] = None
-
-    def to_json(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
-
-    @classmethod
-    def from_json(cls, payload: str) -> "CompletionReplyEnvelope":
-        data = json.loads(payload)
-        _validate_contract_version(data, envelope_type="reply")
-        return cls(**data)
-
-
 def completion_payload_to_text(completion: Optional[Any]) -> Optional[str]:
     return extract_completion_text(completion)[1]
 
@@ -480,18 +419,6 @@ def _read_value(payload: Any, key: str) -> Any:
     return getattr(payload, key, None)
 
 
-def _validate_contract_version(data: dict[str, Any], *, envelope_type: str) -> None:
-    actual = data.get("contract_version")
-    if actual != COMPLETION_QUEUE_CONTRACT_VERSION:
-        raise ValueError(
-            f"Unsupported {envelope_type} contract version: {actual!r}; "
-            f"expected {COMPLETION_QUEUE_CONTRACT_VERSION!r}"
-        )
-
-
-COMPLETION_QUEUE_CONTRACT_VERSION_V3 = "v3"
-
-
 class UnsupportedQueueStreaming(ValueError):
     """Terminal completion queues cannot transport streaming responses."""
 
@@ -505,13 +432,12 @@ def require_terminal_completion(call: CompletionCallParams) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class QueuedCompletionEnvelopeV3:
+class QueuedCompletionEnvelope:
     """One prepared ordered call, owned permanently by its original session.
 
     expires_at_ms is an absolute queue-server timestamp, fixed at first admission.
     """
 
-    contract_version: str
     fabric_group_id: str
     producer_id: str
     attempt_id: str
@@ -524,17 +450,23 @@ class QueuedCompletionEnvelopeV3:
     expires_at_ms: int
     call: CompletionCallParams
     estimated_cost_units: int = 1
+    schema_version: int = COMPLETION_QUEUE_SCHEMA_VERSION
+    traceparent: str | None = None
+    tracestate: str | None = None
 
     def to_json(self) -> str:
-        return json.dumps(
-            asdict(self), separators=(",", ":"), sort_keys=True, allow_nan=False
-        )
+        data = asdict(self)
+        for key in ("traceparent", "tracestate"):
+            if data[key] is None:
+                data.pop(key)
+        return json.dumps(data, separators=(",", ":"), sort_keys=True, allow_nan=False)
 
     @classmethod
-    def from_json(cls, payload: str) -> QueuedCompletionEnvelopeV3:
+    def from_json(cls, payload: str) -> QueuedCompletionEnvelope:
         data = json.loads(payload)
-        if data.get("contract_version") != COMPLETION_QUEUE_CONTRACT_VERSION_V3:
-            raise ValueError("Expected explicit v3 completion contract")
+        schema = data.get("schema_version")
+        if type(schema) is not int or schema != COMPLETION_QUEUE_SCHEMA_VERSION:
+            raise ValueError("Unsupported queued completion schema")
         data["call"] = CompletionCallParams.from_dict(data["call"])
         require_terminal_completion(data["call"])
         return cls(**data)

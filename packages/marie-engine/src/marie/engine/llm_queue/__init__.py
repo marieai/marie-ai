@@ -1,4 +1,4 @@
-"""LLM queue primitives for multi-node best-effort dispatch."""
+"""LLM queue primitives for durable queued dispatch."""
 
 from marie.engine.llm_queue.admission_policy import (
     AdmissionMatchError,

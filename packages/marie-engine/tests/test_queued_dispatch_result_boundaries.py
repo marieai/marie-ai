@@ -20,7 +20,6 @@ def test_result_allowance_counts_canonical_encoded_bytes(
     limited = RequestStore(
         store.test_url,
         fabric_id='sizes-' + uuid4().hex,
-        version='v3',
         limits=replace(store.limits, result_allowance=allowance),
     )
     try:

@@ -1,4 +1,4 @@
-"""Authoritative V3 transitions on isolated real Redis and Valkey servers."""
+"""Authoritative durable transitions on isolated real Redis and Valkey servers."""
 
 import importlib.util
 import json
@@ -20,7 +20,11 @@ def test_store_boundary_exists():
     'cleanup', ['ack', 'purge', 'producer_expiry', 'owner_recovery']
 )
 def test_unknown_capacity_survives_result_cleanup_until_evidence(store, cleanup):
-    req = request_for(store)
+    req = request_for(
+        store,
+        traceparent='00-11111111111111111111111111111111-2222222222222222-01',
+        tracestate='vendor=value',
+    )
     token, seq = run_request(store, req)
     sibling = request_for(store)
     run_request(store, sibling)
@@ -62,6 +66,8 @@ def test_unknown_capacity_survives_result_cleanup_until_evidence(store, cleanup)
     assert req.attempt_id in store.processing_ids()
     record = store.client.hgetall(store.keys.request(req.attempt_id))
     assert 'payload' not in record
+    assert record['traceparent'] == req.traceparent
+    assert record['tracestate'] == req.tracestate
     if cleanup != 'owner_recovery':
         assert 'result' not in record
         assert store.metadata(req.attempt_id).state == 'abandoned'
@@ -99,6 +105,51 @@ def test_unknown_capacity_survives_result_cleanup_until_evidence(store, cleanup)
     assert store.charge_totals('pool') == totals
 
 
+@pytest.mark.parametrize('cleanup', ['ack', 'owner_recovery'])
+def test_held_capacity_is_released_after_the_hard_ceiling(store, cleanup):
+    """No call outlives the maximum request deadline, so its hold cannot either."""
+    req = request_for(store)
+    token, seq = run_request(store, req)
+    sibling = request_for(store)
+    run_request(store, sibling)
+    totals = store.charge_totals('pool')
+    assert (
+        store.mark_unknown(
+            store.test_owner,
+            req.attempt_id,
+            claim_id=token,
+            execution_seq=seq,
+            category='call_timeout',
+        ).disposition
+        == 'finished'
+    )
+    if cleanup == 'ack':
+        assert store.ack_result(req.producer_id, req.attempt_id).disposition == 'acked'
+        assert store.metadata(req.attempt_id).state == 'abandoned'
+    assert store.recover_claim(store.test_owner, req.attempt_id).disposition == 'held'
+    assert store.usage()['reserved_items'] == 2
+
+    store.client.hset(store.keys.request(req.attempt_id), 'uncertainty_until', 1)
+
+    assert (
+        store.recover_claim(store.test_owner, req.attempt_id).disposition
+        == 'hold_expired'
+    )
+    assert store.usage()['reserved_items'] == 1
+    assert store.route_status('pool')['reserved_items'] == 1
+    assert store.endpoint_status('endpoint')['reserved_items'] == '1'
+    assert req.attempt_id not in store.processing_ids()
+    assert store.charge_totals('pool') == totals
+    if cleanup == 'ack':
+        assert store.metadata(req.attempt_id) is None
+    else:
+        assert (
+            store.read_result(req.producer_id, req.attempt_id)['error']
+            == 'remote_outcome_unknown'
+        )
+    assert store.metadata(sibling.attempt_id).state == 'executing'
+
+
 @pytest.fixture(params=['redis', 'valkey'])
 def store(request):
     from marie.engine.llm_queue.store import RequestStore, StoreLimits
@@ -110,7 +161,6 @@ def store(request):
     result = RequestStore(
         url,
         fabric_id='test-' + uuid4().hex,
-        version='v3',
         limits=StoreLimits(
             max_active_items=4,
             max_payload_bytes=100_000,
@@ -143,11 +193,11 @@ def store(request):
 def request_for(store, producer=None, **changes):
     from marie.engine.completion_contract import (
         CompletionCallParams,
-        QueuedCompletionEnvelopeV3,
+        QueuedCompletionEnvelope,
     )
 
-    return QueuedCompletionEnvelopeV3(
-        contract_version='v3',
+    return QueuedCompletionEnvelope(
+        schema_version=1,
         fabric_group_id=store.keys.fabric_id,
         producer_id=producer or store.create_producer(lease_ms=10_000),
         attempt_id=changes.pop('attempt_id', uuid4().hex),
@@ -991,10 +1041,10 @@ def test_contract_routes_and_streaming_rejected_before_writes(store):
     from marie.engine.llm_queue.store import RequestStore
 
     with pytest.raises(ValueError):
-        RequestStore('redis://localhost', fabric_id='bad:{fabric}', version='v3')
-    with pytest.raises(ValueError):
-        RequestStore('redis://localhost', fabric_id='okay', version='v2')
+        RequestStore('redis://localhost', fabric_id='bad:{fabric}')
     req = request_for(store)
+    with pytest.raises(ValueError, match='schema'):
+        store.admit(replace(req, schema_version=2))
     for call in [
         replace(req.call, stream=True),
         replace(req.call, extra_create_kwargs={'stream': True}),
@@ -1190,7 +1240,6 @@ def test_fabric_isolation_and_server_configuration_is_authoritative(store):
         and 'redis://127.0.0.1:'
         + str(store.client.connection_pool.connection_kwargs['port']),
         fabric_id=store.keys.fabric_id + '-other',
-        version='v3',
         limits=store.limits,
     )
     try:
@@ -1222,7 +1271,6 @@ def test_fabric_isolation_and_server_configuration_is_authoritative(store):
             'redis://127.0.0.1:'
             + str(store.client.connection_pool.connection_kwargs['port']),
             fabric_id=store.keys.fabric_id,
-            version='v3',
             limits=replace(store.limits, result_allowance=2048),
         )
 
@@ -1344,13 +1392,13 @@ def test_metadata_and_result_reads_never_fetch_whole_hash_or_input(store, monkey
     assert 'payload' not in selected and 'result' not in selected
 
 
-def test_record_version_and_corrupt_accounting_fail_before_writes(store):
+def test_record_schema_and_corrupt_accounting_fail_before_writes(store):
     from marie.engine.llm_queue.store import StoreUnavailable
 
     req = request_for(store)
     token, seq = run_request(store, req)
     key = store.keys.request(req.attempt_id)
-    store.client.hset(key, 'version', 'v2')
+    store.client.hset(key, 'schema_version', 2)
     with pytest.raises(StoreUnavailable):
         store.finish(
             store.test_owner,
@@ -1360,7 +1408,7 @@ def test_record_version_and_corrupt_accounting_fail_before_writes(store):
             result={'ok': True},
         )
     assert store.client.hexists(key, 'payload')
-    store.client.hset(key, 'version', 'v3')
+    store.client.hset(key, 'schema_version', 1)
     store.client.hset(store.keys.prefix + 'usage', 'reserved_items', 0)
     with pytest.raises(StoreUnavailable):
         store.finish(
@@ -1581,7 +1629,6 @@ def test_aggregate_result_allowance_and_empty_sessions_are_bounded(store):
     limited = RequestStore(
         url,
         fabric_id=store.keys.fabric_id + '-limited',
-        version='v3',
         limits=replace(
             store.limits,
             max_storage_bytes=5120,
@@ -1895,3 +1942,49 @@ def test_manual_settlement_still_requires_remote_evidence(store):
         store.settle_remote(store.test_owner, req.attempt_id, **arguments)
     assert _fabric_dump(store) == before
     assert store.usage()['reserved_items'] == 1
+
+
+def test_admission_retains_first_context_through_reconciliation_and_settlement(store):
+    original = request_for(
+        store,
+        traceparent='00-11111111111111111111111111111111-2222222222222222-01',
+        tracestate='vendor=value',
+    )
+    assert store.admit(original).disposition == 'admitted'
+    changed = replace(
+        original, traceparent='00-33333333333333333333333333333333-4444444444444444-01'
+    )
+    assert store.admit(changed).disposition == 'existing'
+    assert store.metadata(original.attempt_id).traceparent == original.traceparent
+    claim = 'traced-claim'
+    assert (
+        store.claim(
+            store.test_owner, original.attempt_id, pool_id='pool', claim_id=claim
+        ).disposition
+        == 'claimed'
+    )
+    started = store.authorize_start(
+        store.test_owner, original.attempt_id, claim_id=claim
+    )
+    assert started.disposition == 'started'
+    sequence = started.execution_seq
+    assert (
+        store.finish(
+            store.test_owner,
+            original.attempt_id,
+            claim_id=claim,
+            execution_seq=sequence,
+            result={'choices': []},
+            success=True,
+        ).disposition
+        == 'finished'
+    )
+    metadata = store.metadata(original.attempt_id)
+    assert metadata.traceparent == original.traceparent
+    assert metadata.tracestate == original.tracestate
+    assert not store.client.hexists(store.keys.request(original.attempt_id), 'payload')
+    assert (
+        store.ack_result(original.producer_id, original.attempt_id).disposition
+        == 'acked'
+    )
+    assert store.metadata(original.attempt_id) is None

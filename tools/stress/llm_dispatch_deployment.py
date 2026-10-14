@@ -490,7 +490,6 @@ def configurations(root: Path, runtime: dict, provider: str) -> dict[str, str]:
             '/status': {'methods': ['POST']},
         },
         llm_queue=dict(
-            queue_contract_version='v3',
             fabric_group_id=runtime['fabric'],
             llm_dispatch=dict(
                 policy_source='static',
@@ -648,7 +647,6 @@ def configurations(root: Path, runtime: dict, provider: str) -> dict[str, str]:
     queue = runtime['fixtures']['valkey']['url']
     return private | dict(
         LLM_QUEUE_ENABLED='true',
-        LLM_QUEUE_CONTRACT_VERSION='v3',
         LLM_QUEUE_URL=queue,
         LLM_QUEUE_FABRIC_GROUP_ID=runtime['fabric'],
         LLM_QUEUE_POOL_ID='document-small',

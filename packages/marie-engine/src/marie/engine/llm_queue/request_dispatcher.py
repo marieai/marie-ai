@@ -31,6 +31,7 @@ from marie.engine.llm_queue.endpoint import (
     RegisteredEndpointGroup,
     RegisteredReplica,
 )
+from marie.engine.llm_queue.metrics import dispatch_metrics
 from marie.engine.llm_queue.queue_keys import validate_identifier
 from marie.engine.llm_queue.registry import (
     SnapshotReadBudget,
@@ -48,9 +49,20 @@ from marie.engine.llm_queue.store import (
     TransitionRejected,
 )
 from marie.instrumentation import get_tracer
-from opentelemetry.trace import StatusCode
+from marie.instrumentation.context import (
+    extract_trace_context,
+    start_trace_span,
+    use_trace_context,
+)
+from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.trace import Span, StatusCode
 
 _tracer = get_tracer("marie.engine.llm_queue.request_dispatcher")
+
+
+# Records that still reserve capacity although no local work will settle them.
+_HELD_STATES = frozenset({"abandoned", "failed", "cancelled", "expired"})
 
 
 def _endpoint_port(base_url: str) -> int:
@@ -184,7 +196,7 @@ class RequestDispatcher:
             raise ValueError("Lane must reference a registered endpoint group")
         if not lanes or not endpoint_groups:
             raise ValueError(
-                "V3 requires registered endpoint groups and explicit lanes"
+                "Queued dispatch requires registered endpoint groups and explicit lanes"
             )
         if (
             len(lanes) > store.limits.max_routes
@@ -246,10 +258,9 @@ class RequestDispatcher:
         self.policy_generation = policy_generation
         self.policy_digest = policy_digest
         self._refresh_worker = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="llm-v3-policy"
+            max_workers=1, thread_name_prefix="llm-dispatch-policy"
         )
         self.scheduler = DrrLaneScheduler(
-            queue_client=None,
             lanes=[
                 DrrLaneConfig(
                     pool_id=lane.pool_id,
@@ -298,10 +309,10 @@ class RequestDispatcher:
         self._processing_offset = 0
         self._delayed_offset = 0
         self._store_workers = ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="llm-v3-store"
+            max_workers=4, thread_name_prefix="llm-dispatch-store"
         )
         self._lease_worker = ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="llm-v3-lease"
+            max_workers=1, thread_name_prefix="llm-dispatch-lease"
         )
         self._store_futures: set[asyncio.Future[Any]] = set()
 
@@ -381,6 +392,29 @@ class RequestDispatcher:
 
         future.add_done_callback(completed)
         return await asyncio.shield(future)
+
+    def release_hold(self, attempt_id: str) -> str:
+        """Release one held reservation on an operator's word that the call stopped."""
+        owner = self.owner
+        if owner is None:
+            return "not_owner"
+        if attempt_id in self._tasks:
+            return "in_flight"
+        metadata = self.store.metadata(attempt_id)
+        if metadata is None:
+            return "missing"
+        if metadata.reserved != 1 or metadata.state not in _HELD_STATES:
+            return "not_held"
+        disposition = self.store.settle_remote(
+            owner,
+            attempt_id,
+            claim_id=metadata.claim_id,
+            execution_seq=metadata.execution_seq,
+            evidence="remote_cancelled",
+        ).disposition
+        if disposition == "settled":
+            self._counts["operator_holds_released"] += 1
+        return disposition
 
     async def _maintenance_io(self, method: str, *args: Any, **kwargs: Any) -> Any:
         if self._stop.is_set():
@@ -617,7 +651,8 @@ class RequestDispatcher:
             )
         read_budget.check()
         return dict(
-            contract_version="v3",
+            mode="queued-dispatch",
+            sampling_available=True,
             metadata_unavailable=self.metadata_unavailable,
             fabric_group_id=self.store.keys.fabric_id,
             dispatcher_id=self.dispatcher_id,
@@ -633,10 +668,26 @@ class RequestDispatcher:
                 "abandoned_executions": usage.get("abandoned_executions", 0),
             },
             held_reservations_sampled=sum(
-                row.reserved == 1
-                and row.state in {"abandoned", "failed", "cancelled", "expired"}
+                row.reserved == 1 and row.state in _HELD_STATES
                 for row in processing_rows
             ),
+            held_requests=[
+                dict(
+                    attempt_id=row.attempt_id,
+                    pool_id=row.pool_id,
+                    replica_id=row.replica_id,
+                    state=row.state,
+                    execution_seq=row.execution_seq,
+                    last_error=row.last_error,
+                    uncertainty_until=row.uncertainty_until,
+                    release_after_ms=row.uncertainty_until
+                    + self.store.limits.max_deadline_ms,
+                )
+                for row in processing_rows
+                if row.reserved == 1
+                and row.state in _HELD_STATES
+                and row.attempt_id not in self._tasks
+            ],
             observed_at_ms=int(time.time() * 1000),
             policy_generation=self.policy_generation,
             policy_digest=self.policy_digest,
@@ -773,7 +824,7 @@ class RequestDispatcher:
                     pool_id=record.pool_id,
                     endpoint_id=record.endpoint_id,
                     fabric_group_id=self.store.keys.fabric_id,
-                    contract_version="v3",
+                    mode="queued-dispatch",
                     config_revision=record.config_revision,
                     lifecycle_stage=record.state,
                     state_source="store",
@@ -821,7 +872,7 @@ class RequestDispatcher:
                 request_id=inflight.claim.attempt_id,
                 attempt_id=inflight.claim.attempt_id,
                 fabric_group_id=self.store.keys.fabric_id,
-                contract_version="v3",
+                mode="queued-dispatch",
                 lifecycle_stage="dispatching",
                 state_source="dispatcher",
                 dispatcher_id=self.dispatcher_id,
@@ -1062,7 +1113,6 @@ class RequestDispatcher:
                     ):
                         raise ValueError("Endpoint identity changed")
                 scheduler = DrrLaneScheduler(
-                    queue_client=None,
                     total_concurrent_dispatch=policy["total_concurrent_dispatch"],
                     lanes=[
                         DrrLaneConfig(
@@ -1238,6 +1288,8 @@ class RequestDispatcher:
                                 self._counts["remote_outcomes_recovered"] += 1
                             elif recovered.disposition == "settled":
                                 self._counts["terminal_reservations_recovered"] += 1
+                            elif recovered.disposition == "hold_expired":
+                                self._counts["held_reservations_expired"] += 1
                         self._owner_ready = True
                     if time.monotonic() >= self._owner_until:
                         raise StaleOwner("owner expired locally")
@@ -1356,6 +1408,8 @@ class RequestDispatcher:
                     self._counts["remote_outcomes_recovered"] += 1
                 elif recovered.disposition == "settled":
                     self._counts["terminal_reservations_recovered"] += 1
+                elif recovered.disposition == "hold_expired":
+                    self._counts["held_reservations_expired"] += 1
         promoted = await self._maintenance_io(
             "promote_due", self.owner, limit=page, offset=self._delayed_offset
         )
@@ -1555,6 +1609,7 @@ class RequestDispatcher:
             call = CompletionCallParams.from_dict(payload["call"])
             clock_read_at = time.monotonic()
             now = await self._io("server_time_ms")
+            queue_clock_read_at = time.monotonic()
             request_deadline = clock_read_at + (payload["expires_at_ms"] - now) / 1000
             from marie.engine.completion_contract import require_terminal_completion
 
@@ -1608,7 +1663,7 @@ class RequestDispatcher:
                     "marie.llm_dispatch.endpoint_group_id": claim.endpoint_group_id,
                     "marie.llm_dispatch.replica_id": replica.replica_id,
                     "marie.llm_dispatch.dispatcher_id": self.dispatcher_id,
-                    "marie.llm_dispatch.contract_version": "v3",
+                    "marie.llm_dispatch.mode": "queued-dispatch",
                     "marie.llm_dispatch.model": (
                         metadata.model
                         if metadata.model
@@ -1619,23 +1674,62 @@ class RequestDispatcher:
                     ),
                     "marie.llm_dispatch.message_count": len(call.messages),
                     "marie.llm_dispatch.queue_wait_ms": max(
-                        0, now - metadata.admitted_at_ms
+                        0,
+                        now
+                        - metadata.admitted_at_ms
+                        + (time.monotonic() - queue_clock_read_at) * 1000,
                     ),
                 }
+                parent_context = trace.set_span_in_context(trace.get_current_span())
+                if not trace.get_current_span().get_span_context().is_valid:
+                    parent_context = extract_trace_context(
+                        metadata.traceparent, metadata.tracestate
+                    )
                 began_ns = time.time_ns()
                 began = time.monotonic()
-                outcome = await client.execute(call, timeout_seconds=timeout)
+                span = start_trace_span(
+                    _tracer,
+                    "LLMDispatch.completion",
+                    context=parent_context,
+                    start_time=began_ns,
+                    kind=trace.SpanKind.CLIENT,
+                    attributes={
+                        **attributes,
+                        "openinference.span.kind": "LLM",
+                        "llm.model_name": attributes["marie.llm_dispatch.model"],
+                    },
+                )
+                outcome = None
+                try:
+                    with use_trace_context(trace.set_span_in_context(span)):
+                        outcome = await client.execute(call, timeout_seconds=timeout)
+                finally:
+                    if outcome is None:
+                        _emit_execution_history(
+                            attributes,
+                            ExecutionOutcome(category="execution_interrupted"),
+                            began_ns,
+                            began,
+                            span=span,
+                        )
                 if not outcome.request_started and transmitted:
                     outcome.retryable = False
+                    _emit_execution_history(
+                        attributes, outcome, began_ns, began, span=span
+                    )
                     return started.execution_seq, outcome, replica.replica_id
                 transmitted = transmitted or outcome.request_started
                 recovered, repetitive = _normalize_length_response(outcome.response)
                 if recovered:
                     self._counts["missing_eos_recovered"] += 1
-                    _emit_execution_history(attributes, outcome, began_ns, began)
+                    _emit_execution_history(
+                        attributes, outcome, began_ns, began, span=span
+                    )
                 elif repetitive:
                     outcome.category = "repetition"
-                    _emit_execution_history(attributes, outcome, began_ns, began)
+                    _emit_execution_history(
+                        attributes, outcome, began_ns, began, span=span
+                    )
                     recovered_call = apply_repetition_recovery(call)
                     if not repetition_retry_used and recovered_call is not None:
                         permission = await self._commit(
@@ -1655,7 +1749,9 @@ class RequestDispatcher:
                         availability_success=True,
                     )
                 else:
-                    _emit_execution_history(attributes, outcome, began_ns, began)
+                    _emit_execution_history(
+                        attributes, outcome, began_ns, began, span=span
+                    )
                 if outcome.request_started:
                     return started.execution_seq, outcome, replica.replica_id
                 await self._commit(
@@ -1711,6 +1807,83 @@ class RequestDispatcher:
             await asyncio.sleep(random.uniform(0.1, 0.5))
 
     async def _execute(self, claim: ClaimRecord) -> None:
+        span = None
+        try:
+            metadata = await self._io("metadata", claim.attempt_id)
+            parent = extract_trace_context(
+                metadata.traceparent if metadata else None,
+                metadata.tracestate if metadata else None,
+            )
+            span = start_trace_span(
+                _tracer,
+                "LLMDispatch.dispatch",
+                context=parent,
+                attributes={
+                    "openinference.span.kind": "CHAIN",
+                    "marie.llm_dispatch.request_id": claim.attempt_id,
+                    "marie.llm_dispatch.claim_id": claim.claim_id,
+                    "marie.llm_dispatch.fabric_group_id": self.store.keys.fabric_id,
+                    "marie.llm_dispatch.pool_id": claim.pool_id,
+                    "marie.llm_dispatch.dispatcher_id": self.dispatcher_id,
+                    "marie.llm_dispatch.mode": "queued-dispatch",
+                },
+            )
+            with use_trace_context(trace.set_span_in_context(span)):
+                await self._execute_claim(claim, span)
+        except StaleOwner:
+            self._owner_until = 0
+            if span is not None:
+                self._observe_outcome(
+                    span, claim, "interrupted", category="owner_uncertain"
+                )
+        except (StoreUnavailable, TransitionRejected):
+            self._category = "start_unconfirmed"
+            if span is not None:
+                self._observe_outcome(
+                    span, claim, "interrupted", category="start_unconfirmed"
+                )
+        except asyncio.CancelledError:
+            if span is not None:
+                self._observe_outcome(
+                    span, claim, "interrupted", category="dispatch_cancelled"
+                )
+            raise
+        except Exception:
+            if span is not None:
+                self._observe_outcome(
+                    span, claim, "interrupted", category="dispatch_error"
+                )
+            raise
+        finally:
+            self.scheduler.retire_charge(claim.charge_sequence)
+            if span is not None:
+                span.end()
+
+    def _observe_outcome(
+        self,
+        span: Span,
+        claim: ClaimRecord,
+        disposition: str,
+        *,
+        category: str = "none",
+        **attributes: Any,
+    ) -> None:
+        span.add_event(disposition, attributes=attributes)
+        span.set_attribute("marie.llm_dispatch.disposition", disposition)
+        span.set_attribute("marie.llm_dispatch.error_type", category)
+        if category != "none":
+            span.set_status(StatusCode.ERROR)
+        elif disposition == "result_committed":
+            span.set_status(StatusCode.OK)
+        dispatch_metrics.record_request_outcome(
+            pool_id=claim.pool_id,
+            dispatcher_id=self.dispatcher_id,
+            fabric_group_id=self.store.keys.fabric_id,
+            disposition=disposition,
+            category=category,
+        )
+
+    async def _execute_claim(self, claim: ClaimRecord, span: Span) -> None:
         attempt = claim.attempt_id
         claim_id = claim.claim_id
         outcome = None
@@ -1730,12 +1903,21 @@ class RequestDispatcher:
                         claim.charged_cost,
                         charge_sequence=claim.charge_sequence,
                     )
+                self._observe_outcome(
+                    span, claim, "rejected", category="unsupported_streaming"
+                )
                 return
             except _NoReplicaAvailable:
                 self._category = "replica_unavailable"
+                self._observe_outcome(
+                    span, claim, "returned", category="replica_unavailable"
+                )
                 return
             except (StoreUnavailable, TransitionRejected):
                 self._category = "start_unconfirmed"
+                self._observe_outcome(
+                    span, claim, "interrupted", category="start_unconfirmed"
+                )
                 return
             args = dict(claim_id=claim_id, execution_seq=sequence)
             if outcome.category:
@@ -1764,6 +1946,13 @@ class RequestDispatcher:
                 )
                 if reply.disposition == "finished":
                     self._counts["remote_outcomes_failed"] += 1
+                self._observe_outcome(
+                    span,
+                    claim,
+                    "remote_unknown",
+                    category=outcome.category or "remote_outcome_unknown",
+                    remote_settled=False,
+                )
                 return
             if outcome.retryable and sequence < self.store.limits.max_attempts:
                 delay = max(
@@ -1783,6 +1972,13 @@ class RequestDispatcher:
                 )
                 if reply.disposition == "deferred":
                     self._counts["retries"] += 1
+                    self._observe_outcome(
+                        span,
+                        claim,
+                        "deferred",
+                        category=outcome.category or "none",
+                        delay_ms=delay,
+                    )
                     return
             result = (
                 outcome.response
@@ -1815,24 +2011,57 @@ class RequestDispatcher:
                 "terminal",
                 "held",
             }:
-                await self._commit(
+                settlement = await self._commit(
                     "settle_remote", attempt, **args, evidence="remote_completed"
                 )
+                self._observe_outcome(
+                    span,
+                    claim,
+                    "remote_settled",
+                    evidence="remote_completed",
+                    settlement=settlement.disposition,
+                )
+            self._observe_outcome(
+                span,
+                claim,
+                "result_committed",
+                category=outcome.category
+                or (
+                    "none"
+                    if reply.state == "succeeded"
+                    else reply.state or reply.disposition
+                ),
+                state=reply.state,
+                remote_settled=outcome.remote_settled,
+            )
             self._counts["completed"] += 1
         except StaleOwner:
             self._owner_until = 0
+            self._observe_outcome(
+                span, claim, "interrupted", category="owner_uncertain"
+            )
         finally:
             outcome = None
-            self.scheduler.retire_charge(claim.charge_sequence)
 
 
 def _emit_execution_history(
-    attributes: dict[str, Any], outcome: ExecutionOutcome, began_ns: int, began: float
+    attributes: dict[str, Any],
+    outcome: ExecutionOutcome,
+    began_ns: int,
+    began: float,
+    *,
+    parent_context: Context | None = None,
+    span: Span | None = None,
 ) -> None:
     """Emit one physical attempt after transport returns, before result-commit retries."""
     elapsed = max(0.0, (time.monotonic() - began) * 1000)
     prefix = "marie.llm_dispatch."
     attributes[prefix + "execution_ms"] = elapsed
+    attributes[prefix + "remote_settled"] = outcome.remote_settled
+    attributes[prefix + "request_started"] = outcome.request_started
+    attributes[prefix + "retryable"] = outcome.retryable
+    attributes["openinference.span.kind"] = "LLM"
+    attributes["llm.model_name"] = attributes.get(prefix + "model", "")
     attributes[prefix + "total_latency_ms"] = (
         attributes[prefix + "queue_wait_ms"] + elapsed
     )
@@ -1851,12 +2080,29 @@ def _emit_execution_history(
                 count = usage.get(source)
                 if type(count) is int and 0 <= count <= 2**53 - 1:
                     attributes["llm.token_count." + target] = count
-    # No active span context encloses payloads, exceptions, or commit retries.
-    span = _tracer.start_span(
-        "LLMDispatch.completion", start_time=began_ns, attributes=attributes
-    )
+    if span is None:
+        span = start_trace_span(
+            _tracer,
+            "LLMDispatch.completion",
+            context=parent_context,
+            start_time=began_ns,
+            attributes=attributes,
+        )
+    else:
+        span.set_attributes(attributes)
     span.set_status(StatusCode.ERROR if failed else StatusCode.OK)
     span.end()
+    dispatch_metrics.record_request_execution(
+        pool_id=attributes.get(prefix + "pool_id", ""),
+        dispatcher_id=attributes.get(prefix + "dispatcher_id", ""),
+        fabric_group_id=attributes.get(prefix + "fabric_group_id", ""),
+        mode="queued-dispatch",
+        duration_seconds=elapsed / 1000,
+        ok=not failed,
+        category=outcome.category or "none",
+        remote_settled=outcome.remote_settled,
+        queue_wait_seconds=attributes[prefix + "queue_wait_ms"] / 1000,
+    )
 
 
 def _normalize_length_response(

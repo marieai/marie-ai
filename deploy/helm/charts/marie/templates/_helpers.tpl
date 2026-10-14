@@ -45,12 +45,6 @@ Create a default fully qualified app name.
 {{- $global := .Values.global | default dict -}}
 {{- $queue := $global.llmQueue | default dict -}}
 {{- if $queue.enabled | default false -}}
-{{- $contract := $queue.contractVersion | default "v2" -}}
-{{- if not (has $contract (list "v2" "v3")) -}}
-{{- fail "global.llmQueue.contractVersion must be v2 or v3" -}}
-{{- end }}
-- name: LLM_QUEUE_CONTRACT_VERSION
-  value: {{ $contract | quote }}
 {{- $queueURL := trim ($queue.url | default "") -}}
 {{- if $queueURL }}
 - name: LLM_QUEUE_URL

@@ -8,9 +8,8 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
-from types import SimpleNamespace
 
-from test_v3_producer import calls, processor_for
+from test_queued_dispatch_producer import calls, processor_for
 
 
 def record(path, event):
@@ -25,9 +24,17 @@ def main():
         return
     os.environ['LLM_QUEUE_PRODUCER_TTL_SECONDS'] = '1'
     os.environ['LLM_QUEUE_PRODUCER_REFRESH_INTERVAL_SECONDS'] = '0.1'
-    store = SimpleNamespace(
-        test_url=config['url'], keys=SimpleNamespace(fabric_id=config['fabric'])
-    )
+    from marie.engine.llm_queue.store import RequestStore, StoreUnavailable
+
+    store = RequestStore.for_producer(config['url'], fabric_id=config['fabric'])
+    store.test_url = config['url']
+    if config.get('retain_terminal_results'):
+
+        def postpone_ack(self, producer_id, attempt_id):
+            raise StoreUnavailable('owned fixture postpones terminal acknowledgement')
+
+        RequestStore.ack_result = postpone_ack
+
     processor = processor_for(store, batch_timeout=30)
     events = Path(config['events'])
     lock = threading.Lock()
@@ -40,7 +47,7 @@ def main():
         from marie.engine.engine_utils import open_ai_like_formatting
         from PIL import Image
 
-        prepared = calls(config['count'])
+        prepared = calls(config['count'], store)
         with Image.new('RGB', (16, 16), 'white') as image:
             for call in prepared:
                 call.messages.append(
@@ -74,6 +81,7 @@ def main():
     )
     worker.join()
     processor.close()
+    store.close()
 
 
 async def dispatcher(config):
@@ -116,7 +124,6 @@ async def dispatcher(config):
     store = RequestStore(
         config['url'],
         fabric_id=config['fabric'],
-        version='v3',
         limits=StoreLimits(**config['limits']),
     )
     runtime = dispatcher_for(store, config['endpoint'], owner_lease_ms=500)

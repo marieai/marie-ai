@@ -27,6 +27,7 @@ from marie.engine.completion_contract import (
     require_terminal_completion,
 )
 from marie.engine.llm_queue.queue_keys import validate_identifier
+from marie.instrumentation.context import inject_trace_context
 
 _queue_transport = ContextVar('llm_queue_transport', default=False)
 
@@ -397,6 +398,7 @@ class EndpointClient:
             if self.endpoint.api_key
             else {}
         )
+        headers.update(inject_trace_context())
         try:
             async with asyncio.timeout(timeout_seconds):
                 async with self.client.stream(

@@ -1,4 +1,4 @@
-"""Original-process V3 admission and authoritative terminal result delivery."""
+"""Original-process queued-dispatch admission and authoritative terminal result delivery."""
 
 from __future__ import annotations
 
@@ -33,6 +33,23 @@ from marie.engine.llm_queue.store import (
     StoreUnavailable,
     TransitionRejected,
 )
+from marie.instrumentation import get_tracer
+from marie.instrumentation.context import (
+    extract_trace_context,
+    inject_trace_context,
+    start_trace_span,
+)
+from opentelemetry import trace
+from opentelemetry.trace import Span, StatusCode
+
+_tracer = get_tracer("marie.engine.llm_queue.producer")
+
+
+def _end_admission(span: Span | None, disposition: str, *, ok: bool) -> None:
+    if span is not None:
+        span.set_attribute("marie.llm_dispatch.disposition", disposition)
+        span.set_status(StatusCode.OK if ok else StatusCode.ERROR)
+        span.end()
 
 
 class QueueTaskError(RuntimeError):
@@ -59,6 +76,7 @@ class _Pending:
     cancel: bool = False
     expire: bool = False
     category: str = "deadline_exceeded"
+    admission_confirmed: bool = False
 
 
 @dataclass(frozen=True)
@@ -76,14 +94,14 @@ class PreparedCalls:
         return self.prepare(index)
 
 
-class V3Producer:
+class QueuedDispatchProducer:
     def __init__(
         self, *, config: LlmQueueProducerConfig | LlmQueueRuntimeConfig
     ) -> None:
         self.config = config
         self.fabric_id = resolve_fabric_id(config.fabric_group_id)
         if not config.queue_url:
-            raise ValueError("V3 requires a configured queue URL")
+            raise ValueError("Queued dispatch requires a configured queue URL")
         self._pid = os.getpid()
         self._condition = threading.Condition()
         self._start_lock = threading.Lock()
@@ -165,7 +183,7 @@ class V3Producer:
                         target=self._supervise,
                         args=(target,),
                         daemon=True,
-                        name=f"llm-v3-{target.__name__}",
+                        name=f"llm-dispatch-{target.__name__}",
                     )
                     self._threads.append(thread)
                     thread.start()
@@ -320,11 +338,30 @@ class V3Producer:
                 require_terminal_completion(call)
         if not calls:
             return []
+        trace_headers = inject_trace_context()
+        producer_span = None
+        if not trace_headers:
+            producer_span = start_trace_span(
+                _tracer,
+                "LLMQueue.produce",
+                attributes={
+                    "openinference.span.kind": "CHAIN",
+                    "marie.llm_dispatch.fabric_group_id": self.fabric_id,
+                    "marie.llm_dispatch.mode": "queued-dispatch",
+                },
+            )
+            trace_headers = inject_trace_context(
+                trace.set_span_in_context(producer_span)
+            )
+        parent_context = extract_trace_context(
+            trace_headers.get("traceparent"), trace_headers.get("tracestate")
+        )
         cancellation = cancellation or threading.Event()
         results: list[BatchResult | None] = [None] * len(calls)
         owned: dict[str, tuple[int, _Pending]] = {}
         next_index = 0
         envelope = None
+        admission_span = None
         preparing = False
         try:
             store = self._start(deadline, cancellation)
@@ -336,10 +373,37 @@ class V3Producer:
                     raise QueueTaskError("cancellation_requested")
                 terminal_error = None
                 for attempt, (index, pending) in list(owned.items()):
-                    if pending.result is None or results[index] is not None:
+                    if (
+                        not pending.admission_confirmed
+                        or pending.result is None
+                        or results[index] is not None
+                    ):
                         continue
                     # Set delivery identity before entering arbitrary application code.
                     results[index] = pending.result
+                    delivery = start_trace_span(
+                        _tracer,
+                        "LLMQueue.result",
+                        context=parent_context,
+                        attributes={
+                            "openinference.span.kind": "CHAIN",
+                            "marie.llm_dispatch.request_id": attempt,
+                            "marie.llm_dispatch.fabric_group_id": self.fabric_id,
+                            "marie.llm_dispatch.state": (
+                                "succeeded"
+                                if pending.result.error is None
+                                else getattr(pending.result.error, "state", "failed")
+                                or "failed"
+                            ),
+                            "marie.llm_dispatch.mode": "queued-dispatch",
+                        },
+                    )
+                    delivery.set_status(
+                        StatusCode.OK
+                        if pending.result.error is None
+                        else StatusCode.ERROR
+                    )
+                    delivery.end()
                     if on_result and pending.result.error is None:
                         try:
                             on_result(pending.task_id, pending.result.response)
@@ -406,8 +470,21 @@ class V3Producer:
                                 estimated_cost_units=prepared_cost_units(
                                     prepared, metadata
                                 ),
+                                traceparent=trace_headers.get("traceparent"),
+                                tracestate=trace_headers.get("tracestate"),
                             )
                             del prepared
+                            admission_span = start_trace_span(
+                                _tracer,
+                                "LLMQueue.admit",
+                                context=parent_context,
+                                attributes={
+                                    "openinference.span.kind": "CHAIN",
+                                    "marie.llm_dispatch.request_id": attempt,
+                                    "marie.llm_dispatch.fabric_group_id": self.fabric_id,
+                                    "marie.llm_dispatch.mode": "queued-dispatch",
+                                },
+                            )
                             pending = _Pending(task_id, deadline)
                             owned[attempt] = (next_index, pending)
                             with self._condition:
@@ -419,6 +496,9 @@ class V3Producer:
                             continue
                         reply = store.admit_from_manifest(envelope)
                         if reply.disposition in {"admitted", "existing"}:
+                            owned[envelope.attempt_id][1].admission_confirmed = True
+                            _end_admission(admission_span, reply.disposition, ok=True)
+                            admission_span = None
                             envelope = None
                             next_index += 1
                             continue
@@ -430,6 +510,8 @@ class V3Producer:
                     except StoreUnavailable:
                         wait_seconds = 0.25
                     except (ValueError, TypeError, OverflowError):
+                        _end_admission(admission_span, "invalid_request", ok=False)
+                        admission_span = None
                         if preparing:
                             with self._condition:
                                 self._preparing -= 1
@@ -472,6 +554,17 @@ class V3Producer:
                         f"{batch_request_id}_task_{index}", None, cause
                     )
         finally:
+            _end_admission(admission_span, "interrupted", ok=False)
+            if producer_span is not None:
+                producer_span.set_status(
+                    StatusCode.OK
+                    if all(
+                        result is not None and result.error is None
+                        for result in results
+                    )
+                    else StatusCode.ERROR
+                )
+                producer_span.end()
             envelope = None
             with self._condition:
                 if preparing:

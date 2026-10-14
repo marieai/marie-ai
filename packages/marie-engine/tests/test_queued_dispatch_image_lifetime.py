@@ -1,4 +1,4 @@
-"""Scanner-owned image lifetime through the real V3 transport."""
+"""Scanner-owned image lifetime through the durable transport."""
 
 import asyncio
 import weakref
@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+from test_queued_dispatch_producer import engine_for, registered_context
 from test_request_dispatcher import dispatcher_for, eventually, http_endpoint, store
-from test_v3_producer import engine_for
 
 from marie.extract.annotators import util
 
@@ -45,6 +45,7 @@ async def test_scanner_releases_prepared_images_while_provider_waits(
                 SimpleNamespace(render=lambda _: 'prompt'),
                 SimpleNamespace(source_metadata={'ocr': []}),
                 engine=engine,
+                request_context=registered_context(store),
                 is_multimodal=True,
                 expect_output='none',
                 mm_processor_kwargs={'min_pixels': 784, 'max_pixels': 1568},
@@ -96,6 +97,7 @@ async def test_scanner_rejects_decoded_oversize_before_preparation(
                 SimpleNamespace(render=lambda _: 'prompt'),
                 SimpleNamespace(source_metadata={'ocr': []}),
                 engine=engine,
+                request_context=registered_context(store),
                 is_multimodal=True,
                 expect_output='none',
             )
@@ -325,7 +327,7 @@ def executor_request(tmp_path, monkeypatch, engine, count=9, dimensions=(2525, 3
     return request, refs, phases
 
 
-async def test_generic_v3_group_rejects_total_preparation_before_formatting(
+async def test_generic_queued_group_rejects_total_preparation_before_formatting(
     store, http_endpoint, monkeypatch
 ):
     from marie.engine.exceptions import BatchExecutionError
@@ -340,7 +342,11 @@ async def test_generic_v3_group_rejects_total_preparation_before_formatting(
         try:
             await eventually(lambda: store.resolve_route('pool'))
             with pytest.raises((ValueError, BatchExecutionError), match='preparation'):
-                await asyncio.to_thread(engine.batch_generate, inputs)
+                await asyncio.to_thread(
+                    engine.batch_generate,
+                    inputs,
+                    request_contexts=[registered_context(store)],
+                )
             assert not received
             assert inputs == [[first, second, 'ordered pair']]
             assert first.getpixel((0, 0)) == (0, 0, 0)
@@ -361,8 +367,8 @@ async def test_unknown_remote_releases_local_body_but_retains_reservation(
         DispatchLane,
         RequestDispatcher,
     )
+    from queued_dispatch_qualification_evidence import record_evidence
     from test_request_dispatcher import admit_request
-    from v3_qualification_evidence import record_evidence
 
     class BodyPart(dict):
         pass
@@ -420,9 +426,7 @@ async def test_unknown_remote_releases_local_body_but_retains_reservation(
         if cancel_call:
             await eventually(lambda: bool(received))
             runtime._tasks[request.attempt_id].cancel()
-        await eventually(
-            lambda: store.metadata(request.attempt_id).state == 'outcome_unknown'
-        )
+        await eventually(lambda: store.metadata(request.attempt_id).state == 'failed')
         await eventually(lambda: not runtime._tasks)
         assert refs and all(ref() is None for ref in refs)
         assert len(received) == 1 and not releases['slow'].is_set()
@@ -431,7 +435,7 @@ async def test_unknown_remote_releases_local_body_but_retains_reservation(
             lambda: store.metadata(request.attempt_id).state == 'abandoned'
         )
         record = store.client.hgetall(store.keys.request(request.attempt_id))
-        assert b'payload' not in record and b'result' not in record
+        assert 'payload' not in record and 'result' not in record
         assert store.usage()['reserved_items'] == 1
         reservation = store.metadata(request.attempt_id)
         await asyncio.sleep(0.25)
@@ -500,6 +504,7 @@ async def test_scanner_streaming_rejected_before_prepared_images(
                 SimpleNamespace(render=lambda _: 'prompt'),
                 SimpleNamespace(source_metadata={'ocr': []}),
                 engine=engine,
+                request_context=registered_context(store),
                 is_multimodal=True,
                 expect_output='none',
                 completion_params={'extra_body': {'stream': True}},
@@ -535,7 +540,14 @@ async def test_actual_two_image_group_preserves_wire_and_caller_images(
             result = await asyncio.to_thread(
                 engine.batch_generate,
                 inputs,
-                request_contexts=[RequestContext(ref_id='synthetic', page_number=1)],
+                request_contexts=[
+                    RequestContext(
+                        job_id='synthetic-job',
+                        work_unit_id='synthetic-unit',
+                        ref_id='synthetic',
+                        page_number=1,
+                    )
+                ],
                 on_result=lambda ident, result: outputs.append((ident, result)),
             )
             assert result == ['model'] and len(outputs) == 1
@@ -562,7 +574,7 @@ async def test_high_entropy_page_rejects_inline_limit_after_releasing_pixels(
 ):
     import numpy as np
     from marie.engine.exceptions import BatchExecutionError
-    from v3_qualification_evidence import record_evidence
+    from queued_dispatch_qualification_evidence import record_evidence
 
     url, received, _, _ = http_endpoint
     runtime = dispatcher_for(store, url)
@@ -592,6 +604,7 @@ async def test_high_entropy_page_rejects_inline_limit_after_releasing_pixels(
                 SimpleNamespace(render=lambda _: 'prompt'),
                 SimpleNamespace(source_metadata={'ocr': []}),
                 engine=engine,
+                request_context=registered_context(store),
                 is_multimodal=True,
                 expect_output='none',
             )
@@ -628,8 +641,8 @@ async def test_gateway_drops_body_before_retry_or_result_commit_wait(
 
     from marie.engine.completion_contract import CompletionCallParams
     from marie.engine.llm_queue.store import StoreUnavailable
+    from queued_dispatch_qualification_evidence import record_evidence
     from test_request_dispatcher import admit_request
-    from v3_qualification_evidence import record_evidence
 
     class BodyPart(dict):
         pass
@@ -678,10 +691,15 @@ async def test_gateway_drops_body_before_retry_or_result_commit_wait(
             ),
         )
         if waiting == 'retry':
+            await eventually(lambda: bool(refs))
             await eventually(
-                lambda: store.metadata(request.attempt_id).state == 'delayed'
+                lambda: (
+                    store.metadata(request.attempt_id).state == 'ready'
+                    and store.metadata(request.attempt_id).refund_state == 'refunded'
+                    and store.usage()['reserved_items'] == 0
+                    and not runtime._tasks
+                )
             )
-            await eventually(lambda: not runtime._tasks)
         else:
             await eventually(lambda: commit_started)
             assert runtime._tasks

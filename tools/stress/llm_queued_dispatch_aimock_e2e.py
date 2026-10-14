@@ -1,4 +1,4 @@
-"""Owned-loopback V3/AIMock qualification; reports contain metadata only."""
+"""Owned-loopback queued dispatch/AIMock qualification; reports contain metadata only."""
 
 from __future__ import annotations
 
@@ -29,9 +29,9 @@ import psutil
 from marie.engine.completion_contract import (
     CompletionCallParams,
 )
-from marie.engine.llm_queue.config import LlmQueueConfig
+from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
 from marie.engine.llm_queue.endpoint import EndpointClient, RegisteredEndpoint
-from marie.engine.llm_queue.producer import V3Producer
+from marie.engine.llm_queue.producer import QueuedDispatchProducer
 from marie.engine.llm_queue.request_dispatcher import DispatchLane, RequestDispatcher
 from marie.engine.llm_queue.store import RequestStore, StoreLimits
 from PIL import Image
@@ -665,7 +665,9 @@ def summarize_counts(
     }
 
 
-def submit_calls(producer: V3Producer, *, calls, submissions: Counter, lock, **kwargs):
+def submit_calls(
+    producer: QueuedDispatchProducer, *, calls, submissions: Counter, lock, **kwargs
+):
     """Count logical items only when the workload actually enters producer.execute."""
     with lock:
         submissions['items'] += len(calls)
@@ -868,7 +870,7 @@ def load_fixture_manifest(args) -> dict:
 
 
 def preflight_fixtures(args, fixtures: dict) -> tuple[dict, dict, dict]:
-    from marie.engine.llm_queue.queue_io import _build_sync_client
+    from marie.engine.llm_queue.store_client import _build_sync_client
 
     observed = {}
     for family, fixture in fixtures.items():
@@ -1190,7 +1192,7 @@ async def qualify(args) -> dict:
         'schema_version': 1,
         'run_id': str(uuid4()),
         'started_at': datetime.now(timezone.utc).isoformat(),
-        'contract_version': 'v3',
+        'mode': 'queued-dispatch',
         'seed': args.seed,
         'status': 'incomplete',
         'scenarios': [],
@@ -1233,6 +1235,7 @@ async def qualify(args) -> dict:
 async def _run_qualification(
     args, report: dict, fixtures: dict, container: dict
 ) -> None:
+    # Use the gateway package entrypoint to satisfy its existing circular imports.
     from marie.engine.llm_queue.registry import (
         MAX_SNAPSHOT_BYTES,
         MAX_SNAPSHOT_READ_UNITS,
@@ -1240,7 +1243,6 @@ async def _run_qualification(
         read_runtime_snapshot,
     )
 
-    # Use the gateway package entrypoint to satisfy its existing circular imports.
     import marie.serve.runtimes.gateway.marie
     from marie.serve.runtimes.servers.marie_gateway import (
         _llm_dispatch_runtime_event_message,
@@ -1459,10 +1461,9 @@ async def _run_qualification(
                 )
                 event = _llm_dispatch_runtime_event_message(
                     snapshot=snapshot,
-                    queue_config=LlmQueueConfig(
+                    queue_config=LlmQueueRuntimeConfig(
                         enabled=True,
                         fabric_group_id=scope['fabric'],
-                        queue_contract_version='v3',
                     ),
                 )
                 projection = json.dumps(event.payload, default=str)
@@ -1544,7 +1545,6 @@ async def _run_qualification(
             store = RequestStore(
                 loopback(fixture['url']),
                 fabric_id='qual-' + uuid4().hex,
-                version='v3',
                 limits=limits,
             )
             owned_fabrics.add(store.keys.fabric_id)
@@ -1592,20 +1592,19 @@ async def _run_qualification(
             await eventually(lambda: runtime._owner_ready)
             await begin_scope(family, report['scenario'], store.keys.fabric_id)
             lane_producers = [
-                V3Producer(
-                    config=LlmQueueConfig(
+                QueuedDispatchProducer(
+                    config=LlmQueueRuntimeConfig(
                         enabled=True,
                         queue_url=fixture['url'],
                         pool_id=lane,
                         fabric_group_id=store.keys.fabric_id,
-                        queue_contract_version='v3',
                         max_buffered_requests_per_pool=16,
                     )
                 )
                 for lane in ('one', 'two')
             ]
             producers.extend(lane_producers)
-            # Both original producer sessions run simultaneously through the actual V3 path.
+            # Both original producer sessions run simultaneously through the durable queued dispatch path.
             rng = random.Random(args.seed)
             images = []
             for _ in range(2):
