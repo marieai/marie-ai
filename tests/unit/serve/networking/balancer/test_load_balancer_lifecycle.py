@@ -8,13 +8,17 @@ from grpc.aio import AioRpcError
 from marie.engine.circuit_breaker import CircuitBreakerConfig
 
 from marie.excepts import EstablishGrpcConnectionError, InternalNetworkError
+from marie.proto import jina_pb2_grpc
 from marie.serve.networking import GrpcConnectionPool
 from marie.serve.networking.balancer.least_connection_balancer import (
     LeastConnectionsLoadBalancer,
 )
 from marie.serve.networking.balancer.load_balancer import LoadBalancer
 from marie.serve.networking.balancer.round_robin_balancer import RoundRobinLoadBalancer
+from marie.serve.networking.connection_stub import _ConnectionStubs
+from marie.serve.networking.instrumentation import _NetworkingHistograms
 from marie.serve.networking.replica_list import _ReplicaList
+from marie.types_core.request.data import DataRequest
 
 
 @pytest.fixture(params=[RoundRobinLoadBalancer, LeastConnectionsLoadBalancer])
@@ -64,6 +68,79 @@ def replicas(monkeypatch):
     replicas.add_connection('b', 'executor')
     replicas.created_channels = channels
     return replicas
+
+
+@pytest.mark.parametrize('healthy_replica', [False, True])
+@pytest.mark.parametrize('retries', [0, 1])
+async def test_replica_removed_before_rpc_uses_network_error_policy(
+    replicas, healthy_replica: bool, retries: int
+) -> None:
+    retired, healthy = replicas.get_all_connections()
+    channel = grpc.aio.insecure_channel('127.0.0.1:1')
+    stubs = _ConnectionStubs('a', channel, 'executor', _NetworkingHistograms())
+    stubs.single_data_stub = jina_pb2_grpc.JinaSingleDataRequestRPCStub(channel)
+    stubs._initialized = True
+    retired.send_requests = stubs.send_requests
+    retired.channel = channel
+    replicas._address_to_channel['a'] = channel
+    if not healthy_replica:
+        await replicas.remove_connection('b')
+
+    calls = []
+
+    async def before_send(requests, context):
+        calls.append(context['address'])
+        if context['address'] == 'a':
+            await replicas.remove_connection('a')
+
+    async def healthy_response(**kwargs):
+        return 'response', 'metadata'
+
+    healthy.send_requests = healthy_response
+    pool = object.__new__(GrpcConnectionPool)
+    pool._logger = Mock()
+    pool.compression = None
+    request = DataRequest()
+    try:
+        result = await pool._send_requests(
+            [request],
+            replicas,
+            retries=retries,
+            send_callback=(before_send, None, None),
+        )
+
+        if healthy_replica and retries:
+            assert result == ('response', 'metadata')
+            assert calls == ['a', 'b']
+        else:
+            assert isinstance(result, InternalNetworkError)
+            assert result.code() == grpc.StatusCode.UNAVAILABLE
+            assert result.request_id == request.request_id
+            assert result.dest_addr == {'a'}
+            assert isinstance(result.og_exception.__cause__, grpc.aio.UsageError)
+            assert calls == ['a']
+        assert not replicas.has_connection('a')
+        assert replicas.get_load_balancer().get_active_counter() == (
+            {'b': 0} if healthy_replica else {}
+        )
+    finally:
+        await replicas.close()
+
+
+async def test_unrelated_grpc_usage_error_is_not_reclassified() -> None:
+    channel = grpc.aio.insecure_channel('127.0.0.1:1')
+    stubs = _ConnectionStubs('a', channel, 'executor', _NetworkingHistograms())
+    original = grpc.aio.UsageError('invalid call configuration')
+    stubs.single_data_stub = SimpleNamespace(
+        process_single_data=Mock(side_effect=original)
+    )
+    stubs._initialized = True
+    try:
+        with pytest.raises(grpc.aio.UsageError) as caught:
+            await stubs.send_requests([DataRequest()], None, None)
+        assert caught.value is original
+    finally:
+        await channel.close()
 
 
 async def test_selection_excludes_tried_addresses(balancer):

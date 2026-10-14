@@ -182,12 +182,20 @@ class _ConnectionStubs:
             if self.single_data_stub:
                 self._record_request_bytes_metric(request.nbytes)
 
-                call_result = self.single_data_stub.process_single_data(
-                    request,
-                    metadata=metadata,
-                    compression=compression,
-                    timeout=timeout,
-                )
+                try:
+                    call_result = self.single_data_stub.process_single_data(
+                        request,
+                        metadata=metadata,
+                        compression=compression,
+                        timeout=timeout,
+                    )
+                except grpc.aio.UsageError as error:
+                    if str(error) != "Channel is closed.":
+                        raise
+                    # Membership can retire this channel after selection, before the RPC starts.
+                    raise grpc.aio.AioRpcError(
+                        grpc.StatusCode.UNAVAILABLE, (), (), str(error), str(error)
+                    ) from error
                 start = default_timer()
                 metadata, response = (
                     await call_result.trailing_metadata(),
