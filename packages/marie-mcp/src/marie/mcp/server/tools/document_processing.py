@@ -1,13 +1,16 @@
 """Document processing MCP tools."""
 
+import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import Annotated
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..clients.marie.client import MarieClient, MarieClientError
+from ..clients.marie_client import MarieClient, MarieClientError
+from ..config import Config
 from ..utils.constants import PLANNER_EXTRACT, QUEUE_EXTRACT, QUEUE_GEN5_EXTRACT
 from ..utils.s3_utils import s3_asset_path, upload_to_s3
 from ..utils.validators import (
@@ -16,9 +19,10 @@ from ..utils.validators import (
     validate_ref_id,
     validate_template_id,
 )
+from . import get_request_client
 
 
-def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
+def register_document_tools(mcp: FastMCP, client: MarieClient | None = None) -> None:
     """Register document processing tools."""
 
     @mcp.tool()
@@ -67,26 +71,27 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
             )
         """
         try:
+            request_client = get_request_client(client, ctx)
             # Step 1: Validate file
             if ctx:
-                ctx.info(f"Validating file: {file_path}")
-            validate_file(file_path, max_size_mb=50)
+                await ctx.info(f"Validating file: {file_path}")
+            validate_file(file_path, max_size_mb=Config.MAX_FILE_SIZE_MB)
             validate_ref_id(ref_id)
 
             # Step 2: Upload to S3
             if ctx:
-                ctx.info("Uploading document to S3...")
+                await ctx.info("Uploading document to S3...")
                 await ctx.report_progress(20, 100)
 
             s3_path = s3_asset_path(ref_id, ref_type, include_filename=True)
-            upload_success = upload_to_s3(file_path, s3_path)
+            upload_success = await asyncio.to_thread(upload_to_s3, file_path, s3_path)
 
             if not upload_success:
                 raise Exception(f"Failed to upload {file_path} to {s3_path}")
 
             # Step 3: Build job metadata
             if ctx:
-                ctx.info("Submitting OCR extraction job...")
+                await ctx.info("Submitting OCR extraction job...")
                 await ctx.report_progress(50, 100)
 
             now = datetime.utcnow()
@@ -95,7 +100,7 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
 
             metadata = {
                 "on": "extract_executor://document/extract",
-                "project_id": client.api_key,  # API key as project_id
+                "project_id": request_client.api_key,  # API key as project_id
                 "ref_id": ref_id,
                 "ref_type": ref_type,
                 "uri": s3_path,
@@ -116,14 +121,14 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
             }
 
             # Step 4: Submit job
-            result = await client.submit_job(
+            result = await request_client.submit_job(
                 queue_name=QUEUE_EXTRACT, metadata=metadata
             )
 
             if ctx:
                 await ctx.report_progress(100, 100)
                 job_id = result.get("job_id", "unknown")
-                ctx.info(f"Job submitted successfully: {job_id}")
+                await ctx.info(f"Job submitted successfully: {job_id}")
 
             return json.dumps(
                 {
@@ -140,18 +145,18 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
         except ValidationError as e:
             error_msg = f"Validation error: {str(e)}"
             if ctx:
-                ctx.error(error_msg)
-            return json.dumps({"status": "error", "message": error_msg})
+                await ctx.error(error_msg)
+            raise ToolError(error_msg) from e
         except MarieClientError as e:
             error_msg = f"Marie API error: {str(e)}"
             if ctx:
-                ctx.error(error_msg)
-            return json.dumps({"status": "error", "message": error_msg})
+                await ctx.error(error_msg)
+            raise ToolError(error_msg) from e
         except Exception as e:
             error_msg = f"Failed to submit OCR extraction job: {str(e)}"
             if ctx:
-                ctx.error(error_msg)
-            return json.dumps({"status": "error", "message": error_msg})
+                await ctx.error(error_msg)
+            raise ToolError(error_msg) from e
 
     @mcp.tool()
     async def extract_document_data(
@@ -186,26 +191,29 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
             )
         """
         try:
+            request_client = get_request_client(client, ctx)
             if ctx:
-                ctx.info(f"Validating file: {file_path}")
-            validate_file(file_path, max_size_mb=50)
+                await ctx.info(f"Validating file: {file_path}")
+            validate_file(file_path, max_size_mb=Config.MAX_FILE_SIZE_MB)
             validate_ref_id(ref_id)
             validate_template_id(template_id)
 
             # Upload to S3
             if ctx:
-                ctx.info("Uploading document to S3...")
+                await ctx.info("Uploading document to S3...")
                 await ctx.report_progress(20, 100)
 
             s3_path = s3_asset_path(ref_id, ref_type, include_filename=True)
-            upload_success = upload_to_s3(file_path, s3_path)
+            upload_success = await asyncio.to_thread(upload_to_s3, file_path, s3_path)
 
             if not upload_success:
                 raise Exception(f"Failed to upload {file_path} to {s3_path}")
 
             # Build metadata
             if ctx:
-                ctx.info(f"Submitting data extraction job with template: {template_id}")
+                await ctx.info(
+                    f"Submitting data extraction job with template: {template_id}"
+                )
                 await ctx.report_progress(50, 100)
 
             now = datetime.utcnow()
@@ -214,7 +222,7 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
 
             metadata = {
                 "on": "extract_executor://document/extract",
-                "project_id": client.api_key,
+                "project_id": request_client.api_key,
                 "ref_id": ref_id,
                 "ref_type": ref_type,
                 "uri": s3_path,
@@ -232,14 +240,14 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
             }
 
             # Submit job
-            result = await client.submit_job(
+            result = await request_client.submit_job(
                 queue_name=QUEUE_GEN5_EXTRACT, metadata=metadata
             )
 
             if ctx:
                 await ctx.report_progress(100, 100)
                 job_id = result.get("job_id", "unknown")
-                ctx.info(f"Data extraction job submitted: {job_id}")
+                await ctx.info(f"Data extraction job submitted: {job_id}")
 
             return json.dumps(
                 {
@@ -257,15 +265,15 @@ def register_document_tools(mcp: FastMCP, client: MarieClient) -> None:
         except ValidationError as e:
             error_msg = f"Validation error: {str(e)}"
             if ctx:
-                ctx.error(error_msg)
-            return json.dumps({"status": "error", "message": error_msg})
+                await ctx.error(error_msg)
+            raise ToolError(error_msg) from e
         except MarieClientError as e:
             error_msg = f"Marie API error: {str(e)}"
             if ctx:
-                ctx.error(error_msg)
-            return json.dumps({"status": "error", "message": error_msg})
+                await ctx.error(error_msg)
+            raise ToolError(error_msg) from e
         except Exception as e:
             error_msg = f"Failed to submit data extraction job: {str(e)}"
             if ctx:
-                ctx.error(error_msg)
-            return json.dumps({"status": "error", "message": error_msg})
+                await ctx.error(error_msg)
+            raise ToolError(error_msg) from e

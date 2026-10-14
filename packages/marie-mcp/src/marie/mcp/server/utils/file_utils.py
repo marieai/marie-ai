@@ -79,3 +79,20 @@ def get_file_size_mb(file_path: str) -> float:
     """
     size_bytes = os.path.getsize(file_path)
     return size_bytes / (1024 * 1024)
+
+
+def resolve_output_path(output_path: str) -> Path:
+    """Resolve a destination and reject paths outside the configured output root."""
+    from ..config import Config
+    from .validators import ValidationError
+
+    root = Config.OUTPUT_DIR.expanduser().resolve()
+    candidate = Path(output_path).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    destination = candidate.resolve()
+    if destination == root or not destination.is_relative_to(root):
+        raise ValidationError("output_path must be a file inside MARIE_OUTPUT_DIR")
+    if destination.exists() and not destination.is_file():
+        raise ValidationError("output_path must be a file")
+    return destination

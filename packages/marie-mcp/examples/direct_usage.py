@@ -1,9 +1,8 @@
 """Example: Direct usage of Marie MCP client (without MCP framework)."""
 
 import asyncio
-from pathlib import Path
 
-from marie.mcp.server.clients.marie.client import MarieClient
+from marie.mcp.server.clients.marie_client import MarieClient
 from marie.mcp.server.config import Config
 from marie.mcp.server.utils.s3_utils import s3_asset_path, upload_to_s3
 
@@ -17,7 +16,6 @@ async def main():
     # Create client
     print("Creating Marie client...")
     async with MarieClient() as client:
-
         # Example 1: Submit OCR extraction job
         print("\n" + "=" * 60)
         print("Example 1: OCR Extraction Job")
@@ -31,7 +29,7 @@ async def main():
         # Upload to S3
         print(f"Uploading {file_path} to S3...")
         s3_path = s3_asset_path(ref_id, ref_type, include_filename=True)
-        upload_to_s3(file_path, s3_path)
+        await asyncio.to_thread(upload_to_s3, file_path, s3_path)
         print(f"Uploaded to: {s3_path}")
 
         # Build metadata

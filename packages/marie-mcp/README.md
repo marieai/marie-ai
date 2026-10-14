@@ -45,7 +45,7 @@ Create a `.env` file in your project directory:
 
 ```bash
 # Marie Gateway Connection
-MARIE_BASE_URL=http://localhost:5000
+MARIE_BASE_URL=http://localhost:51000
 MARIE_API_KEY=your-api-key-here
 
 # AWS S3 Configuration (required for document uploads)
@@ -58,9 +58,15 @@ S3_BUCKET=marie
 MARIE_REQUEST_TIMEOUT=300
 MARIE_MAX_FILE_SIZE_MB=50
 MARIE_OUTPUT_DIR=~/.marie-mcp/outputs
+MARIE_FABRIC_GROUP_ID=your-fabric-group
 ```
 
 ## Usage
+
+For local verification with the repository's `.venv`, follow the
+[automated checks and MCP Inspector walkthrough](QUICKSTART.md#test-the-server).
+It covers explicit API-key forwarding, the missing-key startup error, and a live
+extraction through the gateway and S3.
 
 ### With Claude Desktop
 
@@ -73,7 +79,7 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
       "command": "uvx",
       "args": ["marie-mcp"],
       "env": {
-        "MARIE_BASE_URL": "http://localhost:5000",
+        "MARIE_BASE_URL": "http://localhost:51000",
         "MARIE_API_KEY": "your-api-key-here",
         "AWS_ACCESS_KEY_ID": "your-aws-key",
         "AWS_SECRET_ACCESS_KEY": "your-aws-secret",
@@ -100,7 +106,7 @@ marie_tools = await load_mcp_tools(
         command="uvx",
         args=["marie-mcp"],
         env={
-            "MARIE_BASE_URL": "http://localhost:5000",
+            "MARIE_BASE_URL": "http://localhost:51000",
             "MARIE_API_KEY": "your-key",
             "AWS_ACCESS_KEY_ID": "your-aws-key",
             "AWS_SECRET_ACCESS_KEY": "your-aws-secret",
@@ -128,7 +134,7 @@ marie_server = MCPServerStdio(
     command="uvx",
     args=["marie-mcp"],
     env={
-        "MARIE_BASE_URL": "http://localhost:5000",
+        "MARIE_BASE_URL": "http://localhost:51000",
         "MARIE_API_KEY": "your-key",
         "AWS_ACCESS_KEY_ID": "your-aws-key",
         "AWS_SECRET_ACCESS_KEY": "your-aws-secret",
@@ -192,14 +198,14 @@ extract_document_data(
 ### Job Management
 
 #### `get_job_status`
-Get detailed status for a specific job.
+Track a submitted DAG or inspect a child job by UUID.
 
 **Parameters:**
-- `job_id` (str): Job ID from submit operation
+- `job_id` (str): Submission UUID (or child job UUID)
 
 **Example:**
 ```python
-get_job_status(job_id="job_123456")
+get_job_status(job_id="019ce927-9621-7000-8000-000000000001")
 ```
 
 #### `list_jobs`
@@ -213,25 +219,13 @@ List all jobs, optionally filtered by state.
 list_jobs(state="completed")
 ```
 
-#### `stop_job`
-Stop a running job.
-
-**Parameters:**
-- `job_id` (str): Job ID to stop
-
-#### `delete_job`
-Delete a job from the system.
-
-**Parameters:**
-- `job_id` (str): Job ID to delete
-
 #### `get_job_results`
 Download job results from S3 storage.
 
 **Parameters:**
 - `ref_id` (str): Document reference ID
 - `ref_type` (str): Document type
-- `output_path` (str): Local path for downloaded results
+- `output_path` (str): Destination within `MARIE_OUTPUT_DIR` (relative paths start there)
 
 **Example:**
 ```python
@@ -251,7 +245,7 @@ Get information about active executors and deployments.
 Get slot capacity and resource utilization.
 
 #### `get_debug_info`
-Get scheduler debug information and metrics.
+Get runtime diagnostics for an authorized fabric group. Pass `fabric_group_id` or set `MARIE_FABRIC_GROUP_ID`. The API key needs runtime observability permission.
 
 #### `health_check`
 Perform a health check on the Marie gateway.
@@ -275,7 +269,7 @@ marie-mcp-server/
 │   ├── server.py              # MCP server entry point
 │   ├── config.py              # Configuration management
 │   ├── clients/
-│   │   └── marie.client.py    # HTTP client for Marie gateway
+│   │   └── marie_client.py    # HTTP client for Marie gateway
 │   ├── tools/
 │   │   ├── document_processing.py   # OCR & data extraction tools
 │   │   ├── job_management.py        # Job control tools
@@ -366,3 +360,26 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 - [Marie AI](https://github.com/marieai/marie-ai) - Main Marie AI platform
 - [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
+
+## Reliability and gateway contracts
+
+The server advertises nine tools. `stop_job` and `delete_job` are unavailable because
+those gateway routes currently return acknowledgments without changing jobs. Direct
+client calls reject these operations rather than reporting success.
+
+Submission uses the `/api/v1/invoke` `parameters.invoke_action` envelope and is never
+retried automatically. A timeout or lost response can leave acceptance unknown;
+reconcile existing jobs before resubmitting. Read requests retry transient transport
+errors and HTTP 429/500/502/503/504 only. HTTP and application errors become MCP tool
+errors (`isError=true`). Configuration and diagnostic output goes to stderr.
+
+Submission returns a DAG UUID. Job status queries `/api/operations/dags/{job_id}`
+first, then `/api/operations/jobs/{job_id}` only on a 404 for child job identifiers. S3 asset paths match the
+backend convention: `s3://bucket/normalized_type/lowercase_stem/original_filename`.
+Set `S3_BUCKET` to the backend bucket; it falls back to `MARIE_S3_BUCKET`, then `marie`.
+S3 transfers run in worker threads. Result downloads must stay within
+`MARIE_OUTPUT_DIR`; relative paths start there. Completed downloads replace the
+specified output file atomically.
+
+The HTTP client is created and closed within the MCP server lifespan. Both extraction
+tools retain the current API-key-as-project-id contract; changing that contract is deferred.

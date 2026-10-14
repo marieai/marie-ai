@@ -1,37 +1,35 @@
-"""Pytest configuration and fixtures."""
+"""Isolate package tests from workstation credentials and dotenv files."""
+
+import os
+import sys
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
+
+# Source-only package tests must not import the heavyweight host package.
+sys.path.insert(0, str(Path(__file__).parents[1] / 'src'))
+with (
+    patch('dotenv.load_dotenv', return_value=False),
+    patch.dict(
+        os.environ,
+        {
+            'MARIE_API_KEY': 'test-api-key',
+            'MARIE_RETRY_MIN_WAIT': '0',
+            'MARIE_RETRY_MAX_WAIT': '0',
+            'AWS_ACCESS_KEY_ID': '',
+            'AWS_SECRET_ACCESS_KEY': '',
+        },
+    ),
+):
+    from marie.mcp.server.config import Config  # noqa: F401
 
 
 @pytest.fixture
 def mock_marie_client():
-    """Mock Marie client for testing."""
-    from unittest.mock import AsyncMock
-
-    from marie.mcp.server.clients.marie.client import MarieClient
+    from marie.mcp.server.clients.marie_client import MarieClient
 
     client = AsyncMock(spec=MarieClient)
-    client.api_key = "test-api-key"
+    client.api_key = 'test-api-key'
+    client.submit_job.return_value = {'job_id': 'test-job'}
     return client
-
-
-@pytest.fixture
-def sample_job_response():
-    """Sample job submission response."""
-    return {"job_id": "test_job_123", "status": "submitted"}
-
-
-@pytest.fixture
-def sample_metadata():
-    """Sample job metadata."""
-    return {
-        "on": "extract_executor://document/extract",
-        "project_id": "test-project",
-        "ref_id": "test_doc_001",
-        "ref_type": "invoice",
-        "uri": "s3://marie/invoice/test_doc_001/test.pdf",
-        "policy": "allow_all",
-        "planner": "extract",
-        "type": "pipeline",
-        "name": "default",
-    }

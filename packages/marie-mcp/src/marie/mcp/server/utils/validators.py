@@ -74,6 +74,11 @@ def validate_ref_id(ref_id: str) -> None:
     if not ref_id or not ref_id.strip():
         raise ValidationError("ref_id cannot be empty")
 
+    if ref_id in {'.', '..'} or any(char in ref_id for char in ('/', '\\', '\x00')):
+        raise ValidationError(
+            "ref_id must be a filename or identifier without path separators"
+        )
+
     if len(ref_id) > 255:
         raise ValidationError("ref_id cannot exceed 255 characters")
 
