@@ -47,6 +47,10 @@ def test_query_plan_work_items_preserves_submission_input(
         name='test-input-planner',
         data={
             'metadata': {'on': 'extract://direct', 'custom': ['preserved']},
+            'submission_trace_context': {
+                'traceparent': '00-00000000000000000000000000000001-0000000000000002-01',
+                'tracestate': 'vendor=value',
+            },
         },
         state=WorkState.CREATED,
         retry_limit=3,
@@ -66,5 +70,10 @@ def test_query_plan_work_items_preserves_submission_input(
     assert jobs[0].dependencies == []
     assert jobs[1].dependencies == ['root']
     assert jobs[1].data['metadata']['on'] == 'extract://direct'
+    restored = WorkInfo.model_validate_json(jobs[1].model_dump_json())
+    assert restored.data['submission_trace_context'] == {
+        'traceparent': '00-00000000000000000000000000000001-0000000000000002-01',
+        'tracestate': 'vendor=value',
+    }
     jobs[1].data['metadata']['custom'].append('changed')
     assert submitted.model_dump() == original

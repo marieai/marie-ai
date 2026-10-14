@@ -12,6 +12,10 @@ if TYPE_CHECKING:  # pragma: no cover
     )
     from opentelemetry.metrics import Histogram
 
+# OTel service.name per process role; all share service.namespace=marie-ai
+GATEWAY_SERVICE_NAME = 'marie-gateway'
+EXECUTOR_SERVICE_NAME = 'marie-executor'
+
 ENV_RESOURCE_ATTRIBUTES = [
     'K8S_NAMESPACE_NAME',
     'K8S_DEPLOYMENT_NAME',
@@ -46,6 +50,7 @@ class InstrumentationMixin:
         metrics: Optional[bool] = False,
         metrics_exporter_host: Optional[str] = '0.0.0.0',
         metrics_exporter_port: Optional[int] = 6831,
+        service_name: Optional[str] = None,
     ) -> None:
 
         self.tracing = tracing
@@ -61,6 +66,7 @@ class InstrumentationMixin:
             ).lower() in ("1", "true")
 
             provider = register(
+                service_name=service_name,
                 endpoint=f'{traces_exporter_host}:{traces_exporter_port}',
                 set_global_tracer_provider=True,
                 console_export=console_export,
@@ -72,6 +78,7 @@ class InstrumentationMixin:
             self.tracer = None
 
         if metrics:
+            from opentelemetry import metrics as metrics_api
             from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
                 OTLPMetricExporter,
             )
@@ -79,17 +86,19 @@ class InstrumentationMixin:
             from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
             from opentelemetry.sdk.resources import Resource
 
-            resource = Resource(attributes=_get_resource_attributes(name))
-
-            metric_reader = PeriodicExportingMetricReader(
-                OTLPMetricExporter(
-                    endpoint=f'{metrics_exporter_host}:{metrics_exporter_port}',
-                    insecure=True,  # Required for non-TLS connections
+            meter_provider = metrics_api.get_meter_provider()
+            if not isinstance(meter_provider, MeterProvider):
+                resource = Resource(attributes=_get_resource_attributes(name))
+                metric_reader = PeriodicExportingMetricReader(
+                    OTLPMetricExporter(
+                        endpoint=f'{metrics_exporter_host}:{metrics_exporter_port}',
+                        insecure=True,
+                    )
                 )
-            )
-            meter_provider = MeterProvider(
-                metric_readers=[metric_reader], resource=resource
-            )
+                meter_provider = MeterProvider(
+                    metric_readers=[metric_reader], resource=resource
+                )
+                metrics_api.set_meter_provider(meter_provider)
             self.meter_provider = meter_provider
             self.meter = self.meter_provider.get_meter(name)
         else:

@@ -181,11 +181,13 @@ class MarieExecutor(Executor, StorageMixin):
             settings = configure(llm_tracking_config)
 
             if settings.EXPORTER == ExporterType.OTEL:
+                from marie.serve.instrumentation import EXECUTOR_SERVICE_NAME
                 from marie.utils.server_runtime import _ensure_tracer_provider
 
                 _ensure_tracer_provider(
                     require_openinference=True,
                     console_export=settings.CONSOLE_SPANS,
+                    service_name=EXECUTOR_SERVICE_NAME,
                 )
 
             self.logger.info("LLM tracking configured for executor process")

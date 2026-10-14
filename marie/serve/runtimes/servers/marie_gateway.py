@@ -23,7 +23,9 @@ from marie.engine.llm_queue.registry import (
     dispatch_runtime_live_state,
     dispatch_runtime_snapshot,
 )
+from marie.instrumentation import set_span_input
 from marie.registry.model_registry import ModelRegistry
+from opentelemetry import trace
 from rich.traceback import install
 
 import marie.helper
@@ -1192,6 +1194,8 @@ class MarieServerGateway(CompositeServer):
                             status_code=400, detail="Invalid JSON payload"
                         )
 
+                    set_span_input(trace.get_current_span(), payload)
+
                     header = payload.get("header", {})
                     message = payload.get("parameters", {})
 
@@ -1829,11 +1833,13 @@ class MarieServerGateway(CompositeServer):
                 "Event name cannot exceed 255 bytes in length", None
             )
 
+        from marie.instrumentation.context import inject_trace_context
+
         work_info = WorkInfo(
             name=event_name,
             # Persisted priority is the operator override. SLA urgency is derived later in the planner.
             priority=priority,
-            data=message,
+            data={**message, 'submission_trace_context': inject_trace_context()},
             state=WorkState.CREATED,
             retry_limit=retry.retry_limit,
             retry_delay=retry.retry_delay,
@@ -1885,6 +1891,7 @@ class MarieServerGateway(CompositeServer):
             active_span = otel_trace.get_current_span()
             if active_span and active_span.is_recording():
                 active_span.set_attribute("session.id", job_id)
+                active_span.set_attribute("marie.submission_id", job_id)
 
             response = Response()
             response.parameters = {

@@ -87,6 +87,7 @@ from openinference.instrumentation import (
     capture_span_context,
     suppress_tracing,
 )
+from opentelemetry.trace import Span
 
 from .config import configure
 from .tracker import get_tracker
@@ -225,7 +226,7 @@ def register(
     resource_values.setdefault(ResourceAttributes.PROJECT_NAME, project)
     resource_values.setdefault(
         "service.name",
-        service_name or os.environ.get("OTEL_SERVICE_NAME", "marie"),
+        service_name or os.environ.get("OTEL_SERVICE_NAME", "marie-ai"),
     )
     resource = Resource.create(resource_values)
 
@@ -390,18 +391,15 @@ def start_span(
 # ---------------------------------------------------------------------------
 
 
-def _redact_for_span(value, *, _depth=0):
+def _redact_for_span(value: Any, *, _seen: frozenset[int] = frozenset()) -> Any:
     """Walk a value and redact sensitive/non-serializable content.
 
     - Replaces bytes/bytearray/memoryview with placeholder
     - Replaces numpy arrays and torch tensors with shape summaries
     - Strips keys matching _SENSITIVE_KEYS
     - Strings are passed through unmodified except inline data URLs
-    - Max 8 levels deep (messages have 4+ levels of nesting)
+    - Replaces circular containers with a placeholder
     """
-    if _depth > 8:
-        return value
-
     # Raw binary objects → placeholder
     if isinstance(value, (bytes, bytearray, memoryview)):
         return f"<binary {len(value)} bytes>"
@@ -431,17 +429,22 @@ def _redact_for_span(value, *, _depth=0):
             return _UNRESOLVED_MEDIA_URL
         return value
 
+    if isinstance(value, (dict, list, tuple)):
+        if id(value) in _seen:
+            return "<circular reference>"
+        _seen = _seen | {id(value)}
+
     # Dicts → strip sensitive keys, recurse values
     if isinstance(value, dict):
         return {
-            k: _redact_for_span(v, _depth=_depth + 1)
+            k: _redact_for_span(v, _seen=_seen)
             for k, v in value.items()
             if k.lower() not in _SENSITIVE_KEYS
         }
 
     # Lists → recurse items (no length cap)
     if isinstance(value, (list, tuple)):
-        return [_redact_for_span(item, _depth=_depth + 1) for item in value]
+        return [_redact_for_span(item, _seen=_seen) for item in value]
 
     return value
 
@@ -495,6 +498,15 @@ def _serialise(value):
         return text, "application/json"
     except (TypeError, ValueError):
         return str(redacted), "text/plain"
+
+
+def set_span_input(span: Span, value: Any) -> None:
+    """Record full input with redaction on an existing OTel or OpenInference span."""
+    if not span.is_recording():
+        return
+    text, mime_type = _serialise(value)
+    span.set_attribute(SpanAttributes.INPUT_VALUE, text)
+    span.set_attribute(SpanAttributes.INPUT_MIME_TYPE, mime_type)
 
 
 def _ensure_oi_api(span):
@@ -1004,9 +1016,7 @@ def _set_message_content_attributes(span, content_parts, message_base_key: str):
 
 
 def _message_content_base(message_base_key: str, content_index: int) -> str:
-    return (
-        f"{message_base_key}.{MessageAttributes.MESSAGE_CONTENTS}." f"{content_index}"
-    )
+    return f"{message_base_key}.{MessageAttributes.MESSAGE_CONTENTS}.{content_index}"
 
 
 def _set_message_content_text(
@@ -1060,6 +1070,7 @@ __all__ = [
     # Span helpers
     "start_span",
     "start_as_current_span",
+    "set_span_input",
     "set_llm_io",
     # Constants
     "MAX_FIELD_BYTES",

@@ -12,6 +12,7 @@ class MarieSpanAttributes:
     ANNOTATOR_NAME = "marie.annotator_name"
     LAYOUT_ID = "marie.layout_id"
     JOB_ID = "marie.job_id"
+    SUBMISSION_ID = "marie.submission_id"
 
     PASS_INDEX = "marie.pass_index"
     PASS_TYPE = "marie.pass_type"

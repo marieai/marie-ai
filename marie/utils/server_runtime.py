@@ -13,6 +13,7 @@ from marie.messaging.otel_toast_handler import OTELToastHandler
 from marie.messaging.psql_handler import PsqlToastHandler
 from marie.messaging.rabbit_handler import RabbitMQToastHandler
 from marie.messaging.toast_registry import Toast
+from marie.serve.instrumentation import GATEWAY_SERVICE_NAME
 from marie.storage import S3StorageHandler, StorageManager
 from marie.utils.types import strtobool
 
@@ -134,6 +135,7 @@ def setup_llm_tracking(
 
     from marie.instrumentation import configure_media_reference_resolver
     from marie.instrumentation.config import ExporterType, configure
+
     from marie.observability.media import resolve_media_reference
 
     settings = configure(llm_tracking_config)
@@ -143,16 +145,21 @@ def setup_llm_tracking(
         _ensure_tracer_provider(
             require_openinference=True,
             console_export=settings.CONSOLE_SPANS,
+            service_name=GATEWAY_SERVICE_NAME,
         )
         logger.info("LLM tracking configured with OTel exporter")
     else:
-        _ensure_tracer_provider(console_export=settings.CONSOLE_SPANS)
+        _ensure_tracer_provider(
+            console_export=settings.CONSOLE_SPANS,
+            service_name=GATEWAY_SERVICE_NAME,
+        )
         logger.info("LLM tracking configured with console exporter")
 
 
 def _ensure_tracer_provider(
     require_openinference: bool = False,
     console_export: bool = False,
+    service_name: Optional[str] = None,
 ) -> None:
     """Ensure a compatible global OI TracerProvider exists."""
     from opentelemetry import trace
@@ -163,7 +170,7 @@ def _ensure_tracer_provider(
     if is_proxy:
         from marie.instrumentation import register
 
-        register(service_name="marie-ai", console_export=console_export)
+        register(service_name=service_name, console_export=console_export)
         logger.info("Created global OI TracerProvider for LLM tracking")
         return
 

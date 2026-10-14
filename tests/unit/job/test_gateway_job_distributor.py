@@ -58,6 +58,29 @@ async def test_build_payload_preserves_datasource_for_retry() -> None:
     assert "uri" not in second_parameters["payload"]
 
 
+async def test_build_payload_forwards_submission_context_on_each_attempt() -> None:
+    distributor = GatewayJobDistributor()
+    carrier = {
+        'traceparent': '00-00000000000000000000000000000001-0000000000000002-00',
+        'tracestate': 'vendor=value',
+    }
+    job_info = JobInfo(
+        status=JobStatus.PENDING,
+        entrypoint='mock_executor:///document/process',
+        metadata={
+            'metadata': {'uri': 's3://marie/extract/sample.tif'},
+            'submission_trace_context': carrier,
+            'dag_id': 'dag-1',
+        },
+    )
+    for _ in range(2):
+        parameters, _ = await distributor._build_payload('job-a', job_info)
+        assert parameters['submission_trace_context'] == carrier
+        assert parameters['job_id'] == 'job-a'
+        assert parameters['dag_id'] == 'dag-1'
+        assert 'submission_trace_context' not in parameters['payload']
+
+
 def test_resolve_endpoint_accepts_mock_annotator_llm_route() -> None:
     distributor = GatewayJobDistributor(
         deployment_nodes={

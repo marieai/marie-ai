@@ -893,6 +893,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
 
         if self.tracer:
             from marie.instrumentation import MarieSpanAttributes, start_as_current_span
+            from marie.instrumentation.context import submission_trace_links
 
             # Phoenix-style span name: ClassName.method_name
             # e.g. "DocumentAnnotatorLLMExecutor.annotator_llm" instead of "/annotator/llm"
@@ -910,6 +911,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 span_name,
                 span_kind="chain",
                 context=tracing_context,
+                links=submission_trace_links(params.get('submission_trace_context')),
             ) as span:
                 from opentelemetry.propagate import extract
                 from opentelemetry.trace import StatusCode
@@ -920,6 +922,7 @@ class BaseExecutor(JAMLCompatible, metaclass=ExecutorType):
                 # Set session.id directly on this span
                 if session_id:
                     span.set_attribute("session.id", session_id)
+                    span.set_attribute(MarieSpanAttributes.SUBMISSION_ID, session_id)
 
                 # Set executor and request context attributes for traceability
                 span.set_attribute(

@@ -49,6 +49,45 @@ def submission_message() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
+async def test_submission_persists_http_context_instead_of_caller_context() -> None:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    gateway, submitted = build_gateway()
+    provider = TracerProvider()
+    message = submission_message()
+    message['submission_trace_context'] = {'traceparent': 'caller-controlled'}
+    with provider.get_tracer('test').start_as_current_span(
+        'POST /api/v1/invoke'
+    ) as span:
+        response = await gateway.handle_job_submit_command(message)
+        context = span.get_span_context()
+        assert span.attributes['marie.submission_id'] == response.parameters['job_id']
+    carrier = submitted[0].data['submission_trace_context']
+    assert carrier['traceparent'] == (
+        f'00-{context.trace_id:032x}-{context.span_id:016x}-{int(context.trace_flags):02x}'
+    )
+    assert message['submission_trace_context'] == {'traceparent': 'caller-controlled'}
+    provider.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_submission_without_active_trace_discards_caller_context() -> None:
+    from opentelemetry import context as context_api
+    from opentelemetry.context import Context
+
+    gateway, submitted = build_gateway()
+    message = submission_message()
+    message['submission_trace_context'] = {'traceparent': 'caller-controlled'}
+    token = context_api.attach(Context())
+    try:
+        await gateway.handle_job_submit_command(message)
+    finally:
+        context_api.detach(token)
+    assert submitted[0].data['submission_trace_context'] == {}
+
+
+@pytest.mark.asyncio
 async def test_gateway_marks_operator_override_as_trusted_scheduler_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

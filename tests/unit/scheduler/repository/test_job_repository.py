@@ -661,6 +661,10 @@ async def test_create_dag_with_jobs_uses_bounded_batch_statements(
         }
     )
     jobs[0].policy = "REJECT_DUPLICATE"
+    jobs[0].data['submission_trace_context'] = {
+        'traceparent': '00-00000000000000000000000000000001-0000000000000002-01',
+        'tracestate': 'vendor=value',
+    }
     connection = FakeConnection(fetchrow=[(dag_id,)])
     repository = build_repository(connection)
 
@@ -680,6 +684,11 @@ async def test_create_dag_with_jobs_uses_bounded_batch_statements(
     assert connection.transactions[0].error is None
 
     _, dag_query, dag_params = connection.calls[0]
+    persisted_jobs = connection.calls[1][2][0].obj
+    assert persisted_jobs[0]['data']['submission_trace_context'] == {
+        'traceparent': '00-00000000000000000000000000000001-0000000000000002-01',
+        'tracestate': 'vendor=value',
+    }
     assert "%s::uuid" in dag_query
     assert "priority" in dag_query
     assert "submission_name" in dag_query
