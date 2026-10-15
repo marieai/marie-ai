@@ -60,13 +60,19 @@ type inStreamMessage struct {
 	Data           any            `json:"data"`
 }
 
+type writeRequest struct {
+	ctx    context.Context
+	body   []byte
+	result chan error
+}
+
 type Instance struct {
 	cmd   *exec.Cmd
 	stdin io.WriteCloser
 	logs  io.Writer
 
-	writeMu     sync.Mutex
-	stdinClosed bool
+	writes     chan writeRequest
+	writerDone chan struct{}
 
 	listenersMu sync.Mutex
 	listeners   map[string]SessionHandler
@@ -117,6 +123,8 @@ func StartInstance(ctx context.Context, config InstanceConfig) (*Instance, error
 		cmd:        cmd,
 		stdin:      stdin,
 		logs:       logs,
+		writes:     make(chan writeRequest),
+		writerDone: make(chan struct{}),
 		listeners:  make(map[string]SessionHandler),
 		state:      InstanceStateStarting,
 		heartbeats: make(chan struct{}, 1),
@@ -124,6 +132,7 @@ func StartInstance(ctx context.Context, config InstanceConfig) (*Instance, error
 		done:       make(chan struct{}),
 	}
 
+	go instance.writeLoop()
 	go instance.readLoop(stdout)
 	go func() {
 		<-instance.readerDone
@@ -165,7 +174,12 @@ func (i *Instance) CloseSession(sessionID string) {
 	i.listenersMu.Unlock()
 }
 
-func (i *Instance) Write(sessionID string, event InStreamEvent, payload any) error {
+// Write bounds admission and completion waits by ctx. An admitted frame may
+// still be delivered after cancellation to preserve the shared pipe's framing.
+func (i *Instance) Write(ctx context.Context, sessionID string, event InStreamEvent, payload any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	body, err := json.Marshal(inStreamMessage{
 		SessionID: sessionID,
 		Context:   map[string]any{},
@@ -175,15 +189,48 @@ func (i *Instance) Write(sessionID string, event InStreamEvent, payload any) err
 	if err != nil {
 		return err
 	}
-	i.writeMu.Lock()
-	defer i.writeMu.Unlock()
-	if i.stdinClosed || i.State() == InstanceStateStopped {
+	request := writeRequest{ctx: ctx, body: append(body, '\n'), result: make(chan error, 1)}
+	select {
+	case i.writes <- request:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-i.done:
 		return ErrInstanceStopped
 	}
-	if _, err := i.stdin.Write(append(body, '\n')); err != nil {
-		return fmt.Errorf("%w: %v", ErrInstanceStopped, err)
+	select {
+	case err := <-request.result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-i.done:
+		return ErrInstanceStopped
 	}
-	return nil
+}
+
+// One writer owns the pipe. A started frame must finish even if its caller
+// leaves, otherwise a partial JSON line would corrupt other sessions.
+func (i *Instance) writeLoop() {
+	defer close(i.writerDone)
+	for {
+		select {
+		case <-i.done:
+			return
+		case request := <-i.writes:
+			if err := request.ctx.Err(); err != nil {
+				request.result <- err
+				continue
+			}
+			if i.State() == InstanceStateStopped {
+				request.result <- ErrInstanceStopped
+				continue
+			}
+			_, err := i.stdin.Write(request.body)
+			if err != nil {
+				err = fmt.Errorf("%w: %v", ErrInstanceStopped, err)
+			}
+			request.result <- err
+		}
+	}
 }
 
 func (i *Instance) State() InstanceState {
@@ -199,11 +246,9 @@ func (i *Instance) Done() <-chan struct{} {
 func (i *Instance) Stop() {
 	i.stopOnce.Do(func() {
 		i.kill()
-		i.writeMu.Lock()
-		i.stdinClosed = true
 		i.stdin.Close()
-		i.writeMu.Unlock()
 		<-i.done
+		<-i.writerDone
 	})
 }
 

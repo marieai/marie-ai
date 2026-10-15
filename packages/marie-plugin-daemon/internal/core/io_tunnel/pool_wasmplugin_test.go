@@ -107,7 +107,7 @@ func TestWasmNodeRunsThroughDaemon(t *testing.T) {
 		"env":   `{"method":"GET","url":"` + upstream.URL + `","headers":{}}`,
 		"ctx":   map[string]any{"workflow_id": "wf", "execution_id": "ex", "node_id": "n1", "run_index": 0},
 	}
-	frames, err := pool.Invoke(context.Background(), testTenant, install.PackageRef, payload, 60*time.Second)
+	frames, err := pool.Invoke(context.Background(), testTenant, install.PackageRef, install.Digest, payload, 60*time.Second)
 	if err != nil {
 		t.Fatalf("invoke failed: %v", err)
 	}

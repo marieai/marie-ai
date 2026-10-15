@@ -1,6 +1,8 @@
+import asyncio
 import json
 import os
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any, Mapping
@@ -18,6 +20,7 @@ from marie.plugin_daemon import (
     discover_daemon,
     parse_daemon_frames,
     runtime_error_frame,
+    sign_envelope,
 )
 from marie.plugin_daemon.frames import now_utc
 from marie.runtime import requests
@@ -50,6 +53,13 @@ class MariePluginDaemonExecutor(MarieExecutor):
         self.restart_limit = max(0, restart_limit)
         self.restart_backoff_s = max(0.0, restart_backoff_s)
         self._env = dict(os.environ if env is None else env)
+        self._signing_key_id = self._env.get("MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID", "")
+        self._signing_secret = self._env.get("MARIE_PLUGIN_DAEMON_SIGNING_SECRET", "")
+        if bool(self._signing_key_id) != bool(self._signing_secret):
+            raise ValueError(
+                "MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID and "
+                "MARIE_PLUGIN_DAEMON_SIGNING_SECRET must be configured together"
+            )
         self._start_enabled = start
         self._child: subprocess.Popen[bytes] | None = None
         self._started_at: datetime | None = None
@@ -58,30 +68,35 @@ class MariePluginDaemonExecutor(MarieExecutor):
         self._restart_attempts = 0
         self._next_restart_at: datetime | None = None
         self._draining = False
+        self._lifecycle_lock = threading.Lock()
         self.discovery = discover_daemon(daemon_url, daemon_bin, daemon_addr, self._env)
 
         if start and self.discovery.mode == "binary_child":
             self._start_child()
 
     def shutdown(self) -> None:
-        self._draining = True
-        child = self._child
-        if child is None or child.poll() is not None:
-            self._last_exit_code = child.returncode if child else self._last_exit_code
-            return
+        with self._lifecycle_lock:
+            self._draining = True
+            child = self._child
+            if child is None or child.poll() is not None:
+                self._last_exit_code = (
+                    child.returncode if child else self._last_exit_code
+                )
+                return
 
-        child.terminate()
-        try:
-            child.wait(timeout=self.shutdown_timeout_s)
-        except subprocess.TimeoutExpired:
-            child.kill()
-            child.wait(timeout=1)
-        self._last_exit_code = child.returncode
+            child.terminate()
+            try:
+                child.wait(timeout=self.shutdown_timeout_s)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=1)
+            self._last_exit_code = child.returncode
 
     @requests(on="/status")
     async def status(self, **kwargs: Any) -> DocList[TextDoc]:
+        status = await asyncio.to_thread(self.status_payload)
         return DocList[TextDoc](
-            [TextDoc(text=json.dumps(self.status_payload(), separators=(",", ":")))]
+            [TextDoc(text=json.dumps(status, separators=(",", ":")))]
         )
 
     @requests(on="/execute")
@@ -94,8 +109,8 @@ class MariePluginDaemonExecutor(MarieExecutor):
         """Dispatch a CONNECTOR node to the plugin daemon and return its frames.
 
         Routed here by the fixed endpoint ``plugin_daemon_executor://execute``.
-        All plugin identity + credentials ride in ``parameters`` (the endpoint
-        carries none); tenant claims come from the execution context, falling
+        Scheduled settings come from ``payload.op_params``; direct requests use
+        top-level parameters. Tenant claims come from execution context, falling
         back to the nil UUID when absent (W2 scope; install + invoke must share
         the same fallback tenant or the daemon returns ``plugin_not_installed``).
         """
@@ -103,8 +118,15 @@ class MariePluginDaemonExecutor(MarieExecutor):
         # imports marie.executor); keep it out of this module's import path.
         from marie.plugins.agent_tool import PluginToolSpec
 
-        params = parameters or {}
-        request_id = str(params.get("job_id") or "")
+        execution_params = parameters or {}
+        request_id = str(execution_params.get("job_id") or "")
+        scheduled_payload = execution_params.get("payload")
+        op_params = (
+            scheduled_payload.get("op_params")
+            if isinstance(scheduled_payload, dict)
+            else None
+        )
+        params = op_params if isinstance(op_params, dict) else execution_params
         plugin = params.get("plugin") or {}
         try:
             spec = PluginToolSpec(
@@ -134,9 +156,17 @@ class MariePluginDaemonExecutor(MarieExecutor):
         ]
         credentials = CredentialResolver().resolve(requirements)
 
-        organization_id = str(params.get("organization_id") or DEFAULT_TENANT_UUID)
-        workspace_id = str(params.get("workspace_id") or DEFAULT_TENANT_UUID)
-        user_id = str(params.get("user_id") or "")
+        organization_id = str(
+            execution_params.get("organization_id")
+            or params.get("organization_id")
+            or DEFAULT_TENANT_UUID
+        )
+        workspace_id = str(
+            execution_params.get("workspace_id")
+            or params.get("workspace_id")
+            or DEFAULT_TENANT_UUID
+        )
+        user_id = str(execution_params.get("user_id") or params.get("user_id") or "")
 
         control_keys = {
             "plugin",
@@ -159,7 +189,12 @@ class MariePluginDaemonExecutor(MarieExecutor):
             action_type=plugin.get("action_type", "tool"),
             request_id=request_id or None,
         )
-        return frames_to_docs(self._invoke_daemon(envelope, request_id))
+        if self._signing_key_id and self._signing_secret:
+            envelope = sign_envelope(
+                envelope, key_id=self._signing_key_id, secret=self._signing_secret
+            )
+        frames = await asyncio.to_thread(self._invoke_daemon, envelope, request_id)
+        return frames_to_docs(frames)
 
     def status_payload(self) -> dict[str, Any]:
         self._ensure_child()
@@ -202,7 +237,9 @@ class MariePluginDaemonExecutor(MarieExecutor):
             return
 
         self._last_exit_code = None
-        self._child = subprocess.Popen([binary, "--addr", self.daemon_addr])
+        self._child = subprocess.Popen(
+            [binary, "--addr", self.daemon_addr], env=self._env
+        )
         self._started_at = now_utc()
         self._next_restart_at = None
 
@@ -225,39 +262,40 @@ class MariePluginDaemonExecutor(MarieExecutor):
         )
 
     def _ensure_child(self) -> None:
-        if (
-            not self._start_enabled
-            or self.discovery.mode != "binary_child"
-            or self._draining
-        ):
-            return
+        with self._lifecycle_lock:
+            if (
+                not self._start_enabled
+                or self.discovery.mode != "binary_child"
+                or self._draining
+            ):
+                return
 
-        child = self._child
-        if child is not None and child.poll() is None:
-            return
+            child = self._child
+            if child is not None and child.poll() is None:
+                return
 
-        self._last_exit_code = child.returncode if child else self._last_exit_code
-        if self._restart_attempts >= self.restart_limit:
-            return
+            self._last_exit_code = child.returncode if child else self._last_exit_code
+            if self._restart_attempts >= self.restart_limit:
+                return
 
-        now = now_utc()
-        if self._next_restart_at is not None and now < self._next_restart_at:
-            return
+            now = now_utc()
+            if self._next_restart_at is not None and now < self._next_restart_at:
+                return
 
-        self._restart_attempts += 1
-        self._next_restart_at = None
-        self.logger.warning(
-            "restarting marie-plugin-daemon child after exit code %s (%s/%s)",
-            self._last_exit_code,
-            self._restart_attempts,
-            self.restart_limit,
-        )
-        self._start_child()
-        if self._child is not None and self._child.poll() is not None:
-            self._next_restart_at = datetime.fromtimestamp(
-                time.time() + self.restart_backoff_s,
-                timezone.utc,
+            self._restart_attempts += 1
+            self._next_restart_at = None
+            self.logger.warning(
+                "restarting marie-plugin-daemon child after exit code %s (%s/%s)",
+                self._last_exit_code,
+                self._restart_attempts,
+                self.restart_limit,
             )
+            self._start_child()
+            if self._child is not None and self._child.poll() is not None:
+                self._next_restart_at = datetime.fromtimestamp(
+                    time.time() + self.restart_backoff_s,
+                    timezone.utc,
+                )
 
     def _probe_health(self) -> dict[str, Any]:
         if self.discovery.mode == "unavailable":

@@ -37,7 +37,12 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 
 	_, pyprojectErr := os.Stat(pyprojectPath)
 	_, lockErr := os.Stat(lockPath)
-	if pyprojectErr == nil {
+	requirementsPath := filepath.Join(absDir, "requirements.txt")
+	requirementsInfo, requirementsErr := os.Stat(requirementsPath)
+	// Dify exports may include project metadata and requirements without uv.lock.
+	useRequirements := errors.Is(lockErr, os.ErrNotExist) && requirementsErr == nil &&
+		requirementsInfo.Mode().IsRegular() && requirementsInfo.Size() > 0
+	if pyprojectErr == nil && !useRequirements {
 		if errors.Is(lockErr, os.ErrNotExist) {
 			return "", fmt.Errorf("%w: uv.lock is required with pyproject.toml", ErrEnvironmentSetup)
 		}
@@ -53,7 +58,7 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 			return "", fmt.Errorf("%w: uv sync: %v", ErrEnvironmentSetup, err)
 		}
 	} else {
-		if !errors.Is(pyprojectErr, os.ErrNotExist) {
+		if pyprojectErr != nil && !errors.Is(pyprojectErr, os.ErrNotExist) {
 			return "", fmt.Errorf("%w: inspect pyproject.toml: %v", ErrEnvironmentSetup, pyprojectErr)
 		}
 		if lockErr == nil {
@@ -76,9 +81,7 @@ func EnsureEnvironment(ctx context.Context, workingDir string, pythonVersion str
 			return "", fmt.Errorf("%w: inspect venv: %v", ErrEnvironmentSetup, err)
 		}
 
-		requirementsPath := filepath.Join(absDir, "requirements.txt")
-		info, err := os.Stat(requirementsPath)
-		if err == nil && info.Size() > 0 {
+		if requirementsErr == nil && requirementsInfo.Size() > 0 {
 			cmd := uvCommand(ctx, "pip", "install", "-r", "requirements.txt", "--python", pythonBin)
 			cmd.Dir = absDir
 			cmd.Stdout = logs

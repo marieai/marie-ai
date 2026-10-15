@@ -19,14 +19,13 @@ from typing import (
     overload,
 )
 
-from pydantic import BaseModel
-
 from marie.agent.tools.base import (
     AgentTool,
     FunctionTool,
     ToolMetadata,
     adapt_tool,
 )
+from pydantic import BaseModel
 
 logger = logging.getLogger("marie.agent.tools.registry")
 
@@ -344,6 +343,7 @@ def resolve_tools(
     Supports:
         - Tool name strings (looked up from registry)
         - Configuration dicts with 'name' key
+        - Extension tool records when the Marie server adapter is installed
         - AgentTool instances (used directly)
         - Callable functions (wrapped as FunctionTool)
 
@@ -374,6 +374,15 @@ def resolve_tools(
             result[tool.name] = tool
 
         elif isinstance(spec, dict):
+            if (
+                spec.get("source") == "extension_tool"
+                or spec.get("type") == "extension_tool"
+            ):
+                from marie.plugins.agent_tool import PluginTool, PluginToolSpec
+
+                tool = PluginTool(PluginToolSpec.model_validate(spec))
+                result[tool.name] = tool
+                continue
             name = spec.get("name")
             if name is None:
                 raise ValueError("Tool config dict must have 'name' key")

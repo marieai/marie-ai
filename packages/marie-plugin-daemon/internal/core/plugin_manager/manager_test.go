@@ -40,6 +40,50 @@ func TestInstallExtractsPackageAndPersistsState(t *testing.T) {
 	}
 }
 
+func TestPreparedVersionPreservesLegacySelectionUntilActivated(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root)
+	const tenant = "org1__ws1"
+	legacy, err := manager.Install(tenant, zipFixturePlugin(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInstall(filepath.Join(legacy.WorkingDir, "install.json"), legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(manager.installPath(tenant, legacy.PackageRef)); err != nil {
+		t.Fatal(err)
+	}
+	files := fixtureFiles(t)
+	files["extra.py"] = []byte("VERSION = 2\n")
+	candidate, err := manager.Prepare(tenant, zipFromFiles(t, files))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed := NewManager(root).List(tenant); len(listed) != 1 || listed[0].Digest != legacy.Digest {
+		t.Fatalf("prepared version replaced legacy selection: %+v", listed)
+	}
+	candidate.State = StateReady
+	if err := manager.Activate(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if listed := NewManager(root).List(tenant); len(listed) != 1 || listed[0].Digest != candidate.Digest || listed[0].State != StateReady {
+		t.Fatalf("activation was not persisted: %+v", listed)
+	}
+	if err := manager.Discard(candidate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(candidate.WorkingDir); err != nil {
+		t.Fatalf("discard deleted selected version: %v", err)
+	}
+	if err := manager.Discard(legacy); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(legacy.WorkingDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("retired legacy version was not removed: %v", err)
+	}
+}
+
 func TestInstallRejectsPathTraversal(t *testing.T) {
 	root := t.TempDir()
 	if _, err := NewManager(root).Install("org1__ws1", zipWithEntry(t, "../escape.py")); err == nil {
@@ -47,7 +91,7 @@ func TestInstallRejectsPathTraversal(t *testing.T) {
 	}
 }
 
-func TestReinstallReplacesPreviousDigest(t *testing.T) {
+func TestReinstallPreservesPreviousFilesUntilWorkerRetires(t *testing.T) {
 	root := t.TempDir()
 	manager := NewManager(root)
 
@@ -65,8 +109,8 @@ func TestReinstallReplacesPreviousDigest(t *testing.T) {
 	if second.Digest == first.Digest {
 		t.Fatalf("expected new digest, got %q twice", second.Digest)
 	}
-	if _, err := os.Stat(first.WorkingDir); !os.IsNotExist(err) {
-		t.Fatalf("previous working dir not removed: %v", err)
+	if _, err := os.Stat(filepath.Join(first.WorkingDir, "main.py")); err != nil {
+		t.Fatalf("previous worker's files removed before retirement: %v", err)
 	}
 
 	listed := manager.List("org1__ws1")
@@ -83,6 +127,16 @@ func TestReinstallSameArchiveIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first install failed: %v", err)
 	}
+	venv := filepath.Join(first.WorkingDir, ".venv", "bin", "python")
+	if err := os.MkdirAll(filepath.Dir(venv), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(venv, []byte("existing environment"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.SetState("org1__ws1", first.PackageRef, StateReady); err != nil {
+		t.Fatal(err)
+	}
 	second, err := manager.Install("org1__ws1", zipBytes)
 	if err != nil {
 		t.Fatalf("second install failed: %v", err)
@@ -93,8 +147,34 @@ func TestReinstallSameArchiveIsIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(second.WorkingDir, "main.py")); err != nil {
 		t.Fatalf("source missing after reinstall: %v", err)
 	}
+	if content, err := os.ReadFile(venv); err != nil || string(content) != "existing environment" {
+		t.Fatalf("reinstall destroyed the existing environment: %q %v", content, err)
+	}
+	if second.State != StateReady {
+		t.Fatalf("reinstall reset ready state: %q", second.State)
+	}
 	if listed := manager.List("org1__ws1"); len(listed) != 1 {
 		t.Fatalf("expected single install: %+v", listed)
+	}
+}
+
+func TestRejectedReinstallPreservesActiveInstall(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	first, err := manager.Install("org1__ws1", zipFixturePlugin(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := fixtureFiles(t)
+	files["install.json"] = []byte(`{"state":"forged"}`)
+	if _, err := manager.Install("org1__ws1", zipFromFiles(t, files)); !errors.Is(err, ErrUnsafeArchivePath) {
+		t.Fatalf("expected reserved metadata rejection: %v", err)
+	}
+	current, ok := manager.Get("org1__ws1", first.PackageRef)
+	if !ok || current.Digest != first.Digest {
+		t.Fatalf("rejected replacement changed the active install: %+v", current)
+	}
+	if _, err := os.Stat(filepath.Join(first.WorkingDir, "main.py")); err != nil {
+		t.Fatalf("rejected replacement destroyed active files: %v", err)
 	}
 }
 

@@ -17,7 +17,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.Addr != "127.0.0.1:8099" {
 		t.Errorf("Addr default = %q", c.Addr)
 	}
-	if c.StorageRoot != "./storage" {
+	if c.StorageRoot != "/mnt/data/marie-ai" {
 		t.Errorf("StorageRoot default = %q", c.StorageRoot)
 	}
 	if c.DevInsecure {

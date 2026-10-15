@@ -24,6 +24,7 @@ var (
 	ErrNotInstalled    = errors.New("plugin_not_installed")
 	ErrNotRunning      = errors.New("instance_not_running")
 	ErrDeployCancelled = errors.New("deploy_cancelled")
+	ErrDigestMismatch  = errors.New("package_digest_mismatch")
 )
 
 const StateAbsent local_runtime.InstanceState = "absent"
@@ -46,13 +47,13 @@ type Frame struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
-// deployment is the per-key pool entry. instance and err are written before
+// deployment is the per-key pool entry. install and instance are written before
 // done is closed and may only be read after done is closed.
 type deployment struct {
-	done       chan struct{}
-	workingDir string
-	instance   *local_runtime.Instance
-	err        error
+	done     chan struct{}
+	install  plugin_manager.Install
+	instance *local_runtime.Instance
+	previous *deployment // protected by Pool.mu; serves requests during replacement
 }
 
 type Pool struct {
@@ -77,95 +78,124 @@ func NewPool(manager *plugin_manager.Manager, store *backwards_invocation.Storag
 }
 
 func (p *Pool) Deploy(ctx context.Context, tenant, packageRef string) (plugin_manager.Install, error) {
+	return p.deploy(ctx, tenant, packageRef, nil)
+}
+
+// Install prepares a replacement while the current worker remains available.
+func (p *Pool) Install(ctx context.Context, tenant string, archive []byte) (plugin_manager.Install, error) {
+	packageRef, _, err := plugin_manager.Inspect(archive)
+	if err != nil {
+		return plugin_manager.Install{}, err
+	}
+	return p.deploy(ctx, tenant, packageRef, archive)
+}
+
+func (p *Pool) deploy(ctx context.Context, tenant, packageRef string, archive []byte) (plugin_manager.Install, error) {
 	key := instanceKey(tenant, packageRef)
 	for {
-		install, ok := p.manager.Get(tenant, packageRef)
-		if !ok {
-			return plugin_manager.Install{}, fmt.Errorf("%w: %s", ErrNotInstalled, packageRef)
+		if err := ctx.Err(); err != nil {
+			return plugin_manager.Install{}, err
 		}
-
 		p.mu.Lock()
 		current := p.deployments[key]
-		if current == nil {
-			mine := &deployment{done: make(chan struct{}), workingDir: install.WorkingDir}
-			p.deployments[key] = mine
-			p.mu.Unlock()
-			return p.runDeploy(ctx, key, tenant, packageRef, install, mine)
-		}
-		p.mu.Unlock()
-
-		select {
-		case <-current.done:
-		case <-ctx.Done():
-			return plugin_manager.Install{}, ctx.Err()
-		}
-
-		if current.err == nil && current.instance != nil && current.workingDir == install.WorkingDir {
-			if state := current.instance.State(); state == local_runtime.InstanceStateReady || state == local_runtime.InstanceStateStarting {
-				install.State = string(state)
-				return install, nil
+		if current != nil {
+			select {
+			case <-current.done:
+			default:
+				p.mu.Unlock()
+				select {
+				case <-current.done:
+					continue
+				case <-ctx.Done():
+					return plugin_manager.Install{}, ctx.Err()
+				}
 			}
 		}
-
-		// Stale, failed, or superseded by a re-install: retire it and retry.
-		p.mu.Lock()
-		if p.deployments[key] == current {
-			delete(p.deployments, key)
-		}
+		mine := &deployment{done: make(chan struct{}), previous: current}
+		p.deployments[key] = mine
 		p.mu.Unlock()
-		if current.instance != nil {
-			current.instance.Stop()
-		}
+		return p.runDeploy(ctx, key, tenant, packageRef, archive, mine)
 	}
 }
 
-// runDeploy performs the slow work (decode, venv, process start) outside the
-// pool mutex; mine is already published in the map as the in-flight marker.
-func (p *Pool) runDeploy(ctx context.Context, key, tenant, packageRef string, install plugin_manager.Install, mine *deployment) (plugin_manager.Install, error) {
+// runDeploy performs slow preparation outside the pool mutex. The previous
+// worker is retired only after the candidate is ready and durably selected.
+func (p *Pool) runDeploy(ctx context.Context, key, tenant, packageRef string, archive []byte, mine *deployment) (plugin_manager.Install, error) {
+	var install plugin_manager.Install
+	var instance *local_runtime.Instance
+	previous := mine.previous
+	reused := false
 	fail := func(err error) (plugin_manager.Install, error) {
-		mine.err = err
+		if instance != nil && !reused {
+			instance.Stop()
+		}
 		p.mu.Lock()
 		if p.deployments[key] == mine {
-			delete(p.deployments, key)
+			if install.WorkingDir != "" {
+				if cleanupErr := p.manager.Discard(install); cleanupErr != nil {
+					fmt.Fprintf(p.logs, "failed candidate cleanup: %v\n", cleanupErr)
+				}
+			}
+			if previous != nil {
+				p.deployments[key] = previous
+			} else {
+				delete(p.deployments, key)
+			}
+			mine.previous = nil
 		}
-		p.mu.Unlock()
 		close(mine.done)
-		_ = p.manager.SetState(tenant, packageRef, plugin_manager.StateFailed)
+		p.mu.Unlock()
 		return plugin_manager.Install{}, err
 	}
 
-	if err := p.manager.SetState(tenant, packageRef, plugin_manager.StateStarting); err != nil {
-		return fail(err)
+	var err error
+	if archive != nil {
+		install, err = p.manager.Prepare(tenant, archive)
+	} else {
+		var ok bool
+		install, ok = p.manager.Get(tenant, packageRef)
+		if !ok {
+			err = fmt.Errorf("%w: %s", ErrNotInstalled, packageRef)
+		}
 	}
-	instance, err := p.start(ctx, install)
 	if err != nil {
 		return fail(err)
 	}
-	mine.instance = instance
+	if previous != nil && previous.instance != nil && previous.install.WorkingDir == install.WorkingDir && previous.instance.State() == local_runtime.InstanceStateReady {
+		instance = previous.instance
+		reused = true
+	} else {
+		instance, err = p.start(ctx, install)
+		if err != nil {
+			return fail(err)
+		}
+	}
 
 	p.mu.Lock()
-	owned := p.deployments[key] == mine
-	p.mu.Unlock()
-	if !owned {
-		mine.err = ErrDeployCancelled
-		close(mine.done)
-		instance.Stop()
-		return plugin_manager.Install{}, ErrDeployCancelled
-	}
-
-	if err := p.manager.SetState(tenant, packageRef, plugin_manager.StateReady); err != nil {
-		mine.err = err
-		p.mu.Lock()
-		if p.deployments[key] == mine {
-			delete(p.deployments, key)
-		}
+	if p.deployments[key] != mine {
 		p.mu.Unlock()
-		close(mine.done)
-		instance.Stop()
-		return plugin_manager.Install{}, err
+		return fail(ErrDeployCancelled)
 	}
-	close(mine.done)
+	if err := ctx.Err(); err != nil {
+		p.mu.Unlock()
+		return fail(err)
+	}
 	install.State = plugin_manager.StateReady
+	if err := p.manager.Activate(install); err != nil {
+		p.mu.Unlock()
+		return fail(err)
+	}
+	mine.install = install
+	mine.instance = instance
+	if previous != nil && previous.instance != nil && previous.instance != instance {
+		previous.instance.Stop()
+		if err := p.manager.Discard(previous.install); err != nil {
+			fmt.Fprintf(p.logs, "retired version cleanup: %v\n", err)
+		}
+	}
+	mine.previous = nil
+	close(mine.done)
+	p.mu.Unlock()
 	return install, nil
 }
 
@@ -203,8 +233,12 @@ func (p *Pool) start(ctx context.Context, install plugin_manager.Install) (*loca
 // lookup returns the entry for key without ever blocking on in-flight deploys.
 func (p *Pool) lookup(key string) (entry *deployment, inflight bool) {
 	p.mu.Lock()
-	entry = p.deployments[key]
-	p.mu.Unlock()
+	defer p.mu.Unlock()
+	return activeDeployment(p.deployments[key])
+}
+
+// Called with Pool.mu held, since an update can change previous at completion.
+func activeDeployment(entry *deployment) (*deployment, bool) {
 	if entry == nil {
 		return nil, false
 	}
@@ -212,6 +246,9 @@ func (p *Pool) lookup(key string) (entry *deployment, inflight bool) {
 	case <-entry.done:
 		return entry, false
 	default:
+		if entry.previous != nil {
+			return entry.previous, false
+		}
 		return entry, true
 	}
 }
@@ -234,7 +271,8 @@ func (p *Pool) ReadyCount() int {
 	p.mu.Lock()
 	entries := make([]*deployment, 0, len(p.deployments))
 	for _, entry := range p.deployments {
-		entries = append(entries, entry)
+		active, _ := activeDeployment(entry)
+		entries = append(entries, active)
 	}
 	p.mu.Unlock()
 
@@ -251,10 +289,17 @@ func (p *Pool) ReadyCount() int {
 	return count
 }
 
-func (p *Pool) Invoke(ctx context.Context, tenant, packageRef string, payload any, timeout time.Duration) (<-chan Frame, error) {
+func (p *Pool) Invoke(ctx context.Context, tenant, packageRef, digest string, payload any, timeout time.Duration) (<-chan Frame, error) {
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	deadline := time.Now().Add(timeout)
 	entry, inflight := p.lookup(instanceKey(tenant, packageRef))
 	if entry == nil || inflight || entry.instance == nil || entry.instance.State() != local_runtime.InstanceStateReady {
 		return nil, fmt.Errorf("%w: %s", ErrNotRunning, packageRef)
+	}
+	if digest != entry.install.Digest {
+		return nil, fmt.Errorf("%w: %s", ErrDigestMismatch, packageRef)
 	}
 	instance := entry.instance
 
@@ -275,16 +320,24 @@ func (p *Pool) Invoke(ctx context.Context, tenant, packageRef string, payload an
 		}
 	})
 
-	if err := instance.Write(sessionID, local_runtime.InStreamEventRequest, payload); err != nil {
+	invocationCtx, cancel := context.WithDeadline(ctx, deadline)
+	if err := instance.Write(invocationCtx, sessionID, local_runtime.InStreamEventRequest, payload); err != nil {
+		cancel()
 		instance.CloseSession(sessionID)
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+			frames := make(chan Frame, 1)
+			frames <- invocationTimeoutFrame()
+			close(frames)
+			return frames, nil
+		}
 		return nil, err
 	}
 
-	if timeout <= 0 {
-		timeout = defaultTimeout
-	}
 	frames := make(chan Frame, frameBufferSize)
-	go p.consume(ctx, instance, sessionID, tenant, packageRef, events, overflow, frames, timeout)
+	go func() {
+		defer cancel()
+		p.consume(invocationCtx, instance, sessionID, tenant, packageRef, events, overflow, frames)
+	}()
 	return frames, nil
 }
 
@@ -295,13 +348,11 @@ func (p *Pool) consume(
 	events <-chan plugin_entities.PluginUniversalEvent,
 	overflow <-chan struct{},
 	frames chan<- Frame,
-	timeout time.Duration,
 ) {
 	defer close(frames)
+	// The protocol cannot cancel plugin work per session. Detach the listener
+	// on timeout/cancel; stopping this shared instance would abort other sessions.
 	defer instance.CloseSession(sessionID)
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
 
 	tryEmit := func(frame Frame) {
 		select {
@@ -309,23 +360,25 @@ func (p *Pool) consume(
 		default:
 		}
 	}
-	errorFrame := func(message string, retryable bool) Frame {
-		data, _ := json.Marshal(map[string]any{"message": message, "retryable": retryable})
-		return Frame{Type: FrameError, Data: data}
+	contextDone := func() bool {
+		if ctx.Err() == nil {
+			return false
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			tryEmit(invocationTimeoutFrame())
+		}
+		return true
 	}
-	// emit delivers a frame, aborting on cancel, timeout, or instance death so
-	// a slow consumer can never pin the session past the invocation timeout.
-	// The timer fires at most once, so every abort path returns immediately.
+	// Output backpressure and backwards writes share the invocation deadline.
 	emit := func(frame Frame) bool {
+		if contextDone() {
+			return false
+		}
 		select {
 		case frames <- frame:
 			return true
 		case <-ctx.Done():
-			instance.Stop()
-			return false
-		case <-timer.C:
-			instance.Stop()
-			tryEmit(errorFrame("invocation timeout after "+timeout.String(), true))
+			contextDone()
 			return false
 		case <-instance.Done():
 			tryEmit(errorFrame("instance stopped", true))
@@ -334,6 +387,9 @@ func (p *Pool) consume(
 	}
 
 	for {
+		if contextDone() {
+			return
+		}
 		select {
 		case event := <-events:
 			message, err := event.SessionMessage()
@@ -353,7 +409,7 @@ func (p *Pool) consume(
 				emit(Frame{Type: FrameError, Data: message.Data})
 				return
 			case plugin_entities.SessionMessageInvoke:
-				if !emit(p.handleBackwardsInvocation(instance, sessionID, tenant, packageRef, message.Data)) {
+				if !emit(p.handleBackwardsInvocation(ctx, instance, sessionID, tenant, packageRef, message.Data)) {
 					return
 				}
 			default:
@@ -363,18 +419,23 @@ func (p *Pool) consume(
 		case <-overflow:
 			emit(errorFrame("session buffer overflow: consumer too slow", false))
 			return
-		case <-timer.C:
-			instance.Stop()
-			tryEmit(errorFrame("invocation timeout after "+timeout.String(), true))
-			return
 		case <-instance.Done():
 			tryEmit(errorFrame("instance stopped", true))
 			return
 		case <-ctx.Done():
-			instance.Stop()
+			contextDone()
 			return
 		}
 	}
+}
+
+func errorFrame(message string, retryable bool) Frame {
+	data, _ := json.Marshal(map[string]any{"message": message, "retryable": retryable})
+	return Frame{Type: FrameError, Data: data}
+}
+
+func invocationTimeoutFrame() Frame {
+	return errorFrame("invocation timeout; plugin execution may continue", false)
 }
 
 // backwardsInvokeChunk mirrors the upstream invoke payload: type,
@@ -392,21 +453,21 @@ type backwardsInvokeChunk struct {
 // handleBackwardsInvocation routes a plugin-initiated invoke. The storage
 // family executes against the pool's Storage; everything else keeps the
 // not-supported rejection.
-func (p *Pool) handleBackwardsInvocation(instance *local_runtime.Instance, sessionID, tenant, packageRef string, data json.RawMessage) Frame {
+func (p *Pool) handleBackwardsInvocation(ctx context.Context, instance *local_runtime.Instance, sessionID, tenant, packageRef string, data json.RawMessage) Frame {
 	chunk := backwardsInvokeChunk{}
 	_ = json.Unmarshal(data, &chunk)
 
 	if chunk.Type != "storage" {
-		return p.rejectBackwardsInvocation(instance, sessionID, chunk.BackwardsRequestID)
+		return p.rejectBackwardsInvocation(ctx, instance, sessionID, chunk.BackwardsRequestID)
 	}
 
 	result, err := p.executeStorageOp(tenant, packageRef, chunk)
 	if err != nil {
-		p.writeBackwardsEvent(instance, sessionID, backwardsErrorEvent(chunk.BackwardsRequestID, err.Error()))
+		p.writeBackwardsEvent(ctx, instance, sessionID, backwardsErrorEvent(chunk.BackwardsRequestID, err.Error()))
 	} else {
-		p.writeBackwardsEvent(instance, sessionID, backwardsResponseEvent(chunk.BackwardsRequestID, result))
+		p.writeBackwardsEvent(ctx, instance, sessionID, backwardsResponseEvent(chunk.BackwardsRequestID, result))
 	}
-	p.writeBackwardsEvent(instance, sessionID, backwardsEndEvent(chunk.BackwardsRequestID))
+	p.writeBackwardsEvent(ctx, instance, sessionID, backwardsEndEvent(chunk.BackwardsRequestID))
 
 	keyDigest := sha256.Sum256([]byte(chunk.Request.Key))
 	logData, _ := json.Marshal(map[string]string{
@@ -503,15 +564,15 @@ func backwardsEndEvent(requestID string) map[string]any {
 	}
 }
 
-func (p *Pool) writeBackwardsEvent(instance *local_runtime.Instance, sessionID string, event map[string]any) {
-	if err := instance.Write(sessionID, local_runtime.InStreamEventBackwardsResponse, event); err != nil {
+func (p *Pool) writeBackwardsEvent(ctx context.Context, instance *local_runtime.Instance, sessionID string, event map[string]any) {
+	if err := instance.Write(ctx, sessionID, local_runtime.InStreamEventBackwardsResponse, event); err != nil {
 		fmt.Fprintf(p.logs, "backwards response write failed: %v\n", err)
 	}
 }
 
 // rejectBackwardsInvocation answers a non-storage invoke with an error.
-func (p *Pool) rejectBackwardsInvocation(instance *local_runtime.Instance, sessionID, backwardsRequestID string) Frame {
-	if err := instance.Write(sessionID, local_runtime.InStreamEventBackwardsResponse, map[string]any{
+func (p *Pool) rejectBackwardsInvocation(ctx context.Context, instance *local_runtime.Instance, sessionID, backwardsRequestID string) Frame {
+	if err := instance.Write(ctx, sessionID, local_runtime.InStreamEventBackwardsResponse, map[string]any{
 		"backwards_request_id": backwardsRequestID,
 		"error":                "backwards invocation not supported",
 	}); err != nil {
@@ -525,19 +586,26 @@ func (p *Pool) rejectBackwardsInvocation(instance *local_runtime.Instance, sessi
 }
 
 func (p *Pool) Stop(tenant, packageRef string) error {
-	key := instanceKey(tenant, packageRef)
 	p.mu.Lock()
-	entry := p.deployments[key]
-	delete(p.deployments, key)
-	p.mu.Unlock()
+	defer p.mu.Unlock()
+	return p.stop(tenant, packageRef)
+}
 
-	if entry == nil {
-		return nil
+// Remove fences any pending replacement before deleting its package files.
+func (p *Pool) Remove(tenant, packageRef string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.stop(tenant, packageRef); err != nil {
+		return err
 	}
-	select {
-	case <-entry.done:
-	default:
-		// In-flight deploy is now disowned; runDeploy stops its own instance.
+	return p.manager.Remove(tenant, packageRef)
+}
+
+func (p *Pool) stop(tenant, packageRef string) error {
+	key := instanceKey(tenant, packageRef)
+	entry, inflight := activeDeployment(p.deployments[key])
+	delete(p.deployments, key)
+	if entry == nil || inflight {
 		return nil
 	}
 	if entry.instance == nil {
@@ -553,12 +621,20 @@ func (p *Pool) Stop(tenant, packageRef string) error {
 func (p *Pool) Shutdown() {
 	p.mu.Lock()
 	entries := make([]*deployment, 0, len(p.deployments))
+	instances := []*local_runtime.Instance{}
 	for key, entry := range p.deployments {
 		entries = append(entries, entry)
+		active, inflight := activeDeployment(entry)
+		if !inflight && active.instance != nil {
+			instances = append(instances, active.instance)
+		}
 		delete(p.deployments, key)
 	}
 	p.mu.Unlock()
 
+	for _, instance := range instances {
+		instance.Stop()
+	}
 	for _, entry := range entries {
 		<-entry.done
 		if entry.instance != nil {

@@ -47,7 +47,10 @@ from marie.executor.agent.plugin_models import (
     AgentPluginResponse,
     AgentPluginRoute,
 )
-from marie.executor.agent.tools.registry import resolve_executor_tools
+from marie.executor.agent.tools.registry import (
+    plugin_tool_runtime,
+    resolve_executor_tools,
+)
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 from marie.plugins.embedded import EmbeddedPlugins
@@ -567,15 +570,16 @@ class AgentExecutor(MarieExecutor):
             for attempt in range(structured_output_retries + 1):
                 structured_output_attempts = attempt + 1
                 try:
-                    result = await asyncio.wait_for(
-                        self._backend.run(
-                            messages=attempt_messages,
-                            tools=self._tools,
-                            config=None,
-                            **backend_parameters,
-                        ),
-                        timeout=timeout_seconds,
-                    )
+                    with plugin_tool_runtime(parameters):
+                        result = await asyncio.wait_for(
+                            self._backend.run(
+                                messages=attempt_messages,
+                                tools=self._tools,
+                                config=None,
+                                **backend_parameters,
+                            ),
+                            timeout=timeout_seconds,
+                        )
                 except asyncio.TimeoutError as error:
                     raise TimeoutError(
                         f"Agent execution timed out after {timeout_seconds}s"
@@ -815,7 +819,8 @@ class AgentExecutor(MarieExecutor):
 
         # Check for coordination mode
         if self._should_use_coordination():
-            return await self._coordinated_chat(docs, parameters)
+            with plugin_tool_runtime(parameters):
+                return await self._coordinated_chat(docs, parameters)
 
         # Extract conversation ID
         conversation_id = parameters.get("conversation_id", str(uuid.uuid4()))
@@ -838,15 +843,16 @@ class AgentExecutor(MarieExecutor):
         # Run agent with timeout
         start_time = time.time()
         try:
-            result = await asyncio.wait_for(
-                self._backend.run(
-                    messages=messages,
-                    tools=self._tools,
-                    config=None,
-                    **parameters,
-                ),
-                timeout=timeout_seconds,
-            )
+            with plugin_tool_runtime(parameters):
+                result = await asyncio.wait_for(
+                    self._backend.run(
+                        messages=messages,
+                        tools=self._tools,
+                        config=None,
+                        **parameters,
+                    ),
+                    timeout=timeout_seconds,
+                )
         except asyncio.TimeoutError:
             logger.error(f"Agent execution timed out after {timeout_seconds}s")
             from marie.agent.backends.base import AgentResult, AgentStatus
@@ -947,17 +953,18 @@ class AgentExecutor(MarieExecutor):
         final_result: Optional[AgentResult] = None
 
         try:
-            async for item in self._backend.run_stream(
-                messages=messages,
-                tools=self._tools,
-                abort_signal=abort_signal,
-                **parameters,
-            ):
-                if isinstance(item, AgentResult):
-                    final_result = item
-                elif isinstance(item, StreamChunk):
-                    if item.content:
-                        collected_text_parts.append(item.content)
+            with plugin_tool_runtime(parameters):
+                async for item in self._backend.run_stream(
+                    messages=messages,
+                    tools=self._tools,
+                    abort_signal=abort_signal,
+                    **parameters,
+                ):
+                    if isinstance(item, AgentResult):
+                        final_result = item
+                    elif isinstance(item, StreamChunk):
+                        if item.content:
+                            collected_text_parts.append(item.content)
         except Exception as e:
             logger.error(f"Streaming execution failed: {e}")
             return DocList[TextDoc](

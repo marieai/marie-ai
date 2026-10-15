@@ -486,6 +486,114 @@ ORDER BY (project_id, trace_id, name, id)
 TTL toDateTime(created_at) + INTERVAL 90 DAY
 SETTINGS index_granularity = 8192;
 
+-- ############### LLM Model Pricing ###############
+-- Price rules: a regex over the model name a span reports, priced per 1M
+-- tokens. Built-in rows come from a catalog sync (OpenRouter); custom rows
+-- win on match. Rows are versioned; is_deleted=1 removes a rule.
+CREATE TABLE IF NOT EXISTS otel.model_prices (
+    id UUID,
+    name String,
+    match_pattern String,
+    provider String DEFAULT '',
+    start_date Nullable(DateTime64(3, 'UTC')),
+    input_price Float64,
+    output_price Float64,
+    input_breakdown Map(String, Float64),
+    output_breakdown Map(String, Float64),
+    is_built_in UInt8 DEFAULT 0,
+    source LowCardinality(String) DEFAULT '',
+    source_model_id String DEFAULT '',
+    context_length Nullable(UInt32),
+    metadata String DEFAULT '{}',
+    created_by String DEFAULT '',
+    created_at DateTime64(3, 'UTC') DEFAULT now64(3),
+    updated_at DateTime64(3, 'UTC') DEFAULT now64(3),
+    version UInt64,
+    is_deleted UInt8 DEFAULT 0
+) ENGINE = ReplacingMergeTree(version, is_deleted)
+ORDER BY id;
+
+CREATE TABLE IF NOT EXISTS otel.model_price_sync_runs (
+    id UUID DEFAULT generateUUIDv4(),
+    source LowCardinality(String),
+    status LowCardinality(String),
+    started_at DateTime64(3, 'UTC'),
+    completed_at DateTime64(3, 'UTC') DEFAULT now64(3),
+    fetched_count UInt32 DEFAULT 0,
+    inserted_count UInt32 DEFAULT 0,
+    updated_count UInt32 DEFAULT 0,
+    stale_count UInt32 DEFAULT 0,
+    error_message String DEFAULT ''
+) ENGINE = MergeTree
+ORDER BY (source, started_at)
+TTL toDateTime(started_at) + INTERVAL 180 DAY;
+
+-- Model/provider pairs that reported tokens, kept small so price resolution
+-- never scans otel_traces
+CREATE TABLE IF NOT EXISTS otel.llm_model_names (
+    model String,
+    provider String,
+    last_seen DateTime
+) ENGINE = ReplacingMergeTree(last_seen)
+ORDER BY (model, provider);
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS otel.llm_model_names_mv TO otel.llm_model_names AS
+SELECT
+    SpanAttributes['llm.model_name'] AS model,
+    SpanAttributes['llm.provider'] AS provider,
+    max(toDateTime(Timestamp)) AS last_seen
+FROM otel.otel_traces
+WHERE SpanAttributes['llm.model_name'] != ''
+    AND (SpanAttributes['llm.token_count.prompt'] != '' OR SpanAttributes['llm.token_count.completion'] != '')
+GROUP BY model, provider;
+
+-- The rule pricing each observed model/provider: custom before built-in,
+-- provider-scoped before generic, latest start date in effect, then name.
+-- Token-type rates fall back to the base rate.
+CREATE DICTIONARY IF NOT EXISTS otel.model_price_dict (
+    model String,
+    provider String,
+    rule_id String,
+    input_price Float64,
+    output_price Float64,
+    input_cache_read Float64,
+    input_cache_write Float64,
+    input_audio Float64,
+    output_reasoning Float64,
+    output_audio Float64
+)
+PRIMARY KEY model, provider
+SOURCE(CLICKHOUSE(QUERY '
+    SELECT
+        model,
+        provider,
+        toString(best.1) AS rule_id,
+        best.2 AS input_price,
+        best.3 AS output_price,
+        if(mapContains(best.4, ''cache_read''), best.4[''cache_read''], best.2) AS input_cache_read,
+        if(mapContains(best.4, ''cache_write''), best.4[''cache_write''], best.2) AS input_cache_write,
+        if(mapContains(best.4, ''audio''), best.4[''audio''], best.2) AS input_audio,
+        if(mapContains(best.5, ''reasoning''), best.5[''reasoning''], best.3) AS output_reasoning,
+        if(mapContains(best.5, ''audio''), best.5[''audio''], best.3) AS output_audio
+    FROM (
+        SELECT
+            n.model AS model,
+            n.provider AS provider,
+            argMin(
+                (p.id, p.input_price, p.output_price, p.input_breakdown, p.output_breakdown),
+                (p.is_built_in, p.provider = '''', -toUnixTimestamp64Milli(ifNull(p.start_date, toDateTime64(0, 3))), p.name)
+            ) AS best
+        FROM (SELECT DISTINCT model, provider FROM otel.llm_model_names) AS n
+        CROSS JOIN (SELECT * FROM otel.model_prices FINAL) AS p
+        WHERE match(n.model, concat(''(?i)'', p.match_pattern))
+            AND (p.provider = '''' OR lower(p.provider) = lower(n.provider))
+            AND (p.start_date IS NULL OR p.start_date <= now64(3))
+        GROUP BY n.model, n.provider
+    )
+'))
+LAYOUT(COMPLEX_KEY_HASHED())
+LIFETIME(MIN 30 MAX 60);
+
 -- ############### Useful Queries ###############
 --
 -- Recent errors:

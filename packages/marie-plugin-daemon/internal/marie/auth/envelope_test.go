@@ -21,6 +21,19 @@ func TestVerifySignedEnvelope(t *testing.T) {
 	}
 }
 
+func TestCanonicalEnvelopeMatchesRuntimeSigners(t *testing.T) {
+	envelope := map[string]any{
+		"payload": map[string]any{
+			"url":  "https://example.com/?name=caf\u00e9&limit=2",
+			"text": "<document> & text",
+		},
+	}
+	want := `{"payload":{"text":"<document> & text","url":"https://example.com/?name=café&limit=2"}}`
+	if got := string(mustCanonicalEnvelope(envelope)); got != want {
+		t.Fatalf("canonical envelope differs from JSON signing representation:\ngot  %s\nwant %s", got, want)
+	}
+}
+
 func TestVerifyStudioSignedFixture(t *testing.T) {
 	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
 	verifier := NewEnvelopeVerifier([]SigningKey{{KeyID: "marie-api-test", Secret: "test-runtime-secret"}}, func() time.Time {

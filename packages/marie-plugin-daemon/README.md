@@ -22,6 +22,11 @@ go build -o dist/marie-plugin-daemon ./cmd/server
 go run ./cmd/server --addr 127.0.0.1:8099
 ```
 
+Runtime packages and Python environments default to `/mnt/data/marie-ai/plugin-runtime`.
+Set `MARIE_DEFAULT_MOUNT` or `MARIE_PLUGIN_STORAGE_ROOT` to change the data root;
+the daemon appends `plugin-runtime/<organization>__<workspace>/` to that root.
+Studio keeps uploaded ZIPs separately in `/mnt/data/marie-ai/plugin-packages`.
+
 Endpoints:
 
 - `GET /health`
@@ -38,3 +43,5 @@ Endpoints:
 - Standard ZIP archives are supported when they contain exactly one `marie-extension.yaml`.
 - `.difypkg` is rejected as a runtime package format.
 - The decoder reads metadata and inventories files; it does not import, evaluate, or execute package code.
+- When `pyproject.toml` and `uv.lock` are present, installation uses `uv sync --locked --no-dev`.
+- Without `uv.lock`, a non-empty `requirements.txt` supplies dependencies, including for Dify exports that also contain `pyproject.toml`. Project-only packages still require a lockfile, and an invalid lockfile fails installation rather than falling back to requirements.

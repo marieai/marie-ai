@@ -142,7 +142,7 @@ func TestInstanceEchoRoundTrip(t *testing.T) {
 
 	events := make(chan plugin_entities.PluginUniversalEvent, 4)
 	instance.Listen("s1", func(event plugin_entities.PluginUniversalEvent) { events <- event })
-	if err := instance.Write("s1", InStreamEventRequest, map[string]any{"ping": true}); err != nil {
+	if err := instance.Write(context.Background(), "s1", InStreamEventRequest, map[string]any{"ping": true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,7 +192,7 @@ func TestInstanceStopKillsProcess(t *testing.T) {
 	default:
 		t.Fatal("Done channel not closed after Stop")
 	}
-	if err := instance.Write("s1", InStreamEventRequest, map[string]any{"ping": true}); !errors.Is(err, ErrInstanceStopped) {
+	if err := instance.Write(context.Background(), "s1", InStreamEventRequest, map[string]any{"ping": true}); !errors.Is(err, ErrInstanceStopped) {
 		t.Fatalf("expected ErrInstanceStopped, got %v", err)
 	}
 }
@@ -230,7 +230,7 @@ func TestWriteAfterStopFails(t *testing.T) {
 
 	instance.Stop()
 
-	if err := instance.Write("s1", InStreamEventRequest, "payload"); !errors.Is(err, ErrInstanceStopped) {
+	if err := instance.Write(context.Background(), "s1", InStreamEventRequest, "payload"); !errors.Is(err, ErrInstanceStopped) {
 		t.Fatalf("expected ErrInstanceStopped, got %v", err)
 	}
 }

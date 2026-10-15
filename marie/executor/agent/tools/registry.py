@@ -2,16 +2,49 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import os
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from marie.agent.tools import AgentTool, resolve_tools
 
 
+@contextmanager
+def plugin_tool_runtime(parameters: dict[str, Any]) -> Iterator[None]:
+    """Bind plugin invocations to the current request's tenant and host config."""
+    from marie.plugins.agent_tool import PluginTool
+    from marie.plugins.daemon_client import PluginDaemonClient
+
+    organization_id = parameters.get('organization_id')
+    workspace_id = parameters.get('workspace_id')
+    user_id = parameters.get('user_id')
+
+    def client_factory() -> PluginDaemonClient:
+        if not organization_id or not workspace_id:
+            raise ValueError('Plugin tools require organization_id and workspace_id')
+        key_id = os.environ.get('MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID')
+        secret = os.environ.get('MARIE_PLUGIN_DAEMON_SIGNING_SECRET')
+        if bool(key_id) != bool(secret):
+            raise ValueError(
+                'Plugin daemon signing key ID and secret must be configured together'
+            )
+        return PluginDaemonClient(
+            organization_id=str(organization_id),
+            workspace_id=str(workspace_id),
+            user_id=str(user_id) if user_id else None,
+            signing_key_id=key_id,
+            signing_secret=secret,
+        )
+
+    with PluginTool.runtime(client_factory):
+        yield
+
+
 def resolve_executor_tools(
     tool_specs: list[str | dict[str, Any] | AgentTool | Callable[..., Any]],
 ) -> dict[str, AgentTool]:
-    """Resolve portable tools plus Marie MCP and EmbeddedPlugin tools."""
+    """Resolve native, MCP, and extension tools for server executors."""
     resolved: dict[str, AgentTool] = {}
 
     for spec in tool_specs:

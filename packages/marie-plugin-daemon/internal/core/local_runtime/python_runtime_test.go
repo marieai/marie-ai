@@ -49,7 +49,7 @@ func TestSharedPythonRuntimeRoundTrip(t *testing.T) {
 
 	events := make(chan plugin_entities.PluginUniversalEvent, 2)
 	instance.Listen("shared-runtime", func(event plugin_entities.PluginUniversalEvent) { events <- event })
-	if err := instance.Write("shared-runtime", InStreamEventRequest, map[string]any{"value": "ok"}); err != nil {
+	if err := instance.Write(context.Background(), "shared-runtime", InStreamEventRequest, map[string]any{"value": "ok"}); err != nil {
 		t.Fatal(err)
 	}
 
