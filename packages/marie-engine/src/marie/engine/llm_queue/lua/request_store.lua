@@ -51,7 +51,7 @@ local manifest = KEYS[18]
 local operations = {route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
     producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,admit_manifest=true,
     metadata=true,result=true,ack_result=true,claim=true,reserve_replica=true,release_replica=true,payload=true,start=true,defer=true,promote=true,
-    finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true,continue=true}
+    finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true,continue=true,record_attempt=true}
 if not operations[op] then return redis.error_reply('invalid operation') end
 local function integer(value, low, high)
     return type(value) == 'number' and value == math.floor(value) and value >= low and value <= high
@@ -97,7 +97,7 @@ if op == 'owner_acquire' and not identifier(a.identity) then return redis.error_
 if op == 'owner_acquire' or op == 'owner_renew' or op == 'producer_create' or op == 'producer_renew' then
     if not integer(a.lease_ms,1,a.limits.max_lease_ms) then return redis.error_reply('invalid lease') end
 end
-if op == 'claim' or op == 'payload' or op == 'start' or op == 'defer' or op == 'finish' or op == 'settle' or op == 'continue' then
+if op == 'claim' or op == 'payload' or op == 'start' or op == 'defer' or op == 'finish' or op == 'settle' or op == 'continue' or op == 'record_attempt' then
     if not identifier(a.claim_id) then return redis.error_reply('missing claim identity') end
 end
 if op == 'return_untransmitted' and (not identifier(a.claim_id) or
@@ -106,7 +106,7 @@ if op == 'return_untransmitted' and (not identifier(a.claim_id) or
 if (op == 'reserve_replica' or op == 'release_replica') and
     (not identifier(a.claim_id) or not identifier(a.replica_id) or
     not integer(a.charge_sequence,1,2^53-1)) then return redis.error_reply('invalid replica arguments') end
-if op == 'defer' or op == 'finish' or op == 'settle' or op == 'continue' then
+if op == 'defer' or op == 'finish' or op == 'settle' or op == 'continue' or op == 'record_attempt' then
     if not integer(a.execution_seq,0,a.limits.max_attempts) then return redis.error_reply('invalid execution sequence') end
 end
 if op == 'circuit_feedback' and (not identifier(a.claim_id) or not identifier(a.reason) or
@@ -122,6 +122,11 @@ if op == 'settle' and a.evidence ~= 'remote_completed' and a.evidence ~= 'remote
 if op == 'finish' and (type(a.result) ~= 'string' or type(a.success) ~= 'boolean' or
     type(a.oversized) ~= 'boolean' or #a.result > a.limits.result_allowance) then
     return redis.error_reply('invalid result arguments')
+end
+if op == 'record_attempt' and (not integer(a.physical_attempt,1,1024) or
+    type(a.evidence) ~= 'string' or #a.evidence > a.limits.result_allowance or
+    type(a.oversized) ~= 'boolean' or type(a.evidence_digest) ~= 'string' or #a.evidence_digest ~= 64) then
+    return redis.error_reply('invalid attempt evidence')
 end
 if op == 'cancel' and type(a.expire) ~= 'boolean' then return redis.error_reply('invalid cancellation arguments') end
 if op == 'endpoint' and (not identifier(a.endpoint_id) or
@@ -274,6 +279,11 @@ local function release()
         redis.call('HSET',R,'replica_reserved',0,'replica_reservation_bytes',0)
     end
     redis.call('ZREM',processing,a.id)
+    if h(R,'capture_attempts') == '1' and h(R,'result') then
+        local charge = a.limits.metadata_bytes + #h(R,'result')
+        inc('storage_bytes',charge-n(R,'storage_charge'))
+        redis.call('HSET',R,'storage_charge',charge)
+    end
 end
 local function refund()
     local charged = n(R,'charged_cost')
@@ -347,10 +357,22 @@ local function ensure_activity_capacity()
     end
 end
 local function finish_terminal(state, result)
+    if h(R,'capture_attempts') == '1' then
+        local evidence = h(R,'attempt_evidence') or '[]'
+        local failure = h(R,'evidence_error') or ''
+        local combined = '{"completion":'..result..',"attempts":'..evidence..',"evidence_error":'..cjson.encode(failure)..'}'
+        if #combined > n(R,'result_allowance') then
+            failure = 'evidence_too_large'
+            combined = '{"completion":null,"attempts":'..evidence..',"evidence_error":"evidence_too_large"}'
+        end
+        if failure ~= '' then state = 'failed' end
+        result = combined
+        redis.call('HDEL',R,'attempt_evidence','last_evidence_id','last_evidence_digest','evidence_error')
+    end
     local count_admission = n(R,'admission_counted') == 0
     drop_input()
     unlink_indexes()
-    local charge = a.limits.metadata_bytes + string.len(result)
+    local charge = a.limits.metadata_bytes + ((h(R,'capture_attempts') == '1' and n(R,'reserved') == 1) and n(R,'result_allowance') or string.len(result))
     inc('storage_bytes',charge-n(R,'storage_charge'))
     local until_time = math.max(n(R,'expires_at_ms'),now+a.limits.delivery_grace_ms)
     redis.call('HSET',R,'state',state,'result',result,'storage_charge',charge,
@@ -360,7 +382,7 @@ local function finish_terminal(state, result)
     redis.call('HINCRBY',route,'completed',1)
 end
 local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,reserve_replica=true,release_replica=true,start=true,payload=true,defer=true,return_untransmitted=true,
-    promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,continue=true}
+    promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,continue=true,record_attempt=true}
 if dispatcher_ops[op] and not owner_valid() then return reply('stale_owner') end
 if op == 'initialize' then
     if stored_limits and stored_limits ~= a.limits_json then return reply('invalid_limits') end
@@ -494,6 +516,7 @@ elseif op == 'admit' or op == 'admit_manifest' then
         'expires_at_ms',a.expires_at_ms,'payload',a.payload,'payload_bytes',a.payload_bytes,
         'model',a.model,'admitted_at_ms',now,'cost',a.cost,'state','ready','execution_seq',0,'active',1,'reserved',0,
         'storage_charge',charge,'result_allowance',a.limits.result_allowance,'admission_counted',1)
+    redis.call('HSET',R,'capture_attempts',a.capture_attempts and '1' or '0')
     for _, field in ipairs({'traceparent','tracestate'}) do
         if type(a[field]) == 'string' then redis.call('HSET',R,field,a[field]) end
     end
@@ -633,6 +656,44 @@ if op == 'cancel' then
     if h(R,'last_error') then result.category = h(R,'last_error') end
     finish_terminal(a.expire and 'expired' or 'cancelled',cjson.encode(result))
     return reply('finished')
+end
+if op == 'record_attempt' then
+    if h(R,'claim_id') ~= a.claim_id or h(R,'owner_id') ~= a.owner or n(R,'execution_seq') ~= a.execution_seq then return reply('stale_claim') end
+    local completed = terminal() and n(R,'reserved') == 1
+    if h(R,'state') ~= 'executing' and not completed then return reply('invalid_state') end
+    if h(R,'capture_attempts') ~= '1' then return reply('disabled') end
+    local identity = a.claim_id..':'..a.execution_seq..':'..a.physical_attempt
+    if h(R,'last_evidence_id') == identity then
+        return reply(h(R,'last_evidence_digest') == a.evidence_digest and 'existing' or 'evidence_conflict')
+    end
+    local retained = completed and cjson.decode(h(R,'result')) or nil
+    local evidence = completed and (#retained.attempts > 0 and cjson.encode(retained.attempts) or '[]') or h(R,'attempt_evidence') or '[]'
+    if not a.oversized then
+        local proposed = cjson.decode(a.evidence)
+        for _, previous in ipairs(cjson.decode(evidence)) do
+            if previous.claim_id == a.claim_id and previous.execution_sequence == a.execution_seq and previous.physical_attempt == a.physical_attempt then
+                for key, value in pairs(previous) do
+                    if proposed[key] ~= value then return reply('evidence_conflict') end
+                end
+                return reply('existing')
+            end
+        end
+    end
+    local combined = evidence == '[]' and '['..a.evidence..']' or string.sub(evidence,1,-2)..','..a.evidence..']'
+    local oversized = a.oversized or #combined > n(R,'result_allowance')-128
+    if completed then
+        local failure = oversized and 'evidence_too_large' or retained.evidence_error
+        local result = '{"completion":'..cjson.encode(retained.completion)..',"attempts":'..(oversized and evidence or combined)..',"evidence_error":'..cjson.encode(failure)..'}'
+        if #result > n(R,'result_allowance') then return reply('evidence_too_large') end
+        redis.call('HSET',R,'result',result)
+    elseif oversized then
+        redis.call('HSET',R,'evidence_error','evidence_too_large')
+    else
+        redis.call('HSET',R,'attempt_evidence',combined)
+    end
+    if oversized then return reply('evidence_too_large') end
+    redis.call('HSET',R,'last_evidence_id',identity,'last_evidence_digest',a.evidence_digest)
+    return reply('recorded')
 end
 if terminal() then
     if op == 'recover' then

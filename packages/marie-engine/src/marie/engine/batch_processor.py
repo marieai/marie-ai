@@ -22,6 +22,13 @@ from marie.engine.completion_contract import (
     has_terminal_repetition,
     recover_complete_json,
 )
+from marie.engine.completion_observer import (
+    CompletionAttempt,
+    CompletionAttemptObserver,
+    _raw_completion_text,
+    _response_value,
+    _token_count,
+)
 from marie.engine.exceptions import (
     BatchExecutionError,
     CircuitOpenError,
@@ -66,6 +73,7 @@ from tenacity import (
 
 logger = logging.getLogger(__name__)
 _tracer = get_tracer("marie.engine.batch_processor")
+_ATTEMPT_OBSERVER_FAILURE = "_marie_attempt_observer_failure"
 
 MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
 E.g. to use openai Please set the OPENAI_API_KEY environment variable or \
@@ -93,6 +101,8 @@ def _should_retry(exc: BaseException) -> bool:
     Timed-out inference may still be running behind an OpenAI-compatible proxy.
     Retrying it can duplicate expensive work and exceed the batch deadline.
     """
+    if getattr(exc, _ATTEMPT_OBSERVER_FAILURE, False):
+        return False
     if isinstance(exc, APITimeoutError):
         timeout_source = "connection pool" if _is_pool_timeout(exc) else "request"
         logger.warning("%s timeout detected; skipping retry", timeout_source)
@@ -100,6 +110,29 @@ def _should_retry(exc: BaseException) -> bool:
     if isinstance(exc, RepetitionError):
         return exc.retryable
     return True
+
+
+def _attempt_error(exc: BaseException | None) -> Optional[str]:
+    if exc is None:
+        return None
+    message = str(exc)
+    return f"{type(exc).__name__}: {message}" if message else type(exc).__name__
+
+
+def _raise_attempt_observer_error(
+    observer_error: BaseException,
+    active_error: BaseException | None,
+) -> None:
+    if isinstance(active_error, asyncio.CancelledError):
+        active_error.add_note(
+            f"Attempt observer also failed: {_attempt_error(observer_error)}"
+        )
+        raise active_error from observer_error
+
+    setattr(observer_error, _ATTEMPT_OBSERVER_FAILURE, True)
+    if active_error is not None:
+        raise observer_error from active_error
+    raise observer_error
 
 
 def _create_retry_decorator(max_retries: int) -> Callable[[Any], Any]:
@@ -283,32 +316,42 @@ class BatchProcessor:
         task_id: str,
         request_id: str,
         metadata: Optional[Dict[str, Any]] = None,
+        attempt_number: int = 1,
+        attempt_observer: Optional[CompletionAttemptObserver] = None,
     ):
         """Asynchronously performs inference for one canonical completion call."""
         start = time.time()
+        attempt_started = time.perf_counter()
+        completion = None
+        raw_response = None
+        finish_reason = None
+        response_model = None
+        input_tokens = None
+        output_tokens = None
+        error: BaseException | None = None
         self.logger.info(f"Request {request_id} - Task {task_id} - Starting inference.")
 
-        with start_as_current_span(
-            _tracer,
-            "BatchProcessor.completion",
-            span_kind="llm",
-        ) as span:
-            span.set_attribute(SpanAttributes.LLM_MODEL_NAME, self.model_string)
-            span.set_attribute(
-                SpanAttributes.LLM_SYSTEM, infer_llm_system(self.model_string)
-            )
-            span.set_attribute(MarieSpanAttributes.TASK_ID, task_id)
-            span.set_attribute(MarieSpanAttributes.REQUEST_ID, request_id)
-            if metadata:
-                for mk, mv in metadata.items():
-                    span.set_attribute(MarieSpanAttributes.marie(mk), str(mv))
-            set_llm_io(
-                span,
-                input_messages=call.messages,
-                context=call.context,
-            )
+        try:
+            with start_as_current_span(
+                _tracer,
+                "BatchProcessor.completion",
+                span_kind="llm",
+            ) as span:
+                span.set_attribute(SpanAttributes.LLM_MODEL_NAME, self.model_string)
+                span.set_attribute(
+                    SpanAttributes.LLM_SYSTEM, infer_llm_system(self.model_string)
+                )
+                span.set_attribute(MarieSpanAttributes.TASK_ID, task_id)
+                span.set_attribute(MarieSpanAttributes.REQUEST_ID, request_id)
+                if metadata:
+                    for mk, mv in metadata.items():
+                        span.set_attribute(MarieSpanAttributes.marie(mk), str(mv))
+                set_llm_io(
+                    span,
+                    input_messages=call.messages,
+                    context=call.context,
+                )
 
-            try:
                 # persist the prompt for debugging
                 if os.getenv("DEBUG_RAW_MESSAGES", "False").lower() == "true":
                     temp_dir = "/tmp/openai_messages"
@@ -327,8 +370,17 @@ class BatchProcessor:
                 if not os.getenv("OPENAI_API_KEY"):
                     raise AuthenticationError(MISSING_API_KEY_ERROR_MESSAGE)
                 completion = await execute_completion_call(self.client, call)
+                raw_response = _raw_completion_text(completion)
                 finish_reason = completion_finish_reason(completion)
                 recovered_text = None
+                response_model = _response_value(completion, "model")
+                provider_usage = _response_value(completion, "usage")
+                input_tokens = _token_count(
+                    provider_usage, "prompt_tokens", "input_tokens"
+                )
+                output_tokens = _token_count(
+                    provider_usage, "completion_tokens", "output_tokens"
+                )
                 if finish_reason == "length":
                     _, extracted_text = self.extract_text_from_response(completion)
                     recovered_text = (
@@ -368,12 +420,9 @@ class BatchProcessor:
                 )
 
                 # Set token usage from provider response
-                provider_usage = getattr(completion, "usage", None)
                 if provider_usage:
-                    prompt_tokens = getattr(provider_usage, "prompt_tokens", 0) or 0
-                    completion_tokens = (
-                        getattr(provider_usage, "completion_tokens", 0) or 0
-                    )
+                    prompt_tokens = input_tokens or 0
+                    completion_tokens = output_tokens or 0
                     span.set_attribute(
                         SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens
                     )
@@ -389,30 +438,61 @@ class BatchProcessor:
                 self._circuit_breaker.record_success(self.backend_address)
 
                 return task_id, extracted_text
-            except (RepetitionError, MaxTokensExceededError) as e:
+        except asyncio.CancelledError as e:
+            error = e
+            raise
+        except (RepetitionError, MaxTokensExceededError) as e:
+            error = e
+            with start_as_current_span(
+                _tracer, "BatchProcessor.completion.error"
+            ) as span:
                 self.logger.error(
                     f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}, retrying..."
                 )
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
-                raise e
-            except (APIError, APIConnectionError, APITimeoutError, RateLimitError) as e:
+            raise
+        except (APIError, APIConnectionError, APITimeoutError, RateLimitError) as e:
+            error = e
+            with start_as_current_span(
+                _tracer, "BatchProcessor.completion.error"
+            ) as span:
                 self.logger.error(
                     f"Request {request_id} - Task {task_id} - API error in completion_non_streaming: {e}"
                 )
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
                 self._circuit_breaker.record_failure(self.backend_address)
-                raise  # Let tenacity retry these
-            except Exception as e:
+            raise
+        except Exception as e:
+            error = e
+            with start_as_current_span(
+                _tracer, "BatchProcessor.completion.error"
+            ) as span:
                 self.logger.error(
                     f"Request {request_id} - Task {task_id} - Error in completion_non_streaming: {e}"
                 )
                 span.set_status(StatusCode.ERROR, str(e))
                 span.record_exception(e)
-                # Propagate unexpected exceptions so the batch layer records the
-                # task as failed instead of misclassifying it as a None response.
-                raise
+            raise
+        finally:
+            if attempt_observer is not None:
+                try:
+                    attempt_observer(
+                        CompletionAttempt(
+                            task_id=task_id,
+                            attempt_number=attempt_number,
+                            raw_response=raw_response,
+                            finish_reason=finish_reason,
+                            response_model=response_model,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            elapsed_ms=(time.perf_counter() - attempt_started) * 1000,
+                            error=_attempt_error(error),
+                        )
+                    )
+                except BaseException as observer_error:
+                    _raise_attempt_observer_error(observer_error, error)
 
     async def save_debug_msg(self, full_response: str, task_id: str, tag: str):
         os.makedirs("/tmp/marie/llm-engine", exist_ok=True)
@@ -427,14 +507,18 @@ class BatchProcessor:
         task_id: str,
         request_id: str,
         metadata: Optional[Dict[str, Any]] = None,
+        attempt_observer: Optional[CompletionAttemptObserver] = None,
     ):
         try:
             retry_decorator = _create_retry_decorator(max_retries=max_retries)
             current_call = call
             repetition_retry_used = False
 
+            attempt_number = 0
+
             async def completion_attempt() -> Any:
-                nonlocal current_call, repetition_retry_used
+                nonlocal attempt_number, current_call, repetition_retry_used
+                attempt_number += 1
                 reserved_half_open = False
                 async with self._get_gate_lock():
                     if not self._circuit_breaker.is_available(self.backend_address):
@@ -455,6 +539,14 @@ class BatchProcessor:
                             task_id=task_id,
                             request_id=request_id,
                             metadata=metadata,
+                            **(
+                                {
+                                    "attempt_number": attempt_number,
+                                    "attempt_observer": attempt_observer,
+                                }
+                                if attempt_observer is not None
+                                else {}
+                            ),
                         )
                     except RepetitionError as exc:
                         recovered_call = apply_repetition_recovery(current_call)
@@ -497,6 +589,7 @@ class BatchProcessor:
         request_id: str,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        attempt_observer: Optional[CompletionAttemptObserver] = None,
     ):
 
         # Share one limiter across all overlapping batch calls that use this
@@ -509,12 +602,17 @@ class BatchProcessor:
             tid = f"{request_id}_task_{i}"
             try:
                 async with semaphore:
+                    completion_kwargs = {
+                        "max_retries": 3,
+                        "call": call,
+                        "task_id": tid,
+                        "request_id": request_id,
+                        "metadata": metadata,
+                    }
+                    if attempt_observer is not None:
+                        completion_kwargs["attempt_observer"] = attempt_observer
                     resp = await self.acompletion_call_with_retry(
-                        max_retries=3,
-                        call=call,
-                        task_id=tid,
-                        request_id=request_id,
-                        metadata=metadata,
+                        **completion_kwargs,
                     )
                 return BatchResult(tid, resp, None)
             except CircuitOpenError as e:
@@ -573,6 +671,7 @@ class BatchProcessor:
         guided_json: Optional[Union[Dict, BaseModel, str]] = None,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        attempt_observer: Optional[CompletionAttemptObserver] = None,
         **kwargs,
     ) -> List[str]:
         """
@@ -683,6 +782,7 @@ class BatchProcessor:
             metadata=metadata,
             queue_deadline=queue_deadline,
             cancellation=kwargs.get("cancellation"),
+            attempt_observer=attempt_observer,
         )
 
     def batch_generate_calls(
@@ -696,6 +796,7 @@ class BatchProcessor:
         metadata: Optional[Dict[str, Any]] = None,
         queue_deadline: float | None = None,
         cancellation: threading.Event | None = None,
+        attempt_observer: Optional[CompletionAttemptObserver] = None,
     ) -> List[str]:
         if self.uses_queued_dispatch and not calls:
             if batch_span is not None:
@@ -737,8 +838,10 @@ class BatchProcessor:
                     len(calls),
                 )
                 controls: dict[str, Any] = {}
+                if attempt_observer is not None:
+                    controls["attempt_observer"] = attempt_observer
                 if self.uses_queued_dispatch:
-                    controls = dict(
+                    controls.update(
                         queue_deadline=queue_deadline, cancellation=cancellation
                     )
                 batch_results = self._get_queued_executor().execute(
@@ -761,6 +864,7 @@ class BatchProcessor:
                         request_id=request_id,
                         on_result=on_result,
                         metadata=metadata,
+                        attempt_observer=attempt_observer,
                     )
                 )
 

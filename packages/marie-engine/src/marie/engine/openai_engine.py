@@ -12,6 +12,7 @@ from marie.engine.completion_contract import (
     RequestContext,
     build_completion_call,
 )
+from marie.engine.completion_observer import CompletionAttemptObserver
 from marie.engine.engine_utils import (
     check_image_preparation_budget,
     convert_openai_to_transformers_format,
@@ -103,7 +104,7 @@ class OpenAIEngine(EngineLM):
             )
 
     def build_queue_dispatcher(self):
-        raise RuntimeError('LLM queue dispatchers are gateway-owned')
+        raise RuntimeError("LLM queue dispatchers are gateway-owned")
 
     def close(self) -> None:
         if self.batch_processor is not None:
@@ -246,6 +247,7 @@ class OpenAIEngine(EngineLM):
         guided_backend: Optional[str] = None,
         guided_whitespace_pattern: Optional[str] = None,
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
+        attempt_observer: Optional[CompletionAttemptObserver] = None,
         **kwargs,
     ) -> List[str]:
         """
@@ -332,6 +334,7 @@ class OpenAIEngine(EngineLM):
             ordered_outputs = self.batch_processor.batch_generate_calls(
                 calls=calls,
                 on_result=on_result,
+                attempt_observer=attempt_observer,
                 **bp_kwargs,
             )
         except Exception:

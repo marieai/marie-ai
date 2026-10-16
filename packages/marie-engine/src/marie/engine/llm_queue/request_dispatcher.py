@@ -24,6 +24,12 @@ from marie.engine.completion_contract import (
     has_terminal_repetition,
     recover_complete_json,
 )
+from marie.engine.completion_observer import (
+    CompletionAttempt,
+    _raw_completion_text,
+    _response_value,
+    _token_count,
+)
 from marie.engine.llm_queue.endpoint import (
     EndpointClient,
     ExecutionOutcome,
@@ -1578,6 +1584,59 @@ class RequestDispatcher:
                 raise TransitionRejected(reply.disposition)
             await asyncio.sleep(self.poll_seconds)
 
+    async def _record_physical_attempt(
+        self,
+        claim: ClaimRecord,
+        *,
+        task_id: str,
+        sequence: int,
+        physical_attempt: int,
+        began: float,
+        outcome: ExecutionOutcome,
+    ) -> str | None:
+        try:
+            response = outcome.response
+            usage = _response_value(response, "usage")
+            raw_response = _raw_completion_text(response)
+            error = outcome.category or None
+            if response is not None and raw_response is None:
+                error = error or "invalid_response"
+            evidence = CompletionAttempt(
+                task_id=task_id,
+                attempt_number=physical_attempt,
+                raw_response=raw_response,
+                finish_reason=(
+                    completion_finish_reason(response)
+                    if raw_response is not None
+                    else None
+                ),
+                response_model=_response_value(response, "model"),
+                input_tokens=_token_count(usage, "prompt_tokens", "input_tokens"),
+                output_tokens=_token_count(usage, "completion_tokens", "output_tokens"),
+                elapsed_ms=max(0.0, (time.monotonic() - began) * 1000),
+                error=error,
+                execution_sequence=sequence,
+                physical_attempt=physical_attempt,
+            )
+            recorded = await self._commit(
+                "record_completion_attempt",
+                claim.attempt_id,
+                claim_id=claim.claim_id,
+                execution_seq=sequence,
+                physical_attempt=physical_attempt,
+                attempt=evidence,
+            )
+            failure = (
+                None
+                if recorded.disposition in {"recorded", "existing"}
+                else "attempt_evidence_unavailable"
+            )
+            if recorded.disposition in {"evidence_too_large", "evidence_conflict"}:
+                failure = recorded.disposition
+        except (OSError, ValueError, TypeError, OverflowError, RecursionError):
+            failure = "evidence_write_failed"
+        return failure
+
     async def _provider(self, claim: ClaimRecord) -> tuple[int, ExecutionOutcome, str]:
         attempt = claim.attempt_id
         claim_id = claim.claim_id
@@ -1626,6 +1685,8 @@ class RequestDispatcher:
             if started.disposition != "started":
                 raise TransitionRejected("start_unconfirmed")
             repetition_retry_used = False
+            physical_attempt = 0
+            capture_attempts = payload.get("capture_attempts", False)
             transmitted = False
             while True:
                 timeout = min(
@@ -1699,19 +1760,48 @@ class RequestDispatcher:
                         "llm.model_name": attributes["marie.llm_dispatch.model"],
                     },
                 )
+                physical_attempt += 1
                 outcome = None
+                interrupted = None
+                evidence_failure = None
                 try:
                     with use_trace_context(trace.set_span_in_context(span)):
                         outcome = await client.execute(call, timeout_seconds=timeout)
+                except BaseException as error:
+                    interrupted = error
+                    raise
                 finally:
-                    if outcome is None:
-                        _emit_execution_history(
-                            attributes,
-                            ExecutionOutcome(category="execution_interrupted"),
-                            began_ns,
-                            began,
-                            span=span,
-                        )
+                    try:
+                        if capture_attempts:
+                            evidence_failure = await self._record_physical_attempt(
+                                claim,
+                                task_id=payload["logical_task_id"],
+                                sequence=started.execution_seq,
+                                physical_attempt=physical_attempt,
+                                began=began,
+                                outcome=outcome
+                                or ExecutionOutcome(category="execution_interrupted"),
+                            )
+                    except (StaleOwner, StoreUnavailable, TransitionRejected):
+                        if interrupted is None:
+                            raise
+                    finally:
+                        if outcome is None:
+                            _emit_execution_history(
+                                attributes,
+                                ExecutionOutcome(category="execution_interrupted"),
+                                began_ns,
+                                began,
+                                span=span,
+                            )
+                if evidence_failure is not None:
+                    outcome.retryable = False
+                    outcome.response = None
+                    outcome.category = evidence_failure
+                    _emit_execution_history(
+                        attributes, outcome, began_ns, began, span=span
+                    )
+                    return started.execution_seq, outcome, replica.replica_id
                 if not outcome.request_started and transmitted:
                     outcome.retryable = False
                     _emit_execution_history(

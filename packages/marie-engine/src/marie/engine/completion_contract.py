@@ -453,6 +453,7 @@ class QueuedCompletionEnvelope:
     schema_version: int = COMPLETION_QUEUE_SCHEMA_VERSION
     traceparent: str | None = None
     tracestate: str | None = None
+    capture_attempts: bool = False
 
     def to_json(self) -> str:
         data = asdict(self)

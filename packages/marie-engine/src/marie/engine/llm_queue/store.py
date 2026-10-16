@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from importlib.resources import files
 from typing import Any, Callable, Literal
 from uuid import uuid4
@@ -15,6 +15,7 @@ from marie.engine.completion_contract import (
     QueuedCompletionEnvelope,
     require_terminal_completion,
 )
+from marie.engine.completion_observer import CompletionAttempt
 from marie.engine.llm_queue.queue_keys import QueueKeys, validate_identifier
 from marie.engine.llm_queue.store_client import _build_sync_client
 
@@ -145,6 +146,7 @@ class PreparedAdmission:
     estimated_cost_units: int
     traceparent: str | None = None
     tracestate: str | None = None
+    capture_attempts: bool = False
 
     @classmethod
     def create(
@@ -163,6 +165,7 @@ class PreparedAdmission:
         estimated_cost_units: int,
         traceparent: str | None = None,
         tracestate: str | None = None,
+        capture_attempts: bool = False,
     ) -> "PreparedAdmission":
         values = {
             "fabric_group_id": fabric_group_id,
@@ -174,6 +177,7 @@ class PreparedAdmission:
             "logical_task_id": logical_task_id,
             "item_index": item_index,
             "call": call.to_dict(),
+            "capture_attempts": capture_attempts,
             "estimated_cost_units": estimated_cost_units,
         }
         content_digest = hashlib.sha256(
@@ -196,6 +200,7 @@ class PreparedAdmission:
             estimated_cost_units=estimated_cost_units,
             traceparent=traceparent,
             tracestate=tracestate,
+            capture_attempts=capture_attempts,
         )
 
     def expected_content_digest(self) -> str:
@@ -211,6 +216,7 @@ class PreparedAdmission:
             expires_at_ms=self.expires_at_ms,
             call=self.call,
             estimated_cost_units=self.estimated_cost_units,
+            capture_attempts=self.capture_attempts,
         ).content_digest
 
 
@@ -841,12 +847,17 @@ class RequestStore:
             model=model,
             traceparent=request.traceparent,
             tracestate=request.tracestate,
+            capture_attempts=request.capture_attempts,
         )
 
     def _serialize_admission(
         self, request: QueuedCompletionEnvelope
     ) -> tuple[str, int, str, str]:
         require_terminal_completion(request.call)
+        if request.capture_attempts and self.limits.result_allowance < 256:
+            raise ValueError("Attempt capture requires result_allowance >= 256")
+        if type(request.capture_attempts) is not bool:
+            raise ValueError("capture_attempts must be boolean")
         for value in (
             request.producer_id,
             request.attempt_id,
@@ -952,6 +963,7 @@ class RequestStore:
             estimated_cost_units=request.estimated_cost_units,
             traceparent=request.traceparent,
             tracestate=request.tracestate,
+            capture_attempts=request.capture_attempts,
         )
         payload, payload_bytes, _, model = self._serialize_admission(envelope)
         return self._change(
@@ -975,6 +987,7 @@ class RequestStore:
             model=model,
             traceparent=request.traceparent,
             tracestate=request.tracestate,
+            capture_attempts=request.capture_attempts,
         )
 
     def metadata(self, attempt_id: str) -> RequestMetadata | None:
@@ -988,8 +1001,8 @@ class RequestStore:
         if values[0] is None:
             return None
         data = dict(zip(names, values))
-        if data['schema_version'] != '1':
-            raise ValueError('Unsupported queued request schema')
+        if data["schema_version"] != "1":
+            raise ValueError("Unsupported queued request schema")
         for name in (
             "execution_seq",
             "expires_at_ms",
@@ -1302,6 +1315,43 @@ class RequestStore:
                 break
             results.append(self._change("promote", owner=owner, attempt_id=attempt))
         return results
+
+    def record_completion_attempt(
+        self,
+        owner: OwnerToken,
+        attempt_id: str,
+        *,
+        claim_id: str,
+        execution_seq: int,
+        physical_attempt: int,
+        attempt: CompletionAttempt,
+    ) -> StoreReply:
+        """Persist exact provider evidence under the current execution fence."""
+        body = json.dumps(
+            asdict(
+                replace(
+                    attempt,
+                    execution_sequence=execution_seq,
+                    physical_attempt=physical_attempt,
+                    claim_id=claim_id,
+                )
+            ),
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        oversized = len(body.encode()) > self.limits.result_allowance - 128
+        return self._change(
+            "record_attempt",
+            owner=owner,
+            attempt_id=attempt_id,
+            claim_id=claim_id,
+            execution_seq=execution_seq,
+            physical_attempt=physical_attempt,
+            evidence="" if oversized else body,
+            oversized=oversized,
+            evidence_digest=hashlib.sha256(body.encode()).hexdigest(),
+        )
 
     def finish(
         self,

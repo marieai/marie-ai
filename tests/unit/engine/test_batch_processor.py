@@ -1401,3 +1401,276 @@ def test_circuit_open_error_not_counted_as_failure():
 
     # Total failures should not have increased
     assert cb.get_stats(address).total_failures == initial_failures
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "  raw response  ",
+        [
+            {"type": "text", "text": "  raw "},
+            {"type": "image_url", "image_url": {"url": "unused"}},
+            {"type": "text", "text": "response  "},
+        ],
+    ],
+    ids=["text", "text-parts"],
+)
+def test_completion_attempt_observer_records_provider_response_and_usage(content):
+    import os
+    import unittest.mock as mock
+
+    import marie.engine.batch_processor as batch_processor_module
+    from marie.engine.completion_observer import CompletionAttempt
+
+    processor = _build_processor(max_concurrency=1)
+    completion = {
+        "model": "observed-model",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "message": {"content": content},
+            }
+        ],
+        "usage": {"prompt_tokens": 17, "completion_tokens": 5},
+    }
+    attempts = []
+
+    async def run():
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=mock.AsyncMock(return_value=completion),
+            ),
+        ):
+            result = await processor.completion_non_streaming_call(
+                call=_call("hello"),
+                task_id="task-1",
+                request_id="request-1",
+                attempt_number=2,
+                attempt_observer=attempts.append,
+            )
+        assert result == ("task-1", "raw response")
+
+    asyncio.run(run())
+
+    assert len(attempts) == 1
+    attempt = attempts[0]
+    assert isinstance(attempt, CompletionAttempt)
+    assert attempt.task_id == "task-1"
+    assert attempt.attempt_number == 2
+    assert attempt.raw_response == "  raw response  "
+    assert attempt.finish_reason == "stop"
+    assert attempt.response_model == "observed-model"
+    assert attempt.input_tokens == 17
+    assert attempt.output_tokens == 5
+    assert attempt.cost_usd is None
+    assert attempt.elapsed_ms >= 0
+    assert attempt.error is None
+
+
+def test_completion_attempt_observer_records_each_transport_failure():
+    import os
+    import unittest.mock as mock
+
+    import httpx
+    import marie.engine.batch_processor as batch_processor_module
+    from openai import APIConnectionError
+
+    processor = _build_processor(max_concurrency=1)
+    attempts = []
+
+    async def failing_call(client, call):
+        raise APIConnectionError(request=httpx.Request("POST", "http://test"))
+
+    async def run():
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=failing_call,
+            ),
+            mock.patch.object(
+                batch_processor_module,
+                "wait_exponential",
+                return_value=lambda retry_state: 0,
+            ),
+        ):
+            with pytest.raises(APIConnectionError):
+                await processor.acompletion_call_with_retry(
+                    max_retries=3,
+                    call=_call("hello"),
+                    task_id="task-1",
+                    request_id="request-1",
+                    attempt_observer=attempts.append,
+                )
+
+    asyncio.run(run())
+
+    assert [attempt.attempt_number for attempt in attempts] == [1, 2, 3]
+    assert all(attempt.raw_response is None for attempt in attempts)
+    assert all(attempt.error.startswith("APIConnectionError") for attempt in attempts)
+
+
+def test_attempt_observer_failure_fails_successful_completion():
+    import os
+    import unittest.mock as mock
+
+    import marie.engine.batch_processor as batch_processor_module
+
+    processor = _build_processor(max_concurrency=1)
+    completion = {
+        "model": "observed-model",
+        "choices": [{"finish_reason": "stop", "message": {"content": "response"}}],
+    }
+
+    def failing_observer(attempt):
+        raise OSError("evidence write failed")
+
+    async def run():
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=mock.AsyncMock(return_value=completion),
+            ),
+        ):
+            with pytest.raises(OSError, match="evidence write failed"):
+                await processor.acompletion_call_with_retry(
+                    max_retries=3,
+                    call=_call("hello"),
+                    task_id="task-1",
+                    request_id="request-1",
+                    attempt_observer=failing_observer,
+                )
+
+    asyncio.run(run())
+
+
+def test_attempt_evidence_keeps_original_length_response_with_current_json_recovery(
+    monkeypatch,
+):
+    import unittest.mock as mock
+
+    import marie.engine.batch_processor as module
+
+    processor = _build_processor(max_concurrency=1)
+    attempts = []
+    raw = '  {"ok":true}  '
+    completion = {
+        "model": "model",
+        "choices": [{"message": {"content": raw}, "finish_reason": "length"}],
+    }
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-test-key")
+    transport = mock.AsyncMock(return_value=completion)
+    monkeypatch.setattr(module, "execute_completion_call", transport)
+
+    result = asyncio.run(
+        processor.acompletion_call_with_retry(
+            max_retries=3,
+            call=_call("prompt", response_format={"type": "json_object"}),
+            task_id="task",
+            request_id="batch",
+            attempt_observer=attempts.append,
+        )
+    )
+    assert result == ("task", '{"ok":true}')
+    assert transport.await_count == 1
+    assert attempts[0].raw_response == raw
+    assert attempts[0].finish_reason == "length"
+
+
+def test_attempt_observer_failure_stops_transport_retry_and_keeps_cause():
+    import os
+    import unittest.mock as mock
+
+    import httpx
+    import marie.engine.batch_processor as batch_processor_module
+    from openai import APIConnectionError
+
+    processor = _build_processor(max_concurrency=1)
+    observer_error = APIConnectionError(
+        request=httpx.Request("POST", "http://evidence-store")
+    )
+    call_count = 0
+
+    async def failing_call(client, call):
+        nonlocal call_count
+        call_count += 1
+        raise APIConnectionError(request=httpx.Request("POST", "http://test"))
+
+    def failing_observer(attempt):
+        raise observer_error
+
+    async def run():
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=failing_call,
+            ),
+            mock.patch.object(
+                batch_processor_module,
+                "wait_exponential",
+                return_value=lambda retry_state: 0,
+            ),
+        ):
+            with pytest.raises(APIConnectionError) as exc_info:
+                await processor.acompletion_call_with_retry(
+                    max_retries=3,
+                    call=_call("hello"),
+                    task_id="task-1",
+                    request_id="request-1",
+                    attempt_observer=failing_observer,
+                )
+        assert exc_info.value is observer_error
+        assert isinstance(exc_info.value.__cause__, APIConnectionError)
+
+    asyncio.run(run())
+    assert call_count == 1
+
+
+def test_completion_attempt_observer_records_cancellation_without_masking_it():
+    import os
+    import unittest.mock as mock
+
+    import marie.engine.batch_processor as batch_processor_module
+
+    processor = _build_processor(max_concurrency=1)
+    cancellation = asyncio.CancelledError("cancelled in flight")
+    observer_error = OSError("evidence write failed")
+    attempts = []
+
+    async def cancelled_call(client, call):
+        raise cancellation
+
+    def failing_observer(attempt):
+        attempts.append(attempt)
+        raise observer_error
+
+    async def run():
+        with (
+            mock.patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}),
+            mock.patch.object(
+                batch_processor_module,
+                "execute_completion_call",
+                new=cancelled_call,
+            ),
+        ):
+            with pytest.raises(asyncio.CancelledError) as exc_info:
+                await processor.completion_non_streaming_call(
+                    call=_call("hello"),
+                    task_id="task-1",
+                    request_id="request-1",
+                    attempt_observer=failing_observer,
+                )
+        assert exc_info.value is cancellation
+        assert exc_info.value.__cause__ is observer_error
+
+    asyncio.run(run())
+    assert len(attempts) == 1
+    assert attempts[0].error == "CancelledError: cancelled in flight"

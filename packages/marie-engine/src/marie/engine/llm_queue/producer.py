@@ -18,6 +18,10 @@ from marie.engine.completion_contract import (
     extract_completion_text,
     require_terminal_completion,
 )
+from marie.engine.completion_observer import (
+    CompletionAttempt,
+    CompletionAttemptObserver,
+)
 from marie.engine.exceptions import MaxTokensExceededError, RepetitionError
 from marie.engine.llm_queue.config import (
     LlmQueueProducerConfig,
@@ -77,6 +81,7 @@ class _Pending:
     expire: bool = False
     category: str = "deadline_exceeded"
     admission_confirmed: bool = False
+    capture_attempts: bool = False
 
 
 @dataclass(frozen=True)
@@ -291,6 +296,10 @@ class QueuedDispatchProducer:
                         }:
                             if self._stop.is_set():
                                 return
+                            if pending.capture_attempts and metadata.reserved:
+                                with self._condition:
+                                    self._poll_ids.append(attempt)
+                                continue
                             outcome = self._store.read_result(self.producer_id, attempt)
                             if outcome is not None:
                                 result = _batch_result(
@@ -325,6 +334,7 @@ class QueuedDispatchProducer:
         metadata: dict[str, Any] | None = None,
         queue_deadline: float | None = None,
         cancellation: threading.Event | None = None,
+        attempt_observer: CompletionAttemptObserver | None = None,
     ) -> list[BatchResult]:
         deadline = (
             queue_deadline
@@ -404,14 +414,33 @@ class QueuedDispatchProducer:
                         else StatusCode.ERROR
                     )
                     delivery.end()
-                    if on_result and pending.result.error is None:
+                    evidence_delivered = True
+                    if attempt_observer is not None:
+                        try:
+                            if (
+                                pending.result.error is None
+                                and not pending.result.attempts
+                            ):
+                                raise QueueTaskError("attempt_evidence_missing")
+                            for evidence in pending.result.attempts:
+                                attempt_observer(evidence)
+                        except Exception as error:
+                            evidence_delivered = False
+                            error.add_note(
+                                f"Durable evidence retained for request {attempt}, producer {self.producer_id}"
+                            )
+                            results[index] = BatchResult(
+                                pending.task_id, None, error, pending.result.attempts
+                            )
+                    if on_result and results[index].error is None:
                         try:
                             on_result(pending.task_id, pending.result.response)
                         except Exception:
                             results[index] = BatchResult(
                                 pending.task_id, None, QueueTaskError("callback_failed")
                             )
-                    self._ack_result(attempt)
+                    if evidence_delivered:
+                        self._ack_result(attempt)
                     error = results[index].error
                     if isinstance(error, MaxTokensExceededError) or (
                         isinstance(error, QueueTaskError)
@@ -472,6 +501,7 @@ class QueuedDispatchProducer:
                                 ),
                                 traceparent=trace_headers.get("traceparent"),
                                 tracestate=trace_headers.get("tracestate"),
+                                capture_attempts=attempt_observer is not None,
                             )
                             del prepared
                             admission_span = start_trace_span(
@@ -485,7 +515,11 @@ class QueuedDispatchProducer:
                                     "marie.llm_dispatch.mode": "queued-dispatch",
                                 },
                             )
-                            pending = _Pending(task_id, deadline)
+                            pending = _Pending(
+                                task_id,
+                                deadline,
+                                capture_attempts=attempt_observer is not None,
+                            )
                             owned[attempt] = (next_index, pending)
                             with self._condition:
                                 self._preparing -= 1
@@ -615,6 +649,28 @@ class QueuedDispatchProducer:
 
 
 def _batch_result(task_id: str, state: str, outcome: Any) -> BatchResult:
+    if isinstance(outcome, dict) and "attempts" in outcome and "completion" in outcome:
+        try:
+            attempts = tuple(
+                CompletionAttempt(**dict(record, task_id=task_id, attempt_number=index))
+                for index, record in enumerate(outcome["attempts"], 1)
+            )
+        except (ValueError, TypeError):
+            return BatchResult(
+                task_id, None, QueueTaskError("invalid_attempt_evidence")
+            )
+        failure = outcome.get("evidence_error")
+        if failure:
+            return BatchResult(
+                task_id, None, QueueTaskError(_category(failure)), attempts
+            )
+        result = _completion_result(task_id, state, outcome["completion"])
+        result.attempts = attempts
+        return result
+    return _completion_result(task_id, state, outcome)
+
+
+def _completion_result(task_id: str, state: str, outcome: Any) -> BatchResult:
     if state != "succeeded":
         category = _category(
             outcome.get("category") or outcome.get("error")
