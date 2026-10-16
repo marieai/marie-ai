@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marie-parsebench"
+version = "0.1.0"
+description = "Marie ParseBench integration and reproducible dataset preparation"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = ["pydantic>=2,<3", "PyYAML>=6,<7"]
+
+[project.optional-dependencies]
+prepare = ["huggingface-hub>=0.20", "pillow>=10", "pypdf>=6.4"]
+harness = ["parse-bench @ git+https://github.com/run-llama/ParseBench.git@1dbb407c122d4b50b9896dc1f04c4c74ddd4fae3"]
+dev = ["pytest>=8", "ruff>=0.14.5", "black", "isort"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+marie_parsebench = ["document-v1.schema.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.black]
+skip-string-normalization = true
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 127
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]

@@ -1,0 +1,22 @@
+{
+  "header": {},
+  "data": [],
+  "parameters": {
+    "invoke_action": {
+      "action_type": "command",
+      "command": "job",
+      "action": "submit",
+      "name": "parsebench-preparation",
+      "metadata": {
+        "planner": "extract",
+        "on": "extract_executor://document/extract",
+        "ref_type": "parsebench-preparation",
+        "run_params": {
+          "parse_mode": "ocr"
+        },
+        "return_ocr": true,
+        "format": "xywh"
+      }
+    }
+  }
+}

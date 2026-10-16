@@ -1,0 +1,516 @@
+{
+  "$defs": {
+    "ArtifactIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "example_id": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Example Id",
+          "type": "string"
+        },
+        "pipeline_name": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Pipeline Name",
+          "type": "string"
+        },
+        "source_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Source Sha256",
+          "type": "string"
+        },
+        "config_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Config Sha256",
+          "type": "string"
+        },
+        "ref_id": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Ref Id",
+          "type": "string"
+        },
+        "ref_type": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Ref Type",
+          "type": "string"
+        },
+        "dag_id": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Dag Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id",
+        "example_id",
+        "pipeline_name",
+        "source_sha256",
+        "config_sha256",
+        "ref_id",
+        "ref_type",
+        "dag_id"
+      ],
+      "title": "ArtifactIdentity",
+      "type": "object"
+    },
+    "Element": {
+      "additionalProperties": false,
+      "properties": {
+        "element_id": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Element Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "text",
+            "heading",
+            "list",
+            "table",
+            "chart",
+            "picture",
+            "caption",
+            "formula",
+            "page_header",
+            "page_footer",
+            "footnote",
+            "page_number",
+            "code",
+            "checkbox"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "content_format": {
+          "enum": [
+            "markdown",
+            "html"
+          ],
+          "title": "Content Format",
+          "type": "string"
+        },
+        "bbox_xyxy_normalized": {
+          "anyOf": [
+            {
+              "maxItems": 4,
+              "minItems": 4,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bbox Xyxy Normalized"
+        },
+        "geometry_source": {
+          "anyOf": [
+            {
+              "enum": [
+                "ocr",
+                "layout_model",
+                "native_source",
+                "vlm_localization"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Geometry Source"
+        },
+        "attributes": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Attributes",
+          "type": "object"
+        }
+      },
+      "required": [
+        "element_id",
+        "kind",
+        "content",
+        "content_format"
+      ],
+      "title": "Element",
+      "type": "object"
+    },
+    "PageArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "format_version": {
+          "const": "marie.parsebench.page.v1",
+          "title": "Format Version",
+          "type": "string"
+        },
+        "identity": {
+          "$ref": "#/$defs/ArtifactIdentity"
+        },
+        "producer": {
+          "$ref": "#/$defs/ProducerIdentity"
+        },
+        "page_id": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Page Id",
+          "type": "string"
+        },
+        "page_index": {
+          "minimum": 0,
+          "title": "Page Index",
+          "type": "integer"
+        },
+        "original_source_page_index": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Original Source Page Index"
+        },
+        "width_px": {
+          "exclusiveMinimum": 0,
+          "title": "Width Px",
+          "type": "integer"
+        },
+        "height_px": {
+          "exclusiveMinimum": 0,
+          "title": "Height Px",
+          "type": "integer"
+        },
+        "source_transform": {
+          "$ref": "#/$defs/SourceTransform"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "blank",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "elements": {
+          "items": {
+            "$ref": "#/$defs/Element"
+          },
+          "title": "Elements",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "format_version",
+        "identity",
+        "producer",
+        "page_id",
+        "page_index",
+        "width_px",
+        "height_px",
+        "source_transform",
+        "status",
+        "elements"
+      ],
+      "title": "PageArtifact",
+      "type": "object"
+    },
+    "ProducerIdentity": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Name",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "pattern": ".*\\S.*",
+          "title": "Version",
+          "type": "string"
+        },
+        "job_id": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "pattern": ".*\\S.*",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Job Id"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "title": "ProducerIdentity",
+      "type": "object"
+    },
+    "SourceTransform": {
+      "additionalProperties": false,
+      "properties": {
+        "source_width": {
+          "exclusiveMinimum": 0,
+          "title": "Source Width",
+          "type": "number"
+        },
+        "source_height": {
+          "exclusiveMinimum": 0,
+          "title": "Source Height",
+          "type": "number"
+        },
+        "source_unit": {
+          "enum": [
+            "pixels",
+            "points"
+          ],
+          "title": "Source Unit",
+          "type": "string"
+        },
+        "crop_xyxy": {
+          "maxItems": 4,
+          "minItems": 4,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Crop Xyxy",
+          "type": "array"
+        },
+        "rotation_degrees": {
+          "enum": [
+            0,
+            90,
+            180,
+            270
+          ],
+          "title": "Rotation Degrees",
+          "type": "integer"
+        },
+        "render_width_px": {
+          "exclusiveMinimum": 0,
+          "title": "Render Width Px",
+          "type": "integer"
+        },
+        "render_height_px": {
+          "exclusiveMinimum": 0,
+          "title": "Render Height Px",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "source_width",
+        "source_height",
+        "source_unit",
+        "crop_xyxy",
+        "rotation_degrees",
+        "render_width_px",
+        "render_height_px"
+      ],
+      "title": "SourceTransform",
+      "type": "object"
+    },
+    "Usage": {
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Input Tokens"
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
+        },
+        "cost_usd": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        }
+      },
+      "title": "Usage",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "format_version": {
+      "const": "marie.parsebench.document.v1",
+      "title": "Format Version",
+      "type": "string"
+    },
+    "identity": {
+      "$ref": "#/$defs/ArtifactIdentity"
+    },
+    "producer": {
+      "$ref": "#/$defs/ProducerIdentity"
+    },
+    "status": {
+      "const": "complete",
+      "title": "Status",
+      "type": "string"
+    },
+    "source_page_count": {
+      "exclusiveMinimum": 0,
+      "title": "Source Page Count",
+      "type": "integer"
+    },
+    "expected_page_indices": {
+      "items": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "title": "Expected Page Indices",
+      "type": "array"
+    },
+    "expected_page_count": {
+      "exclusiveMinimum": 0,
+      "title": "Expected Page Count",
+      "type": "integer"
+    },
+    "pages": {
+      "items": {
+        "$ref": "#/$defs/PageArtifact"
+      },
+      "title": "Pages",
+      "type": "array"
+    },
+    "warnings": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Warnings",
+      "type": "array"
+    },
+    "usage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Usage"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "format_version",
+    "identity",
+    "producer",
+    "status",
+    "source_page_count",
+    "expected_page_indices",
+    "expected_page_count",
+    "pages"
+  ],
+  "title": "DocumentArtifact",
+  "type": "object"
+}

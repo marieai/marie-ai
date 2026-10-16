@@ -1,0 +1,13 @@
+# Merge this executor entry into the deployment serving ParseBench development runs.
+executors:
+  - name: annotator_llm
+    uses:
+      jtype: DocumentAnnotatorLLMExecutor
+      metas:
+        py_modules:
+          - marie.executor.extract
+      with:
+        parsers:
+          load_core_components: true
+          external_component_modules:
+            - marie_parsebench.context_providers

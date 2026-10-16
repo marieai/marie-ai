@@ -1,10 +1,11 @@
 import glob
+import importlib
 import json
 import os
 import os.path
 import shutil
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import yaml
 from marie.engine import EngineLM
@@ -241,6 +242,22 @@ class LLMAnnotator(DocumentAnnotator):
         self.output_transform: Optional[str] = annotator_conf.get(
             "output_transform", None
         )
+        self.response_handler_path: Optional[str] = annotator_conf.get(
+            "response_handler"
+        )
+        self.response_handler: Optional[Callable[..., Dict[str, Any]]] = None
+        if self.response_handler_path:
+            if self.output_transform:
+                raise ValueError(
+                    "response_handler cannot be combined with output_transform"
+                )
+            if self.refine_passes > 0:
+                raise ValueError("response_handler cannot be combined with refinement")
+            if self.expect_output != "json":
+                raise ValueError("response_handler requires JSON output")
+            self.response_handler = self._load_response_handler(
+                self.response_handler_path
+            )
 
         # Load refinement prompt if configured
         self.refine_prompt_template: Optional[PromptTemplate] = None
@@ -282,6 +299,17 @@ class LLMAnnotator(DocumentAnnotator):
             )
         else:
             self.context_manager = None
+
+    @staticmethod
+    def _load_response_handler(path: str) -> Callable[..., Dict[str, Any]]:
+        try:
+            module_name, function_name = path.rsplit(".", 1)
+            handler = getattr(importlib.import_module(module_name), function_name)
+        except (ImportError, AttributeError, ValueError) as exc:
+            raise ValueError(f"Could not resolve response_handler '{path}'") from exc
+        if not callable(handler):
+            raise ValueError(f"response_handler '{path}' is not callable")
+        return handler
 
     def _resolve_prompt_path(
         self, safe_prompt_path: Optional[str], prompt_dir: Optional[str]
@@ -395,6 +423,13 @@ class LLMAnnotator(DocumentAnnotator):
             except FileNotFoundError:
                 pass
             raise
+
+    def _prepare_response_handler_run(self) -> None:
+        if os.listdir(self.output_dir):
+            raise ValueError(
+                "response_handler requires a fresh output directory; "
+                f"existing artifacts found in '{self.output_dir}'"
+            )
 
     def _maybe_purge_output(self) -> None:
         """Selectively purge output if this annotator is in the purge list,
@@ -973,6 +1008,7 @@ class LLMAnnotator(DocumentAnnotator):
         Upstream task data is available via self.run_context if provided.
         Example: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         """
+        del frames
         self.logger.info(f"Annotating document with {self.name}...")
 
         with start_as_current_span(
@@ -980,9 +1016,14 @@ class LLMAnnotator(DocumentAnnotator):
         ) as span:
             self._set_annotator_span_attrs(span)
 
-            self._maybe_purge_output()
+            if self.response_handler is not None:
+                self._prepare_response_handler_run()
+            else:
+                self._maybe_purge_output()
 
-            if self._has_completed_results(self.output_dir):
+            if self.response_handler is None and self._has_completed_results(
+                self.output_dir
+            ):
                 self.logger.info(
                     f"Output directory '{self.output_dir}' contains completed results. "
                     "Skipping annotation..."
@@ -1007,6 +1048,9 @@ class LLMAnnotator(DocumentAnnotator):
                     metadata=self._build_span_metadata(),
                     request_context=self._build_model_request_context(),
                     system_prompt=self.system_prompt_text,
+                    response_handler=self.response_handler,
+                    run_context=self.run_context,
+                    annotator_conf=self.annotator_conf,
                 )
 
             if self.output_transform:
@@ -1030,12 +1074,17 @@ class LLMAnnotator(DocumentAnnotator):
         ) as span:
             self._set_annotator_span_attrs(span)
 
+            if self.response_handler is not None:
+                self._prepare_response_handler_run()
+            else:
+                self._maybe_purge_output()
+
             if self.context_manager:
                 self._write_context_debug(document, self.context_manager)
 
-            self._maybe_purge_output()
-
-            if self._has_completed_results(self.output_dir):
+            if self.response_handler is None and self._has_completed_results(
+                self.output_dir
+            ):
                 self.logger.info(
                     f"Output directory '{self.output_dir}' contains completed results. "
                     "Skipping annotation..."
@@ -1060,6 +1109,9 @@ class LLMAnnotator(DocumentAnnotator):
                     metadata=self._build_span_metadata(),
                     request_context=self._build_model_request_context(),
                     system_prompt=self.system_prompt_text,
+                    response_handler=self.response_handler,
+                    run_context=self.run_context,
+                    annotator_conf=self.annotator_conf,
                 )
 
             if self.output_transform:

@@ -276,6 +276,9 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
 
         annotator = annotator_class(
             working_dir=root_asset_dir,
+            prompt_dir=os.path.join(
+                self.root_config_dir, f'TID-{op_layout}', 'annotator'
+            ),
             annotator_conf=annotator_conf,
             layout_conf={
                 "layout_id": op_layout,
