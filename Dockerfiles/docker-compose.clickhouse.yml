@@ -63,6 +63,25 @@ services:
         reservations:
           memory: ${CLICKHOUSE_MEMORY_RESERVATION:-2G}
 
+  # Explicit schema update for fresh or existing volumes; uses the same connection.
+  clickhouse-query-schema:
+    image: clickhouse/clickhouse-server:25.12.1.649@sha256:7234d193fbeb3a375f21f0bb99040396f68bb2e82cada4f4947d7fcf9638bbf3
+    profiles: [schema]
+    restart: "no"
+    user: "101:101"
+    entrypoint: [/bin/sh, /query-explorer/bootstrap.sh]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./config/clickhouse/query-explorer:/query-explorer:ro
+      - clickhouse_data:/var/lib/clickhouse
+    networks: [marie_default]
+
 volumes:
   clickhouse_data:
     driver: local

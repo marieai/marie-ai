@@ -2,17 +2,24 @@
 set -eu
 
 directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-: "${QUERY_READER_PASSWORD_FILE:?Set QUERY_READER_PASSWORD_FILE to the mounted reader Secret}"
+# Reuse the reader credential across schema updates. Operators can supply a mounted
+# password file; local Compose generates it in the existing ClickHouse volume.
+if [ -z "${QUERY_READER_PASSWORD_FILE:-}" ]; then
+  QUERY_READER_PASSWORD_FILE=/var/lib/clickhouse/query-explorer/reader-password
+  if [ ! -s "$QUERY_READER_PASSWORD_FILE" ]; then
+    (
+      umask 077
+      mkdir -p "$(dirname -- "$QUERY_READER_PASSWORD_FILE")"
+      head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1 > "$QUERY_READER_PASSWORD_FILE"
+    )
+  fi
+fi
 if [ ! -s "$QUERY_READER_PASSWORD_FILE" ]; then
-  echo 'The query reader Secret is empty or unavailable' >&2
+  echo 'The query reader password file is empty or unavailable' >&2
   exit 1
 fi
 reader_hash=$(tr -d '\r\n' < "$QUERY_READER_PASSWORD_FILE" | sha256sum | cut -d ' ' -f 1)
 definer_hash=$(head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1)
-if [ -n "${CLICKHOUSE_ADMIN_PASSWORD_FILE:-}" ]; then
-  CLICKHOUSE_PASSWORD=$(cat "$CLICKHOUSE_ADMIN_PASSWORD_FILE")
-  export CLICKHOUSE_PASSWORD
-fi
 
 run() {
   clickhouse-client --host "${CLICKHOUSE_HOST:-localhost}" --port "${CLICKHOUSE_PORT:-9000}" \
@@ -68,3 +75,5 @@ GRANT SELECT ON query.model_prices TO studio_query;
 GRANT SELECT ON query.schema_version TO studio_query;
 GRANT SELECT(quota_name, duration, max_queries, max_execution_time) ON system.quota_usage TO studio_query;
 SQL
+
+printf 'SQL explorer schema ready. Reader password file: %s\n' "$QUERY_READER_PASSWORD_FILE"

@@ -9,6 +9,12 @@ metadata:
 data:
   otel-schema.sql: |
 {{ .Files.Get "files/otel-schema.sql" | indent 4 }}
+{{- if .Values.queryExplorer.enabled }}
+  views.sql: |
+{{ .Files.Get "files/query-explorer-views.sql" | indent 4 }}
+  bootstrap.sh: |
+{{ .Files.Get "files/query-explorer-bootstrap.sh" | indent 4 }}
+{{- end }}
 ---
 # Applies the observability schema once ClickHouse answers. The SQL is idempotent, so
 # existing installations pick up new tables and columns on upgrade.
@@ -47,6 +53,10 @@ spec:
               value: {{ .Values.config.defaultUser | quote }}
             - name: CLICKHOUSE_PASSWORD
               value: {{ .Values.config.defaultPassword | quote }}
+            {{- if .Values.queryExplorer.enabled }}
+            - name: QUERY_READER_PASSWORD_FILE
+              value: /run/query-reader/password
+            {{- end }}
           command:
             - /bin/sh
             - -ec
@@ -56,12 +66,28 @@ spec:
                 sleep 3
               done
               clickhouse-client --host "$CLICKHOUSE_HOST" --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery < /schema/otel-schema.sql
+              {{- if .Values.queryExplorer.enabled }}
+              /bin/sh /schema/bootstrap.sh
+              {{- end }}
           volumeMounts:
             - name: schema
               mountPath: /schema
               readOnly: true
+            {{- if .Values.queryExplorer.enabled }}
+            - name: reader
+              mountPath: /run/query-reader
+              readOnly: true
+            {{- end }}
       volumes:
         - name: schema
           configMap:
             name: {{ include "clickhouse.fullname" . }}-otel-schema
+        {{- if .Values.queryExplorer.enabled }}
+        - name: reader
+          secret:
+            secretName: {{ required "queryExplorer.readerSecret.name is required" .Values.queryExplorer.readerSecret.name | quote }}
+            items:
+              - key: {{ .Values.queryExplorer.readerSecret.key | quote }}
+                path: password
+        {{- end }}
 {{- end }}
