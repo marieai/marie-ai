@@ -5,7 +5,7 @@ import time
 import uuid
 
 import pytest
-from conftest import QueryFixture
+from conftest import IMAGE, ROOT, QueryFixture
 
 
 def test_reader_uses_explicit_definer_and_survives_repeat_upgrade(clickhouse: QueryFixture) -> None:
@@ -73,3 +73,37 @@ def test_existing_volume_restart_rotation_and_rollback(clickhouse: QueryFixture)
     assert restored.returncode == 0, restored.stderr
     assert restored.stdout.strip() == '1'
     assert old_password != new_password
+
+
+def test_local_bootstrap_generates_and_reuses_private_reader_password(clickhouse: QueryFixture) -> None:
+    def apply_without_extra_parameters() -> str:
+        return subprocess.run(
+            ['docker', 'run', '--rm', '--network', f'container:{clickhouse.name}', '--user', '101:101',
+             '--memory', '256m', '--cpus', '1', '--entrypoint', '/bin/sh',
+             '--mount', f'type=bind,src={ROOT / "config/clickhouse/query-explorer"},dst=/query-explorer,readonly',
+             '--mount', f'type=volume,src={clickhouse.name},dst=/var/lib/clickhouse',
+             IMAGE, '/query-explorer/bootstrap.sh'],
+            text=True, capture_output=True, check=True,
+        ).stdout
+
+    previous = clickhouse.password
+    try:
+        first_output = apply_without_extra_parameters()
+        password = subprocess.run(
+            ['docker', 'exec', clickhouse.name, 'cat', '/var/lib/clickhouse/query-explorer/reader-password'],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        assert len(password) == 64
+        assert password not in first_output
+        clickhouse.password = password
+        assert clickhouse.query('SELECT count() FROM query.logs', reader=True).returncode == 0
+        apply_without_extra_parameters()
+        assert clickhouse.query('SELECT count() FROM query.logs', reader=True).returncode == 0
+        mode = subprocess.run(
+            ['docker', 'exec', clickhouse.name, 'stat', '-c', '%a', '/var/lib/clickhouse/query-explorer/reader-password'],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        assert mode == '600'
+    finally:
+        clickhouse.password = previous
+        clickhouse.apply()

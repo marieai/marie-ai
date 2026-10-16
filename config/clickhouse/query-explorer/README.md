@@ -4,7 +4,7 @@ SQL explorer stays off until its target passes release qualification. It is for 
 
 ## Ownership and artifacts
 
-The deployment operator provides bootstrap credentials and a reader password through mounted Secrets. The application never provisions users. `studio_query_definer` cannot log in (`HOST NONE`); `studio_query` has SELECT on the five curated views, the internal version/readiness view and four columns of its own `system.quota_usage` metadata. No base, file/network, arbitrary dictionary, process-list or access-management grants are assigned to the reader.
+Bootstrap reuses the deployment’s existing ClickHouse operator connection. Compose generates and retains a reader password in the existing data volume; Helm uses one reader Secret. The application never provisions users. `studio_query_definer` cannot log in (`HOST NONE`); `studio_query` has SELECT on the five curated views, the internal version/readiness view and four columns of its own `system.quota_usage` metadata. No base, file/network, arbitrary dictionary, process-list or access-management grants are assigned to the reader.
 
 Studio owns explicit columns and price expressions in `packages/@marie/config/src/observability-query.ts`, `packages/@marie/db/src/utils/observability-query-schema.ts` and `trace-cost-sql.ts`. From the Studio checkout, generate or verify both deployment artifacts:
 
@@ -17,19 +17,29 @@ pnpm --dir packages/api exec tsx scripts/generate-query-explorer-schema.ts --ai-
 
 ## Compose, including existing volumes
 
-Use the pinned image in the base Compose definition. Set `STUDIO_QUERY_PASSWORD_FILE` and `CLICKHOUSE_ADMIN_PASSWORD_FILE` to operator-controlled files and `CLICKHOUSE_USER` to the bootstrap authority. Do not put their values in Compose YAML or shell history.
+Use the existing ClickHouse Compose file and the same connection settings used to start it. There is no overlay Compose file or additional connection configuration. With ClickHouse running, apply the SQL explorer schema:
 
 ```bash
-docker compose --project-directory . -f Dockerfiles/docker-compose.clickhouse.yml -f Dockerfiles/docker-compose.clickhouse-query-explorer.yml --profile query-explorer run --rm clickhouse-query-schema
+docker compose --project-directory . -f Dockerfiles/docker-compose.clickhouse.yml --profile schema run --rm --no-deps clickhouse-query-schema
 ```
 
-This explicit job runs for fresh and existing volumes. Existing deployments must first apply the current OTel schema, including the pricing dictionary and materialized columns; an empty-volume entrypoint alone cannot migrate them. Bootstrap is repeatable and changes only the feature-managed identities, grants, profile, quota and views. It does not reset application/ingestion credentials.
+If your normal Compose command supplies an environment file or project name, supply those same options here so the job uses the same credentials and volume. The command does not restart the server. Existing deployments must first apply the current OTel schema, including the pricing dictionary and materialized columns; an empty-volume entrypoint alone cannot migrate them.
+
+The job generates a private reader password once at `/var/lib/clickhouse/query-explorer/reader-password` in the existing data volume and reuses it on subsequent runs. It does not print the password. An operator can retrieve it locally:
+
+```bash
+docker exec marie-clickhouse cat /var/lib/clickhouse/query-explorer/reader-password
+```
+
+In Studio, open **Settings → Integrations → ClickHouse**, enter that value in **SQL reader password**, turn on **SQL explorer**, and save. Studio reuses the host and port already configured there. The next query uses the saved settings without an API restart. No SQL explorer environment variables or cancellation signing secret are needed.
+
+Bootstrap is repeatable and changes only the feature-managed identities, grants, profile, quota and views. It does not reset application or ingestion credentials. The operator connection must have authority to manage those objects; the application never bootstraps through its ordinary database account.
 
 ## Helm
 
-Set `clickhouse.enabled`, `clickhouse.schema.enabled` and `clickhouse.queryExplorer.enabled` true; supply `clickhouse.queryExplorer.bootstrapSecret.name`/`.key`, `.readerSecret.name`/`.key` and optional `.bootstrapUser`. Create those Secrets through the operator's existing secret-management process. Their values are never templated into a ConfigMap.
+Set `clickhouse.enabled`, `clickhouse.schema.enabled` and `clickhouse.queryExplorer.enabled` true, and supply `clickhouse.queryExplorer.readerSecret.name`/`.key` through your existing secret-management process. The existing OTel schema Job then applies the views and restricted reader after the OTel schema, using its existing operator connection. There is one schema Job, no separate query bootstrap credential and no additional Studio Helm settings.
 
-The feature schema Job runs at hook weight 10 after the OTel schema Job and uses mounted Secret files. SQL RBAC state persists in the ClickHouse data volume, so this path needs no new users.d subPath mount or reload. Changing the reader Secret requires re-running bootstrap and restarting the Studio API with its matching Secret. Qualify install, upgrade, rotation and rollback on the actual deployment before enablement.
+Enter the same reader password in Studio's existing ClickHouse panel and enable the switch after verifying the target deployment. Reader Secret values are never templated into the schema ConfigMap. SQL RBAC state persists in the ClickHouse data volume, so this path needs no new users.d mount or reload. To rotate, update the reader Secret, rerun the schema Job and save the new reader password in Studio. Qualify install, upgrade, rotation and rollback on the actual deployment before enablement.
 
 ## Limits and cancellation
 
@@ -41,7 +51,7 @@ Cancellation replaces the server-issued query ID with a bounded `SELECT 1` under
 
 ## Rollback
 
-Disable Studio's `STUDIO_QUERY_ENABLED` flag first. Run `rollback.sh` using the same operator-only bootstrap connection/Secret files. It disables reader login, terminates reader work and revokes its grants; it preserves telemetry, the stable definer and views. Re-running bootstrap restores the reader from the supplied Secret. Verify ingestion and existing observability clients before and after rollback.
+Turn off **SQL explorer** in Studio's ClickHouse panel first. Run `rollback.sh` with the deployment's existing operator connection settings. It disables reader login, terminates reader work and revokes its grants; it preserves telemetry, the stable definer and views. Re-running bootstrap restores the reader using the retained local password or Helm reader Secret. Verify ingestion and existing observability clients before and after rollback.
 
 ## Verify
 

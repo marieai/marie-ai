@@ -32,10 +32,6 @@ schema:
 
 queryExplorer:
   enabled: false
-  bootstrapUser: ""
-  bootstrapSecret:
-    name: ""
-    key: password
   readerSecret:
     name: ""
     key: password
