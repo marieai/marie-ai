@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -62,3 +63,80 @@ def test_reject_unhashed_password() -> None:
         module.prepare_sql(
             module.Scope(ORG, WORKSPACE, 1), "password'; DROP DATABASE otel;"
         )
+
+
+@pytest.mark.parametrize('present', ['0', '1'])
+def test_suspension_drains_queries_even_after_user_disappears(present: str) -> None:
+    scope = module.Scope(ORG, WORKSPACE, 1)
+    calls: list[str] = []
+
+    def query(sql: str) -> str:
+        calls.append(sql)
+        return present if sql.startswith('SELECT count()') else ''
+
+    module.suspend(query, scope)
+    assert calls[-1] == f"KILL QUERY WHERE user = '{scope.principal}' SYNC"
+    if present == '0':
+        assert len(calls) == 2
+    else:
+        assert calls[1:4] == [
+            f'ALTER USER IF EXISTS {scope.principal} HOST NONE',
+            f'REVOKE ALL ON *.* FROM {scope.principal}',
+            f'REVOKE ALL FROM {scope.principal}',
+        ]
+
+
+def test_suspension_does_not_acknowledge_a_failed_drain() -> None:
+    scope = module.Scope(ORG, WORKSPACE, 1)
+
+    def query(sql: str) -> str:
+        if sql.startswith('KILL QUERY'):
+            raise RuntimeError('Drain failed')
+        return '0'
+
+    with pytest.raises(RuntimeError, match='Drain failed'):
+        module.suspend(query, scope)
+
+
+@pytest.mark.parametrize('drain_succeeds', [False, True])
+def test_suspend_cli_acknowledges_only_a_completed_drain(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    drain_succeeds: bool,
+) -> None:
+    def query(sql: str) -> str:
+        if sql.startswith('KILL QUERY') and not drain_succeeds:
+            raise RuntimeError('Drain failed')
+        return '0'
+
+    monkeypatch.setattr(module, 'operator_query', lambda: query)
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'provision.py',
+            'suspend',
+            '--organization',
+            ORG,
+            '--workspace',
+            WORKSPACE,
+            '--revision',
+            '1',
+        ],
+    )
+    if not drain_succeeds:
+        with pytest.raises(RuntimeError, match='Drain failed'):
+            module.main()
+        assert capsys.readouterr().out == ''
+        return
+    module.main()
+    output = capsys.readouterr().out
+    assert output
+    assert json.loads(output) == {
+        'organizationId': ORG,
+        'workspaceId': WORKSPACE,
+        'revision': 1,
+        'principal': module.Scope(ORG, WORKSPACE, 1).principal,
+        'state': 'suspended',
+        'drained': True,
+    }
