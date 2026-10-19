@@ -97,12 +97,12 @@ def suspend(query: Query, scope: Scope) -> None:
         query(
             f"SELECT count() FROM system.users WHERE name = '{scope.principal}'"
         ).strip()
-        == '0'
+        != '0'
     ):
-        return
-    query(f'ALTER USER IF EXISTS {scope.principal} HOST NONE')
-    query(f'REVOKE ALL ON *.* FROM {scope.principal}')
-    query(f'REVOKE ALL FROM {scope.principal}')
+        query(f'ALTER USER IF EXISTS {scope.principal} HOST NONE')
+        query(f'REVOKE ALL ON *.* FROM {scope.principal}')
+        query(f'REVOKE ALL FROM {scope.principal}')
+    # Queries can outlive DROP USER.
     query(f"KILL QUERY WHERE user = '{scope.principal}' SYNC")
 
 
@@ -328,6 +328,18 @@ def main() -> None:
     query = operator_query()
     if args.action == 'suspend':
         suspend(query, scope)
+        print(
+            json.dumps(
+                {
+                    'organizationId': scope.organization_id,
+                    'workspaceId': scope.workspace_id,
+                    'revision': scope.revision,
+                    'principal': scope.principal,
+                    'state': 'suspended',
+                    'drained': True,
+                }
+            )
+        )
         return
     if args.action == 'verify':
         artifact = verify(query, scope)
