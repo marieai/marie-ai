@@ -197,7 +197,7 @@ different name that does not exist — so we use `.Release.Name` directly.
 */}}
 {{- define "marie.postgresql.secretName" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" .Release.Name }}
+{{- .Values.postgresql.auth.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
 {{- else }}
 {{- .Values.postgresql.external.existingSecret }}
 {{- end }}

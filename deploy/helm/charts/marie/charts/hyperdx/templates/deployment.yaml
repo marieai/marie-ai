@@ -37,7 +37,7 @@ spec:
               {{- else }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  name: {{ .Values.postgresql.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
                   key: postgres-password
               {{- end }}
             # FerretDB delegates authentication to PostgreSQL and supports SCRAM-SHA-256 only.

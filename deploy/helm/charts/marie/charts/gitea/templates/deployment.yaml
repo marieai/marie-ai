@@ -74,7 +74,7 @@ spec:
             - name: GITEA__database__PASSWD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  name: {{ (.Values.global.postgresql.auth | default dict).existingSecret | default (printf "%s-postgresql" .Release.Name) }}
                   key: postgres-password
             {{- end }}
             - name: GITEA__database__SSL_MODE

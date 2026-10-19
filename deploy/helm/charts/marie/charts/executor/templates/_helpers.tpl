@@ -14,6 +14,27 @@ Executor fullname for a pool
 {{- printf "%s-executor-%s" $release $pool.name | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{- define "executor.headlessNamingVersion" -}}
+{{- $version := "v1" -}}
+{{- if hasKey .Values "headlessServiceNamingVersion" -}}
+{{- $version = .Values.headlessServiceNamingVersion -}}
+{{- end -}}
+{{- if or (not (kindIs "string" $version)) (not (has $version (list "v1" "v2"))) -}}
+{{- fail "executor identity: unsupported headless Service naming version" -}}
+{{- end -}}
+{{- $version -}}
+{{- end -}}
+
+{{- define "executor.headlessServiceName" -}}
+{{- $version := include "executor.headlessNamingVersion" .root -}}
+{{- if eq $version "v1" -}}
+{{- include "executor.poolFullname" (list .pool .root.Release.Name) -}}-headless
+{{- else -}}
+{{- $identity := toJson (list "marie.executor-headless/v2" .root.Release.Namespace .root.Release.Name .pool.name) -}}
+{{- printf "ex-v2-%s-headless" (sha256sum $identity | trunc 24) -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Executor labels
 */}}
@@ -32,7 +53,7 @@ Executor selector labels for a pool
 {{- $release := index . 1 }}
 app.kubernetes.io/name: executor
 app.kubernetes.io/instance: {{ $release }}
-marie.ai/pool: {{ $pool.name }}
+marie.ai/pool: {{ $pool.name | quote }}
 {{- end }}
 
 {{/*

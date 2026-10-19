@@ -1,0 +1,48 @@
+# Install only after qualifying the configured publication store and target.
+# This generator never reads legacy sandboxes/* directories. Do not move an
+# existing installation here without an explicit controller/state migration.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: marie-published-environments
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    - git:
+        repoURL: DESIRED_STATE_REPO_URL
+        revision: HEAD
+        files:
+          - path: environments/v1/*/sandbox.yaml
+  template:
+    metadata:
+      name: "{{.namespace}}"
+      namespace: argocd
+      annotations:
+        marie.ai/publication-digest: "{{.publicationDigest}}"
+    spec:
+      project: "{{.project}}"
+      sources:
+        - repoURL: DESIRED_STATE_REPO_URL
+          targetRevision: HEAD
+          ref: values
+        - repoURL: "{{.chartRepository}}"
+          targetRevision: "{{.chartRevision}}"
+          path: "{{.chartPath}}"
+          helm:
+            releaseName: "{{.namespace}}"
+            valueFiles:
+              - "$values/environments/v1/{{.namespace}}/values.yaml"
+      destination:
+        server: CLUSTER_SERVER
+        namespace: "{{.namespace}}"
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+  syncPolicy:
+    preserveResourcesOnDeletion: true

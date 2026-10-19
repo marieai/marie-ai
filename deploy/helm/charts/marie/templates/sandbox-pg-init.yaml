@@ -73,7 +73,7 @@ spec:
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ $pgHost }}
+                  name: {{ include "marie.postgresql.secretName" . }}
                   key: postgres-password
           command:
             - /bin/sh

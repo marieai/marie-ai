@@ -1,0 +1,88 @@
+{{- if .Values.enabled }}
+{{- $identityVersion := include "executor.headlessNamingVersion" . }}
+{{- if not (kindIs "slice" .Values.pools) }}
+{{- fail "executor compute: pools must be a list" }}
+{{- end }}
+{{- $names := dict }}
+{{- range $pool := .Values.pools }}
+{{- if not (kindIs "map" $pool) }}
+{{- fail "executor compute: each pool must be an object" }}
+{{- end }}
+{{- if and (hasKey $pool "enabled") (not (kindIs "bool" $pool.enabled)) }}
+{{- fail "executor compute: enabled must be a boolean" }}
+{{- end }}
+{{- if $pool.enabled }}
+{{- if not (kindIs "string" $pool.name) }}
+{{- fail "executor compute: pool name must be a DNS label" }}
+{{- end }}
+{{- if or (gt (len $pool.name) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $pool.name)) }}
+{{- fail "executor compute: pool name must be a DNS label" }}
+{{- end }}
+{{- $name := include "executor.poolFullname" (list $pool $.Release.Name) }}
+{{- if hasKey $names $name }}
+{{- fail "executor compute: pool names must produce unique workload names" }}
+{{- end }}
+{{- $_ := set $names $name true }}
+{{- range $field := list "gpu" "stateful" }}
+{{- if and (hasKey $pool $field) (not (kindIs "bool" (get $pool $field))) }}
+{{- fail "executor compute: gpu and stateful must be booleans" }}
+{{- end }}
+{{- end }}
+{{- if $pool.stateful }}
+{{- $headless := include "executor.headlessServiceName" (dict "pool" $pool "root" $) }}
+{{- if gt (len $headless) 63 }}
+{{- fail "executor compute: stateful pool name exceeds the headless Service name limit" }}
+{{- end }}
+{{- if hasKey $names $headless }}
+{{- fail "executor compute: pool names must produce unique Service names" }}
+{{- end }}
+{{- $_ := set $names $headless true }}
+{{/* Pod revision labels append a hyphen and up to ten hash characters. */}}
+{{- if gt (len $name) 52 }}
+{{- fail "executor identity: stateful name exceeds the controller revision label limit" }}
+{{- end }}
+{{- if eq $identityVersion "v2" }}
+{{- $replicas := "1" }}
+{{- if hasKey $pool "replicas" }}
+{{- $replicas = toString $pool.replicas }}
+{{- end }}
+{{- if not (regexMatch "^(0|[1-9][0-9]{0,4})$" $replicas) }}
+{{- fail "executor identity: stateful replicas must be a whole count from 0 to 10000" }}
+{{- end }}
+{{- if gt (int64 $replicas) (int64 10000) }}
+{{- fail "executor identity: stateful replica count exceeds supported range" }}
+{{- end }}
+{{- $ordinal := max 0 (sub (int64 $replicas) 1) | toString }}
+{{- if gt (add (len $name) 1 (len $ordinal)) 63 }}
+{{- fail "executor identity: stateful pod hostname exceeds the DNS label limit" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (hasKey $pool "resources") (not (kindIs "map" $pool.resources)) }}
+{{- fail "executor compute: resources must be an object" }}
+{{- end }}
+{{- $resources := $pool.resources | default dict }}
+{{- range $field := list "requests" "limits" }}
+{{- if and (hasKey $resources $field) (not (kindIs "map" (get $resources $field))) }}
+{{- fail "executor compute: requests and limits must be objects" }}
+{{- end }}
+{{- end }}
+{{- $requests := $resources.requests | default dict }}
+{{- $limits := $resources.limits | default dict }}
+{{- if $pool.gpu }}
+{{- $count := get $limits "nvidia.com/gpu" | toString }}
+{{- if not (regexMatch "^[1-9][0-9]{0,9}$" $count) }}
+{{- fail "executor compute: GPU pools require a positive whole nvidia.com/gpu limit" }}
+{{- end }}
+{{- if gt (int64 $count) (int64 1000000000) }}
+{{- fail "executor compute: GPU count exceeds supported range" }}
+{{- end }}
+{{- if and (hasKey $requests "nvidia.com/gpu") (ne (get $requests "nvidia.com/gpu" | toString) $count) }}
+{{- fail "executor compute: GPU request must equal its limit" }}
+{{- end }}
+{{- else if or (hasKey $requests "nvidia.com/gpu") (hasKey $limits "nvidia.com/gpu") }}
+{{- fail "executor compute: CPU pools must not reserve NVIDIA GPUs" }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

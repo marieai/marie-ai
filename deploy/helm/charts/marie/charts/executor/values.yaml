@@ -51,6 +51,9 @@ global:
 
 enabled: true
 
+# Opt in only for new approved installations; v1 preserves existing identities.
+headlessServiceNamingVersion: v1
+
 # Optional default runtime class. A pool-level value takes precedence.
 runtimeClassName: ""
 

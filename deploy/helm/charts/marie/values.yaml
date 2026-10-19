@@ -83,6 +83,7 @@ global:
     auth:
       username: postgres
       database: postgres
+      existingSecret: ""
     external:
       host: ""
       port: 5432
@@ -108,6 +109,10 @@ global:
     enabled: true
     port: 8000
     defaultBuckets: "marie"
+    auth:
+      existingSecret: ""
+      rootUserKey: root-user
+      rootPasswordKey: root-password
     external:
       endpoint: ""
       bucket: marie

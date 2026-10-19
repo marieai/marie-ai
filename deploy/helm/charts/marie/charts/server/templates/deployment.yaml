@@ -9,6 +9,7 @@
 {{- $etcdExternal := $etcd.external | default dict }}
 {{- $minio := .Values.global.minio | default dict }}
 {{- $minioExternal := $minio.external | default dict }}
+{{- $minioAuth := $minio.auth | default dict }}
 {{- $storage := .Values.global.storage | default dict }}
 {{- $storageS3 := $storage.s3 | default dict }}
 {{- $metrics := .Values.config.metrics | default dict }}
@@ -194,12 +195,12 @@ spec:
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  name: {{ $postgresqlAuth.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
                   key: postgres-password
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  name: {{ $postgresqlAuth.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
                   key: postgres-password
             {{- else if $postgresqlExternal.host }}
             - name: DATABASE_HOST
@@ -307,13 +308,13 @@ spec:
             - name: S3_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-minio" .Release.Name }}
-                  key: root-user
+                  name: {{ $minioAuth.existingSecret | default (printf "%s-minio" .Release.Name) }}
+                  key: {{ $minioAuth.rootUserKey | default "root-user" }}
             - name: S3_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-minio" .Release.Name }}
-                  key: root-password
+                  name: {{ $minioAuth.existingSecret | default (printf "%s-minio" .Release.Name) }}
+                  key: {{ $minioAuth.rootPasswordKey | default "root-password" }}
             {{- else if eq ($storage.type | default "") "s3" }}
             - name: S3_ENDPOINT_URL
               value: {{ $storageS3.endpoint | default $minioExternal.endpoint | quote }}

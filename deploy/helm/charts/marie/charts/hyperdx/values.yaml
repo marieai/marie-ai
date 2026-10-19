@@ -33,6 +33,7 @@ mongo:
   port: 27017
   database: hyperdx
 postgresql:
+  existingSecret: ""
   username: postgres
   password: ""
 
