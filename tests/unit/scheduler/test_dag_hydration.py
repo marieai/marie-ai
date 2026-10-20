@@ -17,7 +17,9 @@ def test_hydration_discovers_only_recoverable_dag_states() -> None:
 
 def test_dag_activation_rechecks_recoverable_state_under_lock() -> None:
     query = mark_as_active_dags(
-        "marie_scheduler", ["00000000-0000-0000-0000-000000000001"]
+        "marie_scheduler",
+        ["00000000-0000-0000-0000-000000000001"],
+        subscribed_queues=None,
     )
 
     assert query.count("state IN ('created', 'active')") == 2

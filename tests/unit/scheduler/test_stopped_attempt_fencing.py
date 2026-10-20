@@ -10,9 +10,7 @@ from marie.job.common import JobInfo, JobStatus
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository import JobRepository
-from marie.scheduler.services.attempt_lifecycle_service import (
-    AttemptLifecycleService,
-)
+from marie.scheduler.services.attempt_lifecycle_service import AttemptLifecycleService
 from marie.scheduler.state import WorkState
 
 JOB_ID = "00000000-0000-0000-0000-000000000001"
@@ -36,6 +34,7 @@ def build_scheduler(
     work_item: SimpleNamespace, cancelled_ids: set[str]
 ) -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler.running = True
     scheduler.get_job = AsyncMock(return_value=work_item)

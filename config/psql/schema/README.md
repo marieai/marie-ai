@@ -148,6 +148,12 @@ unset until the fleet inventory supplies the convergence date.
 
 ## Testing Changes
 
+Scheduler schema version 96 introduces required queue scope arguments for
+admission and expired-run claims. See [queue consumption and coordinated
+rollout](../../../docs/scheduler/queue-consumer-isolation.md) before upgrading or
+rolling back. The new forward lease definitions retire their unscoped overloads;
+existing lease and attempt-activation interfaces remain unchanged.
+
 ```bash
 # Drop and recreate schema (development only!)
 psql -c "DROP SCHEMA marie_scheduler CASCADE; CREATE SCHEMA marie_scheduler;"

@@ -12,6 +12,8 @@ from marie.scheduler.util import (
     executor_name,
     frontier_candidate_window,
     is_control_flow_entrypoint,
+    queue_is_subscribed,
+    validate_queue_scope,
 )
 from marie.utils.scheduler_trace import scheduler_trace
 
@@ -30,6 +32,7 @@ class InMemorySelection:
     captured_by_executor: tuple[tuple[str, int], ...]
     eligible_by_dag: tuple[tuple[str, int], ...]
     captured_by_dag: tuple[tuple[str, int], ...]
+    rejected_dag_ids: tuple[str, ...] = ()
 
     @property
     def candidate_ids(self) -> tuple[str, ...]:
@@ -65,7 +68,10 @@ class InMemorySchedulingEngine:
         frontier: MemoryFrontier,
         *,
         sla_priority_interval_seconds: int,
+        subscribed_queues: frozenset[str] | None,
     ) -> None:
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self._frontier = frontier
         self._planner = GlobalPriorityExecutionPlanner(
             sla_priority_interval_seconds=sla_priority_interval_seconds
@@ -218,8 +224,12 @@ class InMemorySchedulingEngine:
             )
 
         has_resident_capacity = len(resident_dag_ids) < max_resident_dags
+        rejected_dag_ids: set[str] = set()
 
         def eligible(wi: WorkInfo) -> bool:
+            if not queue_is_subscribed(wi.name, self.subscribed_queues):
+                rejected_dag_ids.add(wi.dag_id)
+                return False
             metadata = wi.data.get("metadata", {}) if isinstance(wi.data, dict) else {}
             entrypoint = metadata.get("on", "") if isinstance(metadata, dict) else ""
             executor = executor_name(entrypoint)
@@ -237,7 +247,9 @@ class InMemorySchedulingEngine:
             filter_fn=eligible,
         )
         capture_ms = (time.perf_counter() - capture_started) * 1000.0
-        candidates = tuple(capture.jobs)
+        candidates = tuple(
+            wi for wi in capture.jobs if wi.dag_id not in rejected_dag_ids
+        )
         scheduler_trace(
             "scheduler_selection_capture_completed",
             elapsed_ms=capture_ms,
@@ -346,6 +358,7 @@ class InMemorySchedulingEngine:
             captured_by_executor=tuple(sorted(capture.captured_by_executor.items())),
             eligible_by_dag=tuple(sorted(capture.eligible_by_dag.items())),
             captured_by_dag=tuple(sorted(capture.captured_by_dag.items())),
+            rejected_dag_ids=tuple(sorted(rejected_dag_ids)),
         )
 
 

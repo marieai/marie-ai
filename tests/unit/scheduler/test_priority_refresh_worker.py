@@ -17,6 +17,7 @@ from marie.scheduler.state import WorkState
 
 def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler = PostgreSQLJobScheduler.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.running = True
     scheduler.priority_refresh_enabled = True
     scheduler._priority_refresh_event = asyncio.Event()
@@ -299,9 +300,9 @@ async def test_frontier_summary_keeps_loop_responsive_and_snapshots_jobs(
     summarize = frontier_module.summarize_sla_work_items
 
     def blocking_summary(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        assert threading.get_ident() != main_thread, (
-            'SLA computation blocks the event loop'
-        )
+        assert (
+            threading.get_ident() != main_thread
+        ), 'SLA computation blocks the event loop'
         started.set()
         assert release.wait(2), 'Frontier mutations blocked behind summary computation'
         return summarize(*args, **kwargs)
@@ -320,10 +321,10 @@ async def test_frontier_summary_keeps_loop_responsive_and_snapshots_jobs(
             assert not task.done()
             release.set()
             result = await task
-        assert result['totals']['ready'] == 1
-        assert result['sla']['tracked'] == 1
-        assert result['sla']['soft_missed'] == 1
-        assert result['sla']['top_urgent'][0]['priority'] == 0
+        assert result["totals"]["ready"] == 1
+        assert result["sla"]["tracked"] == 1
+        assert result["sla"]['soft_missed'] == 1
+        assert result["sla"]['top_urgent'][0]['priority'] == 0
         assert frontier.jobs_by_id['job-0'].state is WorkState.COMPLETED
         assert frontier.jobs_by_id['job-0'].priority == 42
     finally:

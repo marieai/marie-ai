@@ -8,3 +8,5 @@ AS $$
     GROUP BY name, state
     ORDER BY name, state;
 $$;
+
+

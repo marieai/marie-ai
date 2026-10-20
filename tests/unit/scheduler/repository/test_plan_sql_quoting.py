@@ -166,7 +166,7 @@ def test_empty_ids_do_not_mutate_jobs(
 
 
 def test_dag_activation_rejects_sql_in_ids(
-    database: tuple[psycopg.Connection, str]
+    database: tuple[psycopg.Connection, str],
 ) -> None:
     connection, schema = database
     connection.execute(
@@ -175,7 +175,9 @@ def test_dag_activation_rejects_sql_in_ids(
     )
     with pytest.raises(psycopg.errors.InvalidTextRepresentation):
         connection.execute(
-            plans.mark_as_active_dags(schema, [JOB_ID + "']::uuid[])) OR TRUE --"])
+            plans.mark_as_active_dags(
+                schema, [JOB_ID + "']::uuid[])) OR TRUE --"], subscribed_queues=None
+            )
         )
 
 
@@ -192,7 +194,7 @@ def test_dag_id_remains_a_uuid_value(
 
 
 def test_delete_queue_keeps_name_as_data(
-    database: tuple[psycopg.Connection, str]
+    database: tuple[psycopg.Connection, str],
 ) -> None:
     connection, schema = database
     assert connection.execute(plans.delete_queue(schema, "O'Reilly")).fetchone() == (
@@ -201,7 +203,7 @@ def test_delete_queue_keeps_name_as_data(
 
 
 def test_insert_version_keeps_value_as_data(
-    database: tuple[psycopg.Connection, str]
+    database: tuple[psycopg.Connection, str],
 ) -> None:
     connection, schema = database
     connection.execute(plans.insert_version(schema, "95'); SELECT 1; --"))

@@ -30,6 +30,7 @@ from marie.scheduler.repository import JobRepository
 from marie.scheduler.services.dag_management_service import DAGManagementService
 from marie.scheduler.services.scheduler_runtime import SchedulerRuntime
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import queue_is_subscribed, validate_queue_scope
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
 
@@ -90,9 +91,13 @@ class ControlFlowExecutionService:
         gateway_instance_id: str,
         notify_callback: Callable[[], Awaitable[bool]],
         runtime: SchedulerRuntime,
+        *,
+        subscribed_queues: frozenset[str] | None,
     ) -> None:
         self.logger = MarieLogger(ControlFlowExecutionService.__name__)
         self.repository = repository
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self.frontier = frontier
         self.dag_service = dag_service
         self._status_update_lock = status_update_lock
@@ -213,6 +218,15 @@ class ControlFlowExecutionService:
 
     async def process_node(self, work_item: WorkInfo) -> ControlFlowExecutionOutcome:
         """Execute a scheduler-local control-flow node."""
+        if not queue_is_subscribed(work_item.name, self.subscribed_queues) or (
+            self.subscribed_queues is not None
+            and not self.dag_service.is_admitted(work_item.dag_id)
+            and await self.dag_service.consumption_rejection_reason(work_item.dag_id)
+        ):
+            await self.dag_service.evict_dag(
+                work_item.dag_id, reason="queue_not_subscribed"
+            )
+            return ControlFlowExecutionOutcome.ADMISSION_REFUSED
         try:
             node_type = self._trace_started(work_item)
             admission_outcome = await self._admit_node(work_item, node_type)
@@ -241,8 +255,24 @@ class ControlFlowExecutionService:
         outcomes: dict[str, ControlFlowExecutionOutcome] = {}
         candidates: list[WorkInfo] = []
         node_types: dict[str, str] = {}
+        rejected_dags = {
+            item.dag_id
+            for item in work_items
+            if not queue_is_subscribed(item.name, self.subscribed_queues)
+        }
+        if self.subscribed_queues is not None:
+            for dag_id in {item.dag_id for item in work_items} - rejected_dags:
+                if not self.dag_service.is_admitted(
+                    dag_id
+                ) and await self.dag_service.consumption_rejection_reason(dag_id):
+                    rejected_dags.add(dag_id)
+        for dag_id in rejected_dags:
+            await self.dag_service.evict_dag(dag_id, reason="queue_not_subscribed")
 
         for work_item in work_items:
+            if work_item.dag_id in rejected_dags:
+                outcomes[work_item.id] = ControlFlowExecutionOutcome.ADMISSION_REFUSED
+                continue
             try:
                 node_type = self._trace_started(work_item)
                 node_types[work_item.id] = node_type
@@ -254,6 +284,8 @@ class ControlFlowExecutionService:
             except Exception as error:
                 outcomes[work_item.id] = await self._handle_node_error(work_item, error)
 
+        if not candidates:
+            return [outcomes[item.id] for item in work_items]
         activated, activation_outcomes = await self._activate_nodes(candidates)
         outcomes.update(activation_outcomes)
 

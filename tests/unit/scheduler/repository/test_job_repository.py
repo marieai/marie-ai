@@ -239,7 +239,7 @@ def build_dag_job(dag_id: str, index: int) -> WorkInfo:
         name="extract",
         priority=index,
         data={
-            "metadata": {
+            'metadata': {
                 "on": "extract://processor",
                 "planner": "test-planner",
                 "ref_id": f"document-{index}",
@@ -313,7 +313,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('95')" in schema_query
+    assert "VALUES ('96')" in schema_query
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput("
         in schema_query
@@ -438,13 +438,15 @@ async def test_create_tables_installs_single_pass_task_throughput(schema: str) -
     assert "j.state::text" not in task_throughput
     assert "UNION ALL" not in task_throughput
     assert "GROUP BY GROUPING SETS (" in task_throughput
-    assert "WHEN GROUPING(t.bucket_start_utc) = 1 THEN 'window_total'" in task_throughput
+    assert (
+        "WHEN GROUPING(t.bucket_start_utc) = 1 THEN 'window_total'" in task_throughput
+    )
     assert "ELSE 'hour'" in task_throughput
     assert "GROUPING(t.bucket_start_utc) AS bucket_group" in task_throughput
     assert task_throughput.count("PERCENTILE_CONT(0.95) WITHIN GROUP") == 1
     assert "AND t.execution_seconds IS NOT NULL" in task_throughput
     assert "ROUND(AVG(t.execution_seconds) FILTER (" in task_throughput
-    for state in ("completed", "failed", "expired", "cancelled", "skipped"):
+    for state in ('completed', "failed", "expired", "cancelled", "skipped"):
         assert f"WHERE t.terminal_state = '{state}'" in task_throughput
 
 
@@ -475,9 +477,12 @@ async def test_create_tables_installs_operational_attempt_event_indexes(
         f"CREATE INDEX IF NOT EXISTS job_attempt_operational_facets_idx "
         f"ON {schema}.job_attempt (gateway_instance_id, executor);"
     ) in schema_query
-    assert schema_query.count(
-        "CREATE INDEX IF NOT EXISTS job_attempt_operational_attention_idx"
-    ) == 1
+    assert (
+        schema_query.count(
+            "CREATE INDEX IF NOT EXISTS job_attempt_operational_attention_idx"
+        )
+        == 1
+    )
 
 
 def test_unpartitioned_reconciliation_includes_operational_event_indexes() -> None:
@@ -615,13 +620,13 @@ async def test_delete_job_uses_async_connection() -> None:
 async def test_create_job_uses_shared_batch_statement() -> None:
     dag_id = "00000000-0000-0000-0000-000000000099"
     job = build_dag_job(dag_id, 1)
-    connection = FakeConnection()
+    connection = FakeConnection(fetchrow=[(job.id,)])
     repository = build_repository(connection)
 
     assert await repository.create_job(job) is True
 
     method, query, params = connection.calls[0]
-    assert method == "execute"
+    assert method == "fetchrow"
     assert "jsonb_to_recordset(%s::jsonb)" in query
     assert params[0].obj == [job.model_dump(mode="json")]
 
@@ -631,7 +636,7 @@ async def test_bulk_cancel_groups_jobs_by_queue_in_one_transaction() -> None:
     first = "00000000-0000-0000-0000-000000000001"
     second = "00000000-0000-0000-0000-000000000002"
     connection = FakeConnection(
-        fetch=[[('extract', [first]), ('parse', [second])]],
+        fetch=[[("extract", [first]), ('parse', [second])]],
         fetchval=[1, 1],
     )
     repository = build_repository(connection)
@@ -654,7 +659,7 @@ async def test_create_dag_with_jobs_uses_bounded_batch_statements(
 ) -> None:
     dag_id = "00000000-0000-0000-0000-000000000099"
     jobs = [build_dag_job(dag_id, index + 1) for index in range(node_count)]
-    jobs[0].data["metadata"].update(
+    jobs[0].data['metadata'].update(
         {
             "project_id": "project-1",
             "ref_type": "document",
@@ -816,7 +821,7 @@ async def test_terminal_database_operations_trace_component_timings(
         scheduler_lease_owner="scheduler-1",
         gateway_instance_id="gateway-1",
         terminal_status="SUCCEEDED",
-        terminal_work_state="completed",
+        terminal_work_state='completed',
         source="job_event",
         accepted=True,
     )
@@ -892,7 +897,7 @@ async def test_terminal_transition_updates_job_and_attempt_in_one_statement(
     event = trace.call_args.kwargs
     assert event["operation"] == "job_terminal_transition"
     assert event["terminal_status"] == terminal_status
-    assert event["accepted"] is True
+    assert event['accepted'] is True
     assert event["final_state"] == final_state
     assert event["autocommit"] is True
     assert event["commit_ms"] is None
@@ -936,7 +941,7 @@ async def test_load_hydratable_jobs_uses_database_function_contract() -> None:
     connection = FakeConnection(fetch=[[]])
     repository = build_repository(connection)
 
-    assert await repository.load_hydratable_jobs([dag_id]) == []
+    assert await repository.load_hydratable_jobs([dag_id], subscribed_queues=None) == []
 
     _, query, params = connection.calls[0]
     assert "FROM marie_scheduler.hydrate_frontier_jobs(%s::uuid[])" in query
@@ -956,6 +961,7 @@ async def test_discover_admission_candidates_uses_database_function_contract() -
             limit=25,
             sla_interval_seconds=900,
             excluded_dag_ids=[excluded],
+            subscribed_queues=None,
         )
         == []
     )
@@ -968,7 +974,7 @@ async def test_discover_admission_candidates_uses_database_function_contract() -
     assert "priority" not in query
     assert "soft_sla" not in query
     assert "hard_sla" not in query
-    assert params == (25, 900, [excluded])
+    assert params == (None, 25, 900, [excluded])
 
 
 @pytest.mark.asyncio
@@ -977,7 +983,10 @@ async def test_load_dag_and_jobs_uses_database_function_contract() -> None:
     connection = FakeConnection(fetchrow=[None])
     repository = build_repository(connection)
 
-    assert await repository.load_dag_and_jobs(dag_id) == (None, [])
+    assert await repository.load_dag_and_jobs(dag_id, subscribed_queues=None) == (
+        None,
+        [],
+    )
 
     _, query, params = connection.calls[0]
     assert "FROM marie_scheduler.hydrate_frontier_dags()" in query
@@ -994,7 +1003,7 @@ async def test_dag_activation_diagnostic_includes_root_failure() -> None:
     connection = FakeConnection(
         fetchrow=[("failed", now, now, 4, 2, 0)],
         fetch=[
-            [("completed", 1), ("created", 2), ("failed", 1)],
+            [('completed', 1), ("created", 2), ("failed", 1)],
             [
                 (
                     job_id,
@@ -1037,7 +1046,7 @@ async def test_dag_activation_diagnostic_includes_root_failure() -> None:
 
     assert diagnostic["reason"] == "dag_state_not_activatable"
     assert diagnostic["job_states"] == {
-        "completed": 1,
+        'completed': 1,
         "created": 2,
         "failed": 1,
     }
@@ -1215,6 +1224,9 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             True,
             True,
+            True,
+            True,
+            True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id "
@@ -1235,50 +1247,48 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
     _, function_query, function_params = connection.calls[4]
     assert "to_regprocedure" in function_query
     assert function_params == (
-        "marie_scheduler.admission_candidate_dags(integer,integer,uuid[])",
+        "marie_scheduler.admission_candidate_dags(text[],integer,integer,uuid[])",
     )
 
-    throughput_functions = [
-        call[2][0] for call in connection.calls[5:8]
-    ]
+    throughput_functions = [call[2][0] for call in connection.calls[8:11]]
     assert throughput_functions == [
         "marie_scheduler.monitor_system_throughput(integer,text)",
         "marie_scheduler.monitor_planner_throughput(integer,text)",
         "marie_scheduler.monitor_task_throughput(integer,text)",
     ]
 
-    _, operational_query, operational_params = connection.calls[8]
+    _, operational_query, operational_params = connection.calls[11]
     assert "to_regprocedure" in operational_query
     assert operational_params == (
         "marie_scheduler.get_operational_dag(uuid,integer,integer,integer)",
     )
 
-    _, jobs_query, jobs_params = connection.calls[9]
+    _, jobs_query, jobs_params = connection.calls[12]
     assert "to_regprocedure" in jobs_query
     assert jobs_params == (
         "marie_scheduler.list_operational_jobs(integer,integer,text[],text,"
         "text,text,text,uuid,integer,integer,integer)",
     )
 
-    assert connection.calls[10][2] == (
+    assert connection.calls[13][2] == (
         "marie_scheduler.list_operational_attempts(integer,integer,text[],text,"
         "text,text,text,text,integer,integer)",
     )
-    assert connection.calls[11][2] == (
+    assert connection.calls[14][2] == (
         "marie_scheduler.list_operational_events(integer,timestamptz,text,integer,"
         "text,text,text)",
     )
-    assert connection.calls[12][2] == (
+    assert connection.calls[15][2] == (
         "marie_scheduler.get_operational_flow(integer,text,integer)",
     )
-    assert connection.calls[13][2] == (
+    assert connection.calls[16][2] == (
         "marie_scheduler.get_operational_database_health()",
     )
-    assert connection.calls[14][2] == (
+    assert connection.calls[17][2] == (
         "marie_scheduler.list_operational_execution_history(uuid,uuid,integer,integer)",
     )
 
-    _, activation_query, _ = connection.calls[15]
+    _, activation_query, _ = connection.calls[18]
     assert "p.pronargs = 5" in activation_query
     assert all(
         "scheduler_attempt_invariant_checks" not in query
@@ -1479,7 +1489,9 @@ async def test_recover_expired_run_leases_applies_python_policy(monkeypatch) -> 
     )
     repository = build_repository(connection)
 
-    recovered = await repository.recover_expired_run_leases(limit=10)
+    recovered = await repository.recover_expired_run_leases(
+        subscribed_queues=None, limit=10
+    )
 
     assert len(recovered) == 1
     assert recovered[0].id == job_id

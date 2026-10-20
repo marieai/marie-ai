@@ -8,7 +8,7 @@ from marie.scheduler.services.maintenance_service import MaintenanceService
 
 @pytest.mark.parametrize('operation', ['archive', 'purge'])
 async def test_unsupported_retention_operations_raise(operation: str) -> None:
-    service = MaintenanceService(repository=SimpleNamespace())
+    service = MaintenanceService(repository=SimpleNamespace(), subscribed_queues=None)
 
     with pytest.raises(NotImplementedError):
         await getattr(service, operation)()
@@ -26,7 +26,9 @@ async def test_periodic_maintenance_recovers_leases_without_retention_errors() -
         notified = True
         return True
 
-    service = MaintenanceService(repository=repository, notify_callback=notify)
+    service = MaintenanceService(
+        repository=repository, notify_callback=notify, subscribed_queues=None
+    )
     service.logger = Mock()
 
     await service.maintenance()

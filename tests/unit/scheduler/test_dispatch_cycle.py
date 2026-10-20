@@ -50,6 +50,7 @@ def selection_result(
 
 def build_scheduler() -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler.running = True
     scheduler._fetch_counter = 0
@@ -115,6 +116,7 @@ async def settle_dispatches(scheduler: PostgreSQLJobScheduler) -> None:
 @pytest.mark.asyncio
 async def test_semaphore_reservation_reports_reason_per_job() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler._sem_default_ttl = 30
     scheduler._semaphore_store = MagicMock()
@@ -140,7 +142,7 @@ async def test_semaphore_reservation_reports_reason_per_job() -> None:
     scheduler._semaphore_store.reserve_many.assert_called_once_with(
         "extract",
         [job.id for job in jobs],
-        node='',
+        node="",
         ttl=30,
         owner_by_ticket={job.id: job.id for job in jobs},
         run_attempt_id_by_ticket=run_attempt_ids,
@@ -150,6 +152,7 @@ async def test_semaphore_reservation_reports_reason_per_job() -> None:
 @pytest.mark.asyncio
 async def test_semaphore_reservation_fallback_preserves_attempt_id() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler._sem_default_ttl = 30
     scheduler._semaphore_store = MagicMock()
@@ -165,7 +168,7 @@ async def test_semaphore_reservation_fallback_preserves_attempt_id() -> None:
     scheduler._semaphore_store.reserve.assert_called_once_with(
         "extract",
         job.id,
-        node='',
+        node="",
         ttl=30,
         owner=job.id,
         run_attempt_id="attempt-1",

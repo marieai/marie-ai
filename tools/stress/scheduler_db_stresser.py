@@ -100,7 +100,8 @@ CREATE TEMP TABLE IF NOT EXISTS stress_dag_stage (
     completed_on TIMESTAMPTZ,
     soft_sla TIMESTAMPTZ,
     hard_sla TIMESTAMPTZ,
-    planner TEXT NOT NULL
+    planner TEXT NOT NULL,
+    submission_name TEXT NOT NULL
 ) ON COMMIT DELETE ROWS;
 
 CREATE TEMP TABLE IF NOT EXISTS stress_job_stage (
@@ -161,11 +162,11 @@ CREATE TEMP TABLE IF NOT EXISTS stress_search_stage (
 INSERT_DAGS_SQL = f"""
 INSERT INTO {SCHEDULER_SCHEMA}.dag (
     id, name, state, serialized_dag, started_on, completed_on,
-    soft_sla, hard_sla, planner
+    soft_sla, hard_sla, planner, submission_name
 )
 SELECT
     id, name, state, serialized_dag, started_on, completed_on,
-    soft_sla, hard_sla, planner
+    soft_sla, hard_sla, planner, submission_name
 FROM pg_temp.stress_dag_stage
 ORDER BY dag_index
 ON CONFLICT DO NOTHING
@@ -969,7 +970,7 @@ class CorpusGenerator:
                 """
                 COPY pg_temp.stress_dag_stage (
                     dag_index, id, name, state, serialized_dag, started_on,
-                    completed_on, soft_sla, hard_sla, planner
+                    completed_on, soft_sla, hard_sla, planner, submission_name
                 ) FROM STDIN
                 """
             ) as copy:
@@ -986,6 +987,7 @@ class CorpusGenerator:
                             dag.soft_sla,
                             dag.hard_sla,
                             config.planner,
+                            config.queue_name,
                         )
                     )
 

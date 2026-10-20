@@ -34,11 +34,11 @@ class FakeRepository:
             jid: self._priorities[jid] for jid in job_ids if jid in self._priorities
         }
 
-    async def mark_dag_as_active(self, dag_id):
+    async def mark_dag_as_active(self, dag_id, *, subscribed_queues):
         self.marked_active_dags.append(dag_id)
         return self._mark_dag_active_result
 
-    async def load_dag_and_jobs(self, dag_id):
+    async def load_dag_and_jobs(self, dag_id, *, subscribed_queues):
         for candidate_dag_id, serialized_dag in self._hydratable_dags:
             if str(candidate_dag_id) == str(dag_id):
                 rows = [
@@ -53,6 +53,7 @@ class FakeRepository:
         limit,
         sla_interval_seconds,
         excluded_dag_ids=(),
+        subscribed_queues,
     ):
         self.admission_candidate_calls.append(
             (limit, sla_interval_seconds, tuple(excluded_dag_ids))
@@ -62,7 +63,7 @@ class FakeRepository:
         ]
         return rows[:limit]
 
-    async def load_hydratable_jobs(self, dag_ids):
+    async def load_hydratable_jobs(self, dag_ids, *, subscribed_queues):
         self.hydratable_job_calls.append(tuple(map(str, dag_ids)))
         rows = []
         for dag_id in map(str, dag_ids):
@@ -135,6 +136,7 @@ def make_service(slots, *, max_active_dags=32, repo=None):
         active_dags=active_dags,
         max_active_dags=max_active_dags,
         slot_snapshot_provider=lambda: slots,
+        subscribed_queues=None,
     )
     return service, frontier, active_dags
 
@@ -197,6 +199,7 @@ async def test_refresh_frontier_priorities_updates_memory_and_requests_admission
         repository=repo,
         frontier=frontier,
         active_dags=active_dags,
+        subscribed_queues=None,
     )
 
     stats = await service.refresh_frontier_priorities(hydrate_missing_limit=10)
@@ -227,9 +230,7 @@ async def test_refresh_frontier_priorities_defers_discovery_to_admission_worker(
         ],
     )
     service = DAGManagementService(
-        repository=repo,
-        frontier=frontier,
-        active_dags={},
+        repository=repo, frontier=frontier, active_dags={}, subscribed_queues=None
     )
 
     stats = await service.refresh_frontier_priorities(hydrate_missing_limit=10)
@@ -253,9 +254,7 @@ async def test_refresh_frontier_priorities_updates_frontier_tracked_job_priority
         hydratable_dags=[("dag-frontier", {"nodes": []})],
     )
     service = DAGManagementService(
-        repository=repo,
-        frontier=frontier,
-        active_dags={},
+        repository=repo, frontier=frontier, active_dags={}, subscribed_queues=None
     )
 
     hydrated = []
@@ -292,6 +291,7 @@ async def test_refresh_frontier_priorities_skips_hydration_when_active_dag_limit
         frontier=frontier,
         active_dags={"dag-1": object()},
         max_active_dags=1,
+        subscribed_queues=None,
     )
 
     hydrated = []
@@ -318,9 +318,7 @@ async def test_handle_state_change_treats_active_as_live_state():
     frontier = MemoryFrontier(higher_priority_wins=True, default_lease_ttl=0.25)
     repo = FakeRepository(priorities={}, hydratable_dags=[])
     service = DAGManagementService(
-        repository=repo,
-        frontier=frontier,
-        active_dags={},
+        repository=repo, frontier=frontier, active_dags={}, subscribed_queues=None
     )
     service.logger.debug = MagicMock()
     service.logger.warning = MagicMock()
@@ -350,6 +348,7 @@ async def test_handle_failed_state_evicts_without_rehydrating() -> None:
         frontier=frontier,
         active_dags={dag_id: object()},
         max_active_dags=1,
+        subscribed_queues=None,
     )
     service.hydrate_single_dag = AsyncMock()
 
@@ -690,9 +689,7 @@ async def test_executor_capacity_release_reconsiders_capacity_deferred_dags():
     first = await service.admit_durable_candidates(source="test")
     slots["annotator_llm"] = 1
     await service.request_admission("executor_capacity_released")
-    second = await service.admit_durable_candidates(
-        source="executor_capacity_released"
-    )
+    second = await service.admit_durable_candidates(source="executor_capacity_released")
 
     assert first == {"candidates": 1, "admitted": 0, "deferred": 1, "skipped": 0}
     assert second == {"candidates": 1, "admitted": 1, "deferred": 0, "skipped": 0}

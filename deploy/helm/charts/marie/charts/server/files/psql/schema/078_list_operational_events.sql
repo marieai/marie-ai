@@ -29,7 +29,11 @@ RETURNS TABLE (
 LANGUAGE SQL
 STABLE
 AS $function$
-WITH events AS NOT MATERIALIZED (
+-- Keep sources separate until after paging so timestamp indexes can stop early.
+WITH job_events (
+    event_id, occurred_at, severity, component, event_code, affected_type,
+    affected_id, job_id, dag_id, run_attempt_id, executor, gateway_instance_id, summary
+) AS NOT MATERIALIZED (
     SELECT
         'job:' || jh.history_id::TEXT AS event_id,
         jh.history_created_on AS occurred_at,
@@ -50,9 +54,10 @@ WITH events AS NOT MATERIALIZED (
         'Job state changed to ' || LOWER(jh.state::TEXT) AS summary
     FROM {schema}.job_history AS jh
     WHERE jh.history_created_on >= NOW() - make_interval(secs => p_window_seconds)
-
-    UNION ALL
-
+), dag_events (
+    event_id, occurred_at, severity, component, event_code, affected_type,
+    affected_id, job_id, dag_id, run_attempt_id, executor, gateway_instance_id, summary
+) AS NOT MATERIALIZED (
     SELECT
         'dag:' || dh.history_id::TEXT,
         dh.history_created_on,
@@ -72,9 +77,10 @@ WITH events AS NOT MATERIALIZED (
         'DAG state changed to ' || LOWER(COALESCE(dh.state, 'created'))
     FROM {schema}.dag_history AS dh
     WHERE dh.history_created_on >= NOW() - make_interval(secs => p_window_seconds)
-
-    UNION ALL
-
+), activated_events (
+    event_id, occurred_at, severity, component, event_code, affected_type,
+    affected_id, job_id, dag_id, run_attempt_id, executor, gateway_instance_id, summary
+) AS NOT MATERIALIZED (
     SELECT
         'attempt:' || ja.run_attempt_id::TEXT || ':activated',
         ja.activated_at,
@@ -91,9 +97,10 @@ WITH events AS NOT MATERIALIZED (
         'Execution attempt activated'
     FROM {schema}.job_attempt AS ja
     WHERE ja.activated_at >= NOW() - make_interval(secs => p_window_seconds)
-
-    UNION ALL
-
+), terminal_events (
+    event_id, occurred_at, severity, component, event_code, affected_type,
+    affected_id, job_id, dag_id, run_attempt_id, executor, gateway_instance_id, summary
+) AS NOT MATERIALIZED (
     SELECT
         'attempt:' || ja.run_attempt_id::TEXT || ':terminal',
         ja.terminal_at,
@@ -123,9 +130,10 @@ WITH events AS NOT MATERIALIZED (
     FROM {schema}.job_attempt AS ja
     WHERE ja.terminal_at IS NOT NULL
       AND ja.terminal_at >= NOW() - make_interval(secs => p_window_seconds)
-
-    UNION ALL
-
+), recovery_events (
+    event_id, occurred_at, severity, component, event_code, affected_type,
+    affected_id, job_id, dag_id, run_attempt_id, executor, gateway_instance_id, summary
+) AS NOT MATERIALIZED (
     SELECT
         'attempt:' || ja.run_attempt_id::TEXT || ':recovery',
         ja.recovery_at,
@@ -143,32 +151,139 @@ WITH events AS NOT MATERIALIZED (
     FROM {schema}.job_attempt AS ja
     WHERE ja.recovery_at IS NOT NULL
       AND ja.recovery_at >= NOW() - make_interval(secs => p_window_seconds)
-), filtered AS NOT MATERIALIZED (
-    SELECT *
-    FROM events
-    WHERE (p_severity IS NULL OR severity = p_severity)
-      AND (p_component IS NULL OR component = p_component)
-      AND (
-          p_search IS NULL
-          OR event_id ILIKE '%' || p_search || '%'
-          OR event_code ILIKE '%' || p_search || '%'
-          OR affected_id ILIKE '%' || p_search || '%'
-          OR COALESCE(job_id::TEXT, '') ILIKE '%' || p_search || '%'
-          OR COALESCE(dag_id::TEXT, '') ILIKE '%' || p_search || '%'
-          OR COALESCE(run_attempt_id::TEXT, '') ILIKE '%' || p_search || '%'
-          OR COALESCE(executor, '') ILIKE '%' || p_search || '%'
-          OR COALESCE(gateway_instance_id, '') ILIKE '%' || p_search || '%'
-      )
-      AND (
-          p_before_at IS NULL
-          OR (occurred_at, event_id) < (
-              p_before_at,
-              COALESCE(p_before_id, repeat('~', 128))
+), candidates AS (
+    (
+        SELECT * FROM job_events
+        WHERE (p_severity IS NULL OR severity = p_severity)
+          AND (p_component IS NULL OR component = p_component)
+          AND (
+              p_search IS NULL
+              OR event_id ILIKE '%' || p_search || '%'
+              OR event_code ILIKE '%' || p_search || '%'
+              OR affected_id ILIKE '%' || p_search || '%'
+              OR COALESCE(job_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(dag_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(run_attempt_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(executor, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(gateway_instance_id, '') ILIKE '%' || p_search || '%'
           )
-      )
+          AND (
+              p_before_at IS NULL
+              OR (occurred_at, event_id) < (
+                  p_before_at,
+                  COALESCE(p_before_id, repeat('~', 128))
+              )
+          )
+        ORDER BY occurred_at DESC, event_id DESC
+        LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1
+    )
+    UNION ALL
+    (
+        SELECT * FROM dag_events
+        WHERE (p_severity IS NULL OR severity = p_severity)
+          AND (p_component IS NULL OR component = p_component)
+          AND (
+              p_search IS NULL
+              OR event_id ILIKE '%' || p_search || '%'
+              OR event_code ILIKE '%' || p_search || '%'
+              OR affected_id ILIKE '%' || p_search || '%'
+              OR COALESCE(job_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(dag_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(run_attempt_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(executor, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(gateway_instance_id, '') ILIKE '%' || p_search || '%'
+          )
+          AND (
+              p_before_at IS NULL
+              OR (occurred_at, event_id) < (
+                  p_before_at,
+                  COALESCE(p_before_id, repeat('~', 128))
+              )
+          )
+        ORDER BY occurred_at DESC, event_id DESC
+        LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1
+    )
+    UNION ALL
+    (
+        SELECT * FROM activated_events
+        WHERE (p_severity IS NULL OR severity = p_severity)
+          AND (p_component IS NULL OR component = p_component)
+          AND (
+              p_search IS NULL
+              OR event_id ILIKE '%' || p_search || '%'
+              OR event_code ILIKE '%' || p_search || '%'
+              OR affected_id ILIKE '%' || p_search || '%'
+              OR COALESCE(job_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(dag_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(run_attempt_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(executor, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(gateway_instance_id, '') ILIKE '%' || p_search || '%'
+          )
+          AND (
+              p_before_at IS NULL
+              OR (occurred_at, event_id) < (
+                  p_before_at,
+                  COALESCE(p_before_id, repeat('~', 128))
+              )
+          )
+        ORDER BY occurred_at DESC, event_id DESC
+        LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1
+    )
+    UNION ALL
+    (
+        SELECT * FROM terminal_events
+        WHERE (p_severity IS NULL OR severity = p_severity)
+          AND (p_component IS NULL OR component = p_component)
+          AND (
+              p_search IS NULL
+              OR event_id ILIKE '%' || p_search || '%'
+              OR event_code ILIKE '%' || p_search || '%'
+              OR affected_id ILIKE '%' || p_search || '%'
+              OR COALESCE(job_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(dag_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(run_attempt_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(executor, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(gateway_instance_id, '') ILIKE '%' || p_search || '%'
+          )
+          AND (
+              p_before_at IS NULL
+              OR (occurred_at, event_id) < (
+                  p_before_at,
+                  COALESCE(p_before_id, repeat('~', 128))
+              )
+          )
+        ORDER BY occurred_at DESC, event_id DESC
+        LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1
+    )
+    UNION ALL
+    (
+        SELECT * FROM recovery_events
+        WHERE (p_severity IS NULL OR severity = p_severity)
+          AND (p_component IS NULL OR component = p_component)
+          AND (
+              p_search IS NULL
+              OR event_id ILIKE '%' || p_search || '%'
+              OR event_code ILIKE '%' || p_search || '%'
+              OR affected_id ILIKE '%' || p_search || '%'
+              OR COALESCE(job_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(dag_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(run_attempt_id::TEXT, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(executor, '') ILIKE '%' || p_search || '%'
+              OR COALESCE(gateway_instance_id, '') ILIKE '%' || p_search || '%'
+          )
+          AND (
+              p_before_at IS NULL
+              OR (occurred_at, event_id) < (
+                  p_before_at,
+                  COALESCE(p_before_id, repeat('~', 128))
+              )
+          )
+        ORDER BY occurred_at DESC, event_id DESC
+        LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1
+    )
 )
 SELECT *
-FROM filtered
+FROM candidates
 ORDER BY occurred_at DESC, event_id DESC
 LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1;
 $function$;

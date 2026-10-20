@@ -276,9 +276,7 @@ async def test_execution_history_returns_paged_structured_worker_errors() -> Non
         "total": 73,
         "has_next": True,
     }
-    assert history["scope"]["dag_id"] == (
-        "92a69f16-ceb6-7c75-8000-37d2d2acb56e"
-    )
+    assert history["scope"]["dag_id"] == ("92a69f16-ceb6-7c75-8000-37d2d2acb56e")
     assert history["items"][0]["error"] == {
         "type": "RuntimeError",
         "message": "Worker process stopped",
@@ -349,7 +347,9 @@ async def test_operational_dags_use_database_rollups_and_pagination() -> None:
 
 
 @pytest.mark.asyncio
-async def test_operational_dag_detail_keeps_rollup_and_bounded_job_page_separate() -> None:
+async def test_operational_dag_detail_keeps_rollup_and_bounded_job_page_separate() -> (
+    None
+):
     connection = OperationalConnection(
         fetchrow=[dag_detail_row()],
         fetch=[[(4, []) + job_row()]],
@@ -649,7 +649,7 @@ async def test_operational_database_health_exposes_aggregates_only() -> None:
 
     health = await repository(connection).get_operational_database_health()
 
-    assert health["schema_version"] == 95
+    assert health["schema_version"] == 96
     assert health["pool"] == {
         "minimum": 1,
         "maximum": 20,

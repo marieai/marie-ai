@@ -61,8 +61,7 @@ async def test_select_ready_owns_snapshot_rank_cap_and_take() -> None:
         take=AsyncMock(return_value=[jobs[0], jobs[2], jobs[3]]),
     )
     engine = InMemorySchedulingEngine(
-        frontier,
-        sla_priority_interval_seconds=60,
+        frontier, sla_priority_interval_seconds=60, subscribed_queues=None
     )
 
     result = await engine.select_ready(
@@ -132,8 +131,7 @@ async def test_select_ready_traces_actual_phase_boundaries(
         trace,
     )
     engine = InMemorySchedulingEngine(
-        frontier,
-        sla_priority_interval_seconds=60,
+        frontier, sla_priority_interval_seconds=60, subscribed_queues=None
     )
 
     await engine.select_ready(
@@ -200,8 +198,7 @@ async def test_select_ready_reports_requested_and_selected_after_take_loss() -> 
         take=AsyncMock(return_value=[second]),
     )
     engine = InMemorySchedulingEngine(
-        frontier,
-        sla_priority_interval_seconds=60,
+        frontier, sla_priority_interval_seconds=60, subscribed_queues=None
     )
 
     result = await engine.select_ready(
@@ -224,8 +221,7 @@ async def test_select_ready_skips_regular_capture_without_executor_capacity() ->
         take=AsyncMock(),
     )
     engine = InMemorySchedulingEngine(
-        frontier,
-        sla_priority_interval_seconds=60,
+        frontier, sla_priority_interval_seconds=60, subscribed_queues=None
     )
 
     result = await engine.select_ready(

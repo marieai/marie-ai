@@ -7,6 +7,7 @@ from typing import Any
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.services.dag_submission_service import DagSubmissionService
+from marie.scheduler.util import validate_queue_scope
 
 
 class SchedulerDiagnostics:
@@ -21,6 +22,7 @@ class SchedulerDiagnostics:
         event_queue: asyncio.Queue[Any],
         active_dags: dict[str, Any],
         known_queues: set[str],
+        subscribed_queues: frozenset[str] | None,
         scheduling_engine: Any,
         gateway_instance_id: str,
         lease_owner: str,
@@ -36,6 +38,8 @@ class SchedulerDiagnostics:
         self.event_queue = event_queue
         self.active_dags = active_dags
         self.known_queues = known_queues
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self.scheduling_engine = scheduling_engine
         self.gateway_instance_id = gateway_instance_id
         self.lease_owner = lease_owner
@@ -220,6 +224,14 @@ class SchedulerDiagnostics:
                 'scheduler_lease_owner': self.lease_owner,
                 'max_concurrent_dags': self.max_concurrent_dags,
                 'known_queues': list(self.known_queues),
+                "queue_scope": (
+                    "all" if self.subscribed_queues is None else "restricted"
+                ),
+                "subscribed_queues": (
+                    None
+                    if self.subscribed_queues is None
+                    else sorted(self.subscribed_queues)
+                ),
                 'active_dags_count': len(self.active_dags),
             },
             'timing_info': {

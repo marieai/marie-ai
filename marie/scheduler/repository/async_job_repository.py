@@ -32,6 +32,7 @@ from marie.scheduler.repository.plans import (
     count_dag_states,
     count_job_states,
     create_queue,
+    dag_queue_predicate,
     fail_jobs_by_attempt,
     fail_jobs_by_id,
     insert_dag,
@@ -46,12 +47,13 @@ from marie.scheduler.repository.plans import (
 )
 from marie.scheduler.search_documents import build_job_search_documents
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import validate_queue_scope
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-SCHEDULER_SCHEMA_VERSION = 95
+SCHEDULER_SCHEMA_VERSION = 96
 
 _WORK_INFO_COLUMNS = (
     "id, name, priority, state, retry_limit, start_after, "
@@ -243,8 +245,8 @@ class AsyncJobRepository:
         if state_values:
             where.append(f"state = ANY(%s::{DEFAULT_SCHEMA}.job_state[])")
             params.append(state_values)
-        where_sql = "WHERE " + " AND ".join(where) if where else ""
-        limit_sql = "LIMIT %s" if limit > 0 else ""
+        where_sql = "WHERE " + " AND ".join(where) if where else ''
+        limit_sql = "LIMIT %s" if limit > 0 else ''
         if limit > 0:
             params.append(limit)
         query = f"""
@@ -712,9 +714,9 @@ class AsyncJobRepository:
                 "ready": ready,
                 "active": int(row[8]),
                 "oldest_ready_seconds": self._optional_float(row[9]),
-                "drain_seconds": ready / -delta_rate
-                if delta_rate < 0 and ready
-                else None,
+                "drain_seconds": (
+                    ready / -delta_rate if delta_rate < 0 and ready else None
+                ),
             },
             "stages": [
                 self._flow_stage("ready_to_running", row[10], row[11], row[12]),
@@ -738,7 +740,7 @@ class AsyncJobRepository:
             "reachable": True,
             "latency_ms": (time.perf_counter() - started) * 1_000.0,
             "schema_version": SCHEDULER_SCHEMA_VERSION,
-            "pool": {
+            'pool': {
                 "minimum": stats.get("pool_min"),
                 "maximum": stats.get("pool_max"),
                 "size": stats.get("pool_size"),
@@ -794,7 +796,7 @@ class AsyncJobRepository:
         dag_attention = self._operational_dag_attention_sql()
         if attention != "any":
             where.append(dag_attention[attention])
-        where_sql = "WHERE " + " AND ".join(where) if where else ""
+        where_sql = "WHERE " + " AND ".join(where) if where else ''
         cte = self._operational_dag_stats_cte()
         from_sql = f"""
             FROM {DEFAULT_SCHEMA}.dag AS d
@@ -1469,14 +1471,14 @@ class AsyncJobRepository:
     async def create_job(self, work_info: WorkInfo) -> bool:
         try:
             async with self._pool.acquire() as conn:
-                await conn.execute(
+                row = await conn.fetchrow(
                     insert_jobs(DEFAULT_SCHEMA),
                     Jsonb([work_info.model_dump(mode="json")]),
                 )
         except Exception as error:
             self.logger.error(f"Error creating job: {error}")
             return False
-        return True
+        return row is not None
 
     async def delete_job(self, job_id: str) -> bool:
         async with self._pool.acquire() as conn:
@@ -1680,11 +1682,13 @@ class AsyncJobRepository:
     async def discover_admission_candidates(
         self,
         *,
+        subscribed_queues: frozenset[str] | None,
         limit: int,
         sla_interval_seconds: int,
         excluded_dag_ids: Sequence[str] = (),
     ) -> List[Tuple[str, Dict]]:
         """Return eligible DAGs in durable admission order."""
+        validate_queue_scope(subscribed_queues)
         if limit <= 0:
             return []
         async with self._pool.acquire() as conn:
@@ -1692,6 +1696,7 @@ class AsyncJobRepository:
                 f"""
                 SELECT candidate.dag_id, candidate.serialized_dag
                 FROM {DEFAULT_SCHEMA}.admission_candidate_dags(
+                    %s::text[],
                     %s,
                     %s,
                     %s::uuid[]
@@ -1702,20 +1707,32 @@ class AsyncJobRepository:
                 )
                 ORDER BY candidate.admission_rank
                 """,
+                None if subscribed_queues is None else sorted(subscribed_queues),
                 limit,
                 max(1, int(sla_interval_seconds)),
                 list(excluded_dag_ids),
             )
         return [(str(row[0]), row[1]) for row in rows]
 
-    async def load_hydratable_jobs(self, dag_ids: List[str]) -> List[Tuple[str, Dict]]:
+    async def load_hydratable_jobs(
+        self, dag_ids: List[str], *, subscribed_queues: frozenset[str] | None
+    ) -> List[Tuple[str, Dict]]:
+        scope = dag_queue_predicate(DEFAULT_SCHEMA, "d", subscribed_queues)
         if not dag_ids:
             return []
+        requested_ids = (
+            "%s::uuid[]"
+            if subscribed_queues is None
+            else f"""ARRAY(
+            SELECT d.id FROM {DEFAULT_SCHEMA}.dag d
+            WHERE d.id = ANY(%s::uuid[]) AND ({scope})
+        )"""
+        )
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT dag_id, job
-                FROM {DEFAULT_SCHEMA}.hydrate_frontier_jobs(%s::uuid[])
+                FROM {DEFAULT_SCHEMA}.hydrate_frontier_jobs({requested_ids})
                 """,
                 dag_ids,
             )
@@ -1740,8 +1757,9 @@ class AsyncJobRepository:
         return now + timedelta(seconds=delay + delay * random.random())
 
     async def recover_expired_run_leases(
-        self, limit: int = 1000
+        self, *, subscribed_queues: frozenset[str] | None, limit: int = 1000
     ) -> list[RecoveredRunLease]:
+        validate_queue_scope(subscribed_queues)
         recovered: list[RecoveredRunLease] = []
         async with self._pool.acquire() as conn:
             async with conn.transaction():
@@ -1750,8 +1768,9 @@ class AsyncJobRepository:
                     SELECT id, name, dag_id, previous_state, retry_count,
                            retry_limit, retry_delay, retry_backoff, start_after,
                            run_owner, run_attempt_id, run_lease_expires_at
-                    FROM {DEFAULT_SCHEMA}.claim_expired_run_leases(%s)
+                    FROM {DEFAULT_SCHEMA}.claim_expired_run_leases(%s::text[], %s)
                     """,
+                    None if subscribed_queues is None else sorted(subscribed_queues),
                     int(limit),
                 )
                 for row in rows:
@@ -1848,15 +1867,17 @@ class AsyncJobRepository:
         return recovered
 
     async def load_dag_and_jobs(
-        self, dag_id: str
+        self, dag_id: str, *, subscribed_queues: frozenset[str] | None
     ) -> Tuple[Optional[Dict], List[Tuple[str, Dict]]]:
+        scope = dag_queue_predicate(DEFAULT_SCHEMA, "d", subscribed_queues)
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 dag_row = await conn.fetchrow(
                     f"""
-                    SELECT dag_id, serialized_dag
-                    FROM {DEFAULT_SCHEMA}.hydrate_frontier_dags()
-                    WHERE dag_id = %s::uuid
+                    SELECT h.dag_id, h.serialized_dag
+                    FROM {DEFAULT_SCHEMA}.hydrate_frontier_dags() h
+                    JOIN {DEFAULT_SCHEMA}.dag d ON d.id = h.dag_id
+                    WHERE d.id = %s::uuid AND ({scope})
                     """,
                     dag_id,
                 )
@@ -1873,9 +1894,32 @@ class AsyncJobRepository:
                 )
         return dag_row[1], [(str(row[0]), row[1]) for row in rows]
 
-    async def mark_dag_as_active(self, dag_id: str) -> bool:
+    async def get_dag_queue_identity(
+        self, dag_id: str
+    ) -> tuple[str | None, bool] | None:
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(mark_as_active_dags(DEFAULT_SCHEMA, [dag_id]))
+            row = await conn.fetchrow(
+                f"""
+                SELECT d.submission_name,
+                    COALESCE(d.submission_name <> '', false)
+                    AND EXISTS (SELECT 1 FROM {DEFAULT_SCHEMA}.job child WHERE child.dag_id=d.id)
+                    AND NOT EXISTS (SELECT 1 FROM {DEFAULT_SCHEMA}.job child
+                        WHERE child.dag_id=d.id AND child.name IS DISTINCT FROM d.submission_name)
+                FROM {DEFAULT_SCHEMA}.dag d WHERE d.id=%s::uuid
+            """,
+                dag_id,
+            )
+        return (row[0], bool(row[1])) if row else None
+
+    async def mark_dag_as_active(
+        self, dag_id: str, *, subscribed_queues: frozenset[str] | None
+    ) -> bool:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                mark_as_active_dags(
+                    DEFAULT_SCHEMA, [dag_id], subscribed_queues=subscribed_queues
+                )
+            )
         return bool(rows)
 
     async def lease_jobs(
@@ -2853,6 +2897,13 @@ class AsyncJobRepository:
         work_info: WorkInfo,
         llm_routes: Sequence[PlannedLlmRoute] = (),
     ) -> Tuple[bool, Optional[str]]:
+        if not work_info.name or not dag_nodes:
+            raise ValueError("A DAG requires a nonempty submission queue and children")
+        if any(
+            str(node.dag_id) != str(dag_id) or node.name != work_info.name
+            for node in dag_nodes
+        ):
+            raise ValueError("Every child must match the submitted DAG ID and queue")
         dag_name = f"{dag_id}_dag"
         metadata = work_info.data.get("metadata", {})
         planner = metadata.get("planner")
@@ -2863,7 +2914,7 @@ class AsyncJobRepository:
         routed_ids = {record['work_unit_id'] for record in route_records}
         serialized_nodes = []
         for node in dag_nodes:
-            payload = node.model_dump(mode='json')
+            payload = node.model_dump(mode="json")
             payload['llm_routing_ready'] = node.id not in routed_ids
             serialized_nodes.append(payload)
         async with self._pool.acquire() as conn:
@@ -2922,7 +2973,7 @@ class AsyncJobRepository:
             return None
         names = (
             'work_unit_id',
-            'job_id',
+            "job_id",
             'fabric_group_id',
             'policy_generation',
             'policy_digest',
@@ -3037,7 +3088,7 @@ class AsyncJobRepository:
                 {
                     'pool_id': str(row[0]),
                     'accepted': int(row[1]),
-                    'completed': int(row[2]),
+                    "completed": int(row[2]),
                     'projection_pending': int(row[3]),
                     'drain_references': int(row[4]),
                 }
@@ -3047,7 +3098,7 @@ class AsyncJobRepository:
             'pools_truncated': len(rows) > limit,
             'recent_routes': [
                 {
-                    'job_id': str(row[0]),
+                    "job_id": str(row[0]),
                     'work_unit_id': str(row[1]),
                     'policy_generation': int(row[2]),
                     'policy_digest': str(row[3]),
@@ -3158,10 +3209,10 @@ class AsyncJobRepository:
                 {
                     'pool_id': rule['pool_id'],
                     'enabled': rule['enabled'],
-                    'metadata': {
+                    "metadata": {
                         'admission': rule['admission'],
                         'llm_dispatch': {
-                            'schema_version': 1,
+                            "schema_version": 1,
                             'endpoint_id': lane.get('endpoint_group_id')
                             or lane['endpoint_id'],
                             'revision': lane['revision'],
@@ -3199,26 +3250,26 @@ class AsyncJobRepository:
         if row is None:
             return None
         names = (
-            'id',
+            "id",
             'submission_id',
             'file_name',
             'file_size',
             'content_type',
             'storage_key',
-            'status',
+            "status",
             'page_count',
             'document_type',
             'error_message',
             'confidence_score',
             'extracted_fields',
-            'dag_id',
-            'job_id',
+            "dag_id",
+            "job_id",
             'hitl_request_id',
             'indexing_status',
             'indexing_error',
             'indexed_at',
-            'created_at',
-            'updated_at',
+            "created_at",
+            "updated_at",
         )
         return SubmissionDocument.from_row(dict(zip(names, row, strict=True)))
 
@@ -3253,7 +3304,7 @@ class AsyncJobRepository:
                     lease_seconds,
                 )
         names = (
-            'event_id',
+            "event_id",
             'work_unit_id',
             'route_digest',
             'payload',
@@ -3370,7 +3421,7 @@ class AsyncJobRepository:
                 or route.work_unit_id in seen
             ):
                 raise ValueError('routing_manifest_invalid')
-            payload = route.model_dump(mode='json')
+            payload = route.model_dump(mode="json")
             route_digest = _routing_digest(payload)
             records.append(
                 {
@@ -3868,7 +3919,7 @@ class AsyncJobRepository:
                         "project_id",
                         "ref_type",
                         "ref_id",
-                        "policy",
+                        'policy',
                         "task_count",
                     ],
                 ),
@@ -3876,8 +3927,23 @@ class AsyncJobRepository:
             ),
             (
                 "SELECT to_regprocedure(%s) IS NOT NULL",
-                (f"{schema}.admission_candidate_dags(integer,integer,uuid[])",),
+                (f"{schema}.admission_candidate_dags(text[],integer,integer,uuid[])",),
                 f"{schema}.admission_candidate_dags is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NULL",
+                (f"{schema}.admission_candidate_dags(integer,integer,uuid[])",),
+                f"{schema}.admission_candidate_dags retired signature is present",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.claim_expired_run_leases(text[],integer)",),
+                f"{schema}.claim_expired_run_leases is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NULL",
+                (f"{schema}.claim_expired_run_leases(integer)",),
+                f"{schema}.claim_expired_run_leases retired signature is present",
             ),
             (
                 "SELECT to_regprocedure(%s) IS NOT NULL",

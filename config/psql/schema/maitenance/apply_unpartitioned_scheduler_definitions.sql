@@ -1,3 +1,5 @@
+-- PRE-CUTOVER ONLY: recreates retired unscoped signatures. Do not run against
+-- schema version 96 or newer. New readiness checks reject these restored overloads.
 -- Reconcile scheduler functions and indexes after the partitioned-to-
 -- unpartitioned job-table cutover.
 --

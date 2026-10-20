@@ -105,7 +105,7 @@ with:
     run_lease_renewal_interval_seconds: 20
     max_pool_size: 5
     max_connections: 5
-    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench] # Queue names for the job scheduler to monitor
+    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench,kb_indexing] # Consumer subscriptions; omit to consume all queues
 
     # DAG Concurrency Management
     dag_manager:

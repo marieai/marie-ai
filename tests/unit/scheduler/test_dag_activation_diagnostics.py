@@ -10,6 +10,7 @@ from marie.scheduler.services.dag_management_service import DAGManagementService
 @pytest.mark.asyncio
 async def test_hydrated_dag_activation_failure_logs_database_reason() -> None:
     service = DAGManagementService.__new__(DAGManagementService)
+    service.subscribed_queues = None
     service._admission_lock = asyncio.Lock()
     service.active_dags = {}
     service.max_active_dags = 10
@@ -58,6 +59,7 @@ async def test_terminal_dag_resolution_traces_lock_wait(monkeypatch) -> None:
         repository=repository,
         frontier=MagicMock(),
         active_dags={},
+        subscribed_queues=None,
     )
     trace = MagicMock()
     monkeypatch.setattr(

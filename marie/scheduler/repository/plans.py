@@ -4,6 +4,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import validate_queue_scope
 
 
 def try_set_maintenance_time(schema: str, maintenance_state_interval_seconds: int):
@@ -115,6 +116,8 @@ def insert_jobs(schema: str) -> str:
             COALESCE(job.llm_routing_ready, true)
         FROM jobs job
         JOIN {schema}.queue queue ON job.name = queue.name
+        JOIN {schema}.dag parent ON parent.id = job.dag_id
+            AND parent.submission_name = job.name AND parent.submission_name <> ''
         ON CONFLICT DO NOTHING
         RETURNING id
     """
@@ -426,15 +429,40 @@ def mark_as_active_jobs(
     """
 
 
-def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
+def dag_queue_predicate(
+    schema: str, alias: str, subscribed_queues: frozenset[str] | None
+) -> str:
+    """Build the shared restricted-consumer predicate for a durable DAG."""
+    validate_queue_scope(subscribed_queues)
+    if subscribed_queues is None:
+        return "TRUE"
+    queues = ",".join(_literal(name) for name in sorted(subscribed_queues))
+    return f"""{alias}.submission_name = ANY(ARRAY[{queues}]::text[])
+        AND EXISTS (SELECT 1 FROM {schema}.job child WHERE child.dag_id = {alias}.id)
+        AND NOT EXISTS (
+            SELECT 1 FROM {schema}.job mismatch
+            WHERE mismatch.dag_id = {alias}.id
+              AND mismatch.name IS DISTINCT FROM {alias}.submission_name
+        )"""
+
+
+def mark_as_active_dags(
+    schema: str,
+    ids: list,
+    include_metadata: bool = False,
+    *,
+    subscribed_queues: frozenset[str] | None,
+) -> str:
     ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
+    scope = dag_queue_predicate(schema, "dag", subscribed_queues)
 
     return f"""
     WITH next AS (
-        SELECT id
-        FROM {schema}.dag
+        SELECT dag.id
+        FROM {schema}.dag dag
         WHERE id IN (SELECT UNNEST({ids_string}::uuid[]))
           AND state IN ('{WorkState.CREATED.value}', '{WorkState.ACTIVE.value}')
+          AND ({scope})
         FOR UPDATE
     )
     UPDATE {schema}.dag j SET

@@ -112,6 +112,23 @@ def frontier_slot_filter(
     return _eligible
 
 
+def validate_queue_scope(subscribed_queues: frozenset[str] | None) -> None:
+    """Require an explicit all-queues value or a nonempty fixed subscription."""
+    if subscribed_queues is not None and (
+        not isinstance(subscribed_queues, frozenset)
+        or not subscribed_queues
+        or any(not isinstance(name, str) or not name for name in subscribed_queues)
+    ):
+        raise ValueError(
+            "subscribed_queues must be None or a nonempty frozenset of queue names"
+        )
+
+
+def queue_is_subscribed(name: str, subscribed_queues: frozenset[str] | None) -> bool:
+    """Check a concrete job queue against the fixed consumer scope."""
+    return bool(name) and (subscribed_queues is None or name in subscribed_queues)
+
+
 def ordered_leased_jobs(
     planned: Sequence[tuple[str, object]], leased_ids: set[str]
 ) -> list[tuple[str, object]]:

@@ -222,6 +222,7 @@ def build_work_item() -> WorkInfo:
 
 def build_scheduler_for_enqueue(job_manager: Any) -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler.job_manager = job_manager
     scheduler.run_ttl_seconds = 5
@@ -259,6 +260,7 @@ async def test_late_confirmation_reproduces_false_dispatch_cleanup_race() -> Non
     semaphore_store = RecordingSemaphoreStore()
     frontier = SimpleNamespace(release_lease_local=AsyncMock())
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler.repository = repository
     scheduler.job_manager = job_manager

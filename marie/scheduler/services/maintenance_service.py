@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from marie.logging_core.logger import MarieLogger
 from marie.scheduler.models import RecoveredRunLease
 from marie.scheduler.repository import JobRepository
+from marie.scheduler.util import validate_queue_scope
 
 
 class MaintenanceService:
@@ -17,6 +18,8 @@ class MaintenanceService:
             Callable[[list[RecoveredRunLease]], Awaitable[None]]
         ] = None,
         maintenance_interval: int = 60,  # seconds
+        *,
+        subscribed_queues: frozenset[str] | None,
     ) -> None:
         """
         Initialize the maintenance service.
@@ -27,6 +30,8 @@ class MaintenanceService:
         """
         self.logger = MarieLogger(MaintenanceService.__name__)
         self.repository = repository
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self._notify_callback = notify_callback
         self._recovery_callback = recovery_callback
         self.maintenance_interval = maintenance_interval
@@ -51,8 +56,11 @@ class MaintenanceService:
         """
         self.logger.debug("Checking for expired job leases")
 
+        # Acquisition-marker cleanup is global and never supplies local work.
         released_count = await self.repository.release_expired_leases()
-        recovered = await self.repository.recover_expired_run_leases()
+        recovered = await self.repository.recover_expired_run_leases(
+            subscribed_queues=self.subscribed_queues
+        )
         recovered_retry_count = sum(
             1 for row in recovered if row.recovered_state == "retry"
         )

@@ -21,6 +21,7 @@ async def _wait_forever() -> None:
 
 def _scheduler_for_stop() -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler.running = True
     scheduler._resources_closed = False
@@ -50,6 +51,7 @@ def _scheduler_for_stop() -> PostgreSQLJobScheduler:
 
 def _scheduler_for_start() -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler.running = False
     scheduler._resources_closed = False
@@ -426,6 +428,7 @@ async def test_stop_keeps_unresolved_dispatch_attempt_fenced() -> None:
 @pytest.mark.asyncio
 async def test_start_reopens_resources_once_after_stop() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler.running = False
     scheduler._resources_closed = True
@@ -453,6 +456,7 @@ async def test_start_reopens_resources_once_after_stop() -> None:
 @pytest.mark.asyncio
 async def test_stopped_scheduler_rejects_submissions() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.running = False
     scheduler.submission_service = SimpleNamespace(
         submit=AsyncMock(side_effect=RuntimeError("Job scheduler is not running"))
@@ -465,27 +469,28 @@ async def test_stopped_scheduler_rejects_submissions() -> None:
 @pytest.mark.asyncio
 async def test_running_scheduler_handles_job_events_from_publisher() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.running = True
     scheduler.logger = MagicMock()
-    work_item = SimpleNamespace(id='job-1', dag_id='dag-1')
+    work_item = SimpleNamespace(id="job-1", dag_id="dag-1")
     scheduler.get_job = AsyncMock(return_value=work_item)
     scheduler.attempt_lifecycle_service = SimpleNamespace(
         transition_terminal=AsyncMock()
     )
     message = {
-        'job_id': 'job-1',
+        'job_id': "job-1",
         'run_owner': 'worker-1',
-        'run_attempt_id': 'attempt-1',
+        'run_attempt_id': "attempt-1",
     }
 
     await scheduler.handle_job_event(JobStatus.SUCCEEDED.value, message)
 
     scheduler.attempt_lifecycle_service.transition_terminal.assert_awaited_once_with(
-        'job-1',
+        "job-1",
         work_item,
         JobStatus.SUCCEEDED,
         run_owner='worker-1',
-        run_attempt_id='attempt-1',
+        run_attempt_id="attempt-1",
         source='job_event',
         message=None,
         runtime_env=None,
@@ -497,11 +502,12 @@ async def test_keyed_publisher_delivers_pending_running_terminal_in_order(
     monkeypatch,
 ) -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.running = True
     scheduler.logger = MagicMock()
     work_item = SimpleNamespace(
-        id='job-1',
-        dag_id='dag-1',
+        id="job-1",
+        dag_id="dag-1",
         state=WorkState.CREATED,
         run_owner=None,
         run_attempt_id=None,
@@ -546,9 +552,9 @@ async def test_keyed_publisher_delivers_pending_running_terminal_in_order(
         scheduler.handle_job_event,
     )
     event = {
-        'job_id': 'job-1',
+        'job_id': "job-1",
         'run_owner': 'worker-1',
-        'run_attempt_id': 'attempt-1',
+        'run_attempt_id': "attempt-1",
     }
     try:
         await publisher.publish(JobStatus.PENDING, event)
@@ -561,12 +567,13 @@ async def test_keyed_publisher_delivers_pending_running_terminal_in_order(
     assert received == ['PENDING', 'RUNNING', 'SUCCEEDED']
     assert observed == ['RUNNING', 'SUCCEEDED']
     scheduler.frontier.update_job_state.assert_awaited_once_with(
-        'job-1', WorkState.ACTIVE
+        "job-1", WorkState.ACTIVE
     )
 
 
 def test_event_subscriptions_are_idempotent() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     publisher = SimpleNamespace(subscribe=MagicMock(), unsubscribe=MagicMock())
     scheduler.job_manager = SimpleNamespace(event_publisher=publisher)
     scheduler._event_subscriptions_active = False
@@ -611,6 +618,7 @@ async def test_job_repository_close_is_idempotent() -> None:
 @pytest.mark.asyncio
 async def test_close_runtime_resources_closes_async_pool() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = MagicMock()
     scheduler._resources_closed = False
     scheduler.repository = SimpleNamespace(close=AsyncMock())
@@ -625,6 +633,7 @@ async def test_close_runtime_resources_closes_async_pool() -> None:
 
 def test_scheduler_services_rebuild_with_current_runtime_resources() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.runtime = SchedulerRuntime(MagicMock())
     scheduler.repository = MagicMock()
     scheduler.frontier = MagicMock()
@@ -632,7 +641,7 @@ def test_scheduler_services_rebuild_with_current_runtime_resources() -> None:
     scheduler._status_update_lock = AsyncJobLock()
     scheduler._topology_cache = DagTopologyCache()
     scheduler._job_cache = {}
-    scheduler.lease_owner = 'scheduler-1'
+    scheduler.lease_owner = "scheduler-1"
     scheduler.run_ttl_seconds = 60
     scheduler.gateway_instance_id = 'gateway-1'
     scheduler.notify_event = AsyncMock(return_value=True)

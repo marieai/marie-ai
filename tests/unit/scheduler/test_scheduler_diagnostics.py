@@ -32,7 +32,8 @@ async def test_execution_history_passes_bounded_scope_to_repository() -> None:
 
 
 @pytest.mark.asyncio
-async def test_diagnostics_collects_component_owned_runtime_state() -> None:
+@pytest.mark.parametrize("scope", [None, frozenset({'extract'})])
+async def test_diagnostics_collects_component_owned_runtime_state(scope) -> None:
     repository = SimpleNamespace(
         count_job_states=AsyncMock(return_value={'created': 2}),
         count_dag_states=AsyncMock(return_value={'active': 1}),
@@ -61,7 +62,9 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
         sla_warning_top_n=5,
         frontier_batch_size=100,
         lease_ttl_seconds=5,
+        subscribed_queues=scope,
     )
+    diagnostics.known_queues.add("foreign")
 
     snapshot = await diagnostics.snapshot(
         running=True,
@@ -82,6 +85,13 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
         'latency_ms': {'p95': 4.2},
     }
     assert 'scheduler_mode' not in snapshot['scheduler_info']
+    assert snapshot['scheduler_info']["queue_scope"] == (
+        "all" if scope is None else "restricted"
+    )
+    assert snapshot['scheduler_info']["subscribed_queues"] == (
+        None if scope is None else ['extract']
+    )
+    assert set(snapshot['scheduler_info']["known_queues"]) == {'extract', "foreign"}
     assert snapshot['job_state_counts'] == {'created': 2}
     assert snapshot['dag_state_counts'] == {'active': 1}
     assert snapshot['frontier_summary'] == {'totals': {'jobs': 2}}
@@ -91,6 +101,7 @@ async def test_diagnostics_collects_component_owned_runtime_state() -> None:
 @pytest.mark.asyncio
 async def test_scheduler_debug_info_reports_dispatch_pressure() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.running = True
     scheduler._paused = False
     scheduler._fetch_counter = 9

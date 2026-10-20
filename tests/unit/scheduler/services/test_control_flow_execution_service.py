@@ -40,6 +40,7 @@ def build_service() -> ControlFlowExecutionService:
         gateway_instance_id='gateway-1',
         notify_callback=AsyncMock(return_value=True),
         runtime=SchedulerRuntime(MarieLogger('control-flow-test')),
+        subscribed_queues=None,
     )
 
 
@@ -69,6 +70,31 @@ async def test_process_node_returns_completed_after_durable_completion() -> None
     assert outcome is ControlFlowExecutionOutcome.COMPLETED
     service.frontier.on_job_completed.assert_awaited_once_with('noop')
     service._notify_callback.assert_awaited_once_with()
+
+
+@pytest.mark.parametrize('batch', [False, True])
+async def test_foreign_active_control_flow_is_refused_without_side_effects(
+    batch: bool,
+) -> None:
+    service = build_service()
+    service.subscribed_queues = frozenset({"kb_indexing"})
+    service.dag_service.active_dags = {'dag-1': object()}
+    service._activate = AsyncMock(return_value=True)
+    service._activate_nodes = AsyncMock(return_value=([], {}))
+    item = work_item("foreign")
+    if batch:
+        assert await service.process_nodes([item]) == [
+            ControlFlowExecutionOutcome.ADMISSION_REFUSED
+        ]
+    else:
+        assert (
+            await service.process_node(item)
+            is ControlFlowExecutionOutcome.ADMISSION_REFUSED
+        )
+    service._activate.assert_not_awaited()
+    service._activate_nodes.assert_not_awaited()
+    service.repository.release_lease.assert_not_awaited()
+    service.repository.fail_jobs.assert_not_awaited()
 
 
 async def test_process_node_returns_cleaned_up_when_dag_is_missing() -> None:
@@ -352,9 +378,9 @@ async def build_routing_service(
             Query(
                 task_id='route',
                 query_str='route',
-                node_type=QueryType.BRANCH
-                if node_type == 'branch'
-                else QueryType.SWITCH,
+                node_type=(
+                    QueryType.BRANCH if node_type == 'branch' else QueryType.SWITCH
+                ),
                 definition=definition,
             ),
             Query(task_id='selected', query_str='selected', dependencies=['route']),

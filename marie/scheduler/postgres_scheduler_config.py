@@ -66,7 +66,7 @@ _ALLOWED_DAG_MANAGER_KEYS = frozenset(
 class PostgreSQLSchedulerConfig:
     """Validated runtime settings for the PostgreSQL scheduler."""
 
-    queue_names: frozenset[str]
+    queue_names: frozenset[str] | None
     job_event_worker_count: int
     job_event_queue_size: int
     dispatch_confirmation_max_in_flight: int
@@ -105,17 +105,17 @@ class PostgreSQLSchedulerConfig:
                 'Unknown scheduler configuration keys: ' + ', '.join(unknown_keys)
             )
 
-        if 'queue_names' not in config:
-            raise BadConfigSource('Missing required config: queue_names')
-
-        queue_names = config.get('queue_names')
-        if not isinstance(queue_names, (list, tuple, set, frozenset)):
-            raise BadConfigSource('queue_names must be a non-empty collection')
-        if not all(isinstance(name, str) and name for name in queue_names):
-            raise BadConfigSource('queue_names must contain non-empty strings')
-        normalized_queues = frozenset(queue_names)
-        if not normalized_queues:
-            raise BadConfigSource('Queue names are required for JobScheduler')
+        normalized_queues = None
+        if 'queue_names' in config:
+            queue_names = config['queue_names']
+            if (
+                not isinstance(queue_names, (list, tuple, set, frozenset))
+                or not queue_names
+            ):
+                raise BadConfigSource('queue_names must be a non-empty collection')
+            if not all(isinstance(name, str) and name for name in queue_names):
+                raise BadConfigSource('queue_names must contain non-empty strings')
+            normalized_queues = frozenset(queue_names)
 
         dag_config = config.get('dag_manager', {})
         if not isinstance(dag_config, Mapping):
