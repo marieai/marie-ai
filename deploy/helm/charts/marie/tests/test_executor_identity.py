@@ -1,243 +1,174 @@
 from __future__ import annotations
 
+import hashlib
 import json
-import subprocess
 import unittest
-from pathlib import Path
 
 import test_executor_compute as compute
 import yaml
 
-FIXTURE = Path(__file__).with_name('executor-headless-identities.json')
 HOSTED_NAMESPACE = 'sbx-550e8400-e29b-41d4-a716-446655440000-a1b2c3'
+
+
+def identity(namespace: str, release: str, name: str) -> str:
+    encoded = json.dumps(
+        ['marie.executor-workload', namespace, release, name], separators=(',', ':')
+    )
+    return 'ex-' + hashlib.sha256(encoded.encode()).hexdigest()[:24]
 
 
 class ExecutorIdentityTest(unittest.TestCase):
     def setUp(self) -> None:
         self.chart = compute.ExecutorComputeTest()
 
-    def documents(self, result: subprocess.CompletedProcess[str]) -> list[dict]:
+    def documents(
+        self,
+        pools: list[dict],
+        release: str = 'compute-test',
+        namespace: str | None = None,
+    ) -> list[dict]:
+        result = self.chart.render(pools, release=release, namespace=namespace)
         self.assertEqual(result.returncode, 0, result.stderr)
         return [item for item in yaml.safe_load_all(result.stdout) if item]
 
-    def test_canonical_headless_identity_fixture(self) -> None:
-        for case in json.loads(FIXTURE.read_text()):
-            with self.subTest(case=case['id']):
-                selected = compute.pool(case['pool'], stateful=True)
-                documents = self.documents(
-                    self.chart.render(
-                        [selected],
-                        case['release'],
-                        {'headlessServiceNamingVersion': case['version']},
-                        case['namespace'],
-                    )
-                )
-                stateful = next(
-                    item
-                    for item in documents
-                    if item['kind'] == 'StatefulSet'
-                    and item['metadata']['name'].endswith('-executor-' + case['pool'])
-                )
-                self.assertEqual(
-                    stateful['spec']['serviceName'], case['headlessService']
-                )
-                headless = next(
-                    item
-                    for item in documents
-                    if item['kind'] == 'Service'
-                    and item['metadata']['name'] == case['headlessService']
-                )
-                self.assertEqual(headless['spec']['clusterIP'], 'None')
-                self.assertEqual(
-                    headless['spec']['selector'],
-                    stateful['spec']['selector']['matchLabels'],
-                )
-
-    def test_omitted_version_renders_the_same_manifests_as_explicit_v1(self) -> None:
-        pools = [compute.pool('cpu'), compute.pool('stateful', stateful=True)]
-        default = self.documents(self.chart.render(pools))
-        explicit = self.documents(
-            self.chart.render(
-                pools, executor_values={'headlessServiceNamingVersion': 'v1'}
-            )
-        )
-        self.assertEqual(default, explicit)
-
-    def test_v2_changes_only_the_governing_service_identity(self) -> None:
-        selected = [compute.pool('cpu', stateful=True)]
-        old = self.documents(self.chart.render(selected))
-        new = self.documents(
-            self.chart.render(
-                selected, executor_values={'headlessServiceNamingVersion': 'v2'}
-            )
-        )
-        new_stateful = next(
-            item
-            for item in new
-            if item['kind'] == 'StatefulSet' and 'executor' in item['metadata']['name']
-        )
-        old_stateful = next(
-            item
-            for item in old
-            if item['kind'] == 'StatefulSet' and 'executor' in item['metadata']['name']
-        )
-        new_service_name = new_stateful['spec']['serviceName']
-        old_service_name = old_stateful['spec']['serviceName']
-        self.assertNotEqual(new_service_name, old_service_name)
-        for item in new:
-            if (
-                item['kind'] == 'StatefulSet'
-                and item['metadata']['name'] == new_stateful['metadata']['name']
-            ):
-                item['spec']['serviceName'] = old_service_name
-            if (
-                item['kind'] == 'Service'
-                and item['metadata']['name'] == new_service_name
-            ):
-                item['metadata']['name'] = old_service_name
-        self.assertEqual(
-            old,
-            new,
-            'workload names, selectors, claim templates and all other manifests must remain unchanged',
-        )
-
-    def test_long_namespace_with_short_release_renders_stateful_pools(self) -> None:
-        selected = [
-            compute.pool('cpu', stateful=True),
-            compute.pool('gpu', gpu=True, stateful=True),
+    def test_hosted_mixed_workloads_services_and_self_references(self) -> None:
+        pools = [
+            compute.pool('cpu'),
+            compute.pool('gpu', gpu=True),
+            compute.pool('cpu-state', stateful=True),
+            compute.pool('gpu-state', gpu=True, stateful=True),
         ]
-        documents = self.documents(
-            self.chart.render(
-                selected,
-                'compute-test',
-                {'headlessServiceNamingVersion': 'v2'},
-                HOSTED_NAMESPACE,
-            )
-        )
+        documents = self.documents(pools, HOSTED_NAMESPACE)
         workers = [
             item
             for item in documents
-            if item['kind'] == 'StatefulSet'
-            and '-executor-' in item['metadata']['name']
+            if item['kind'] in ('Deployment', 'StatefulSet')
+            and item['metadata'].get('labels', {}).get('app.kubernetes.io/component')
+            == 'executor'
         ]
-        self.assertEqual(len(workers), 2)
+        self.assertEqual(len(workers), 4)
+        services = {
+            item['metadata']['name']: item
+            for item in documents
+            if item['kind'] == 'Service'
+        }
         for worker in workers:
-            self.assertLessEqual(len(worker['spec']['serviceName']), 63)
-            self.assertLessEqual(len(worker['metadata']['name'] + '-1'), 63)
-            self.assertLessEqual(len(worker['metadata']['name'] + '-4294967295'), 63)
+            pool_name = worker['metadata']['labels']['marie.ai/pool']
+            selected = next(pool for pool in pools if pool['name'] == pool_name)
+            name = identity(HOSTED_NAMESPACE, HOSTED_NAMESPACE, pool_name)
+            self.assertEqual(worker['metadata']['name'], name)
+            self.assertEqual(worker['spec']['replicas'], 2)
+            selector = worker['spec']['selector']['matchLabels']
+            self.assertEqual(selector['app.kubernetes.io/instance'], HOSTED_NAMESPACE)
+            self.assertEqual(selector['marie.ai/pool'], pool_name)
+            self.assertEqual(services[name]['spec']['selector'], selector)
+            pod = worker['spec']['template']
+            for key, value in selector.items():
+                self.assertEqual(pod['metadata']['labels'][key], value)
+            container = pod['spec']['containers'][0]
+            self.assertEqual(container['image'], compute.IMAGE)
+            self.assertEqual(container['resources'], selected['resources'])
+            self.assertEqual(pod['spec']['nodeSelector'], selected['nodeSelector'])
+            self.assertEqual(pod['spec']['tolerations'], selected['tolerations'])
             self.assertEqual(
-                worker['spec']['volumeClaimTemplates'][0]['metadata']['name'], 'data'
+                pod['spec']['runtimeClassName'], selected['runtimeClassName']
+            )
+            self.assertIn({'name': 'PRESERVE', 'value': 'configured'}, container['env'])
+            key = (
+                'K8S_STATEFULSET_NAME'
+                if selected['stateful']
+                else 'K8S_DEPLOYMENT_NAME'
+            )
+            self.assertIn({'name': key, 'value': name}, container['env'])
+            if selected['stateful']:
+                service = name + '-headless'
+                self.assertEqual(worker['spec']['serviceName'], service)
+                self.assertEqual(services[service]['spec']['clusterIP'], 'None')
+                self.assertEqual(services[service]['spec']['selector'], selector)
+                self.assertLessEqual(len(name + '-4294967295'), 63)
+                self.assertLessEqual(len(name + '-9999'), 63)
+                self.assertLessEqual(len(service), 63)
+                self.assertEqual(
+                    worker['spec']['volumeClaimTemplates'][0]['metadata']['name'],
+                    'data',
+                )
+                self.assertLessEqual(len('data-' + name + '-9999'), 253)
+
+    def test_identity_uses_namespace_release_and_complete_pool_name(self) -> None:
+        names = set()
+        for namespace, release, pool_name in [
+            ('one', 'one', 'a'),
+            ('two', 'one', 'a'),
+            ('one', 'two', 'a'),
+            ('one', 'one', 'a-headless'),
+            ('one', 'one', '123'),
+            ('one', 'one', 'x' * 62 + 'a'),
+            ('one', 'one', 'x' * 62 + 'b'),
+        ]:
+            documents = self.documents([compute.pool(pool_name)], release, namespace)
+            worker = next(
+                item
+                for item in documents
+                if item['kind'] == 'Deployment'
+                and item['metadata'].get('labels', {}).get('marie.ai/pool') == pool_name
+            )
+            name = worker['metadata']['name']
+            self.assertEqual(name, identity(namespace, release, pool_name))
+            self.assertNotIn(name, names)
+            names.add(name)
+            self.assertEqual(
+                documents, self.documents([compute.pool(pool_name)], release, namespace)
             )
 
-    def test_v1_keeps_rejecting_unsupported_hosted_stateful_identities(self) -> None:
-        result = self.chart.render(
-            [compute.pool('cpu', stateful=True)], HOSTED_NAMESPACE
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('headless Service name limit', result.stderr)
+    def test_stateful_replicas_require_a_canonical_bounded_count(self) -> None:
+        for replicas in [
+            -1,
+            True,
+            1.5,
+            '00010',
+            '01',
+            '00',
+            10001,
+            'private-invalid-value',
+        ]:
+            with self.subTest(replicas=replicas):
+                selected = {**compute.pool('cpu', stateful=True), 'replicas': replicas}
+                result = self.chart.render([selected])
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('executor identity:', result.stderr)
+                self.assertNotIn('private-invalid-value', result.stderr)
 
-    def test_v2_services_remain_unique_with_former_legacy_suffix_collision(
-        self,
-    ) -> None:
-        pools = [compute.pool('a', stateful=True), compute.pool('a-headless')]
-        for selected in (pools, list(reversed(pools))):
-            with self.subTest(order=[item['name'] for item in selected]):
-                documents = self.documents(
-                    self.chart.render(
-                        selected, executor_values={'headlessServiceNamingVersion': 'v2'}
-                    )
-                )
-                names = [
-                    item['metadata']['name']
-                    for item in documents
-                    if item['kind'] == 'Service'
-                ]
-                self.assertEqual(len(names), len(set(names)))
-
-    def test_v2_zero_default_and_maximum_replica_counts(self) -> None:
-        for replicas in [None, 0, 10000]:
+    def test_zero_default_and_maximum_stateful_replicas(self) -> None:
+        for replicas in [None, 0, 10000, '10000']:
             with self.subTest(replicas=replicas):
                 selected = compute.pool('cpu', stateful=True)
                 if replicas is None:
                     del selected['replicas']
                 else:
                     selected['replicas'] = replicas
-                self.documents(
-                    self.chart.render(
-                        [selected],
-                        executor_values={'headlessServiceNamingVersion': 'v2'},
-                    )
+                documents = self.documents([selected], HOSTED_NAMESPACE)
+                worker = next(
+                    item
+                    for item in documents
+                    if item['kind'] == 'StatefulSet'
+                    and item['metadata'].get('labels', {}).get('marie.ai/pool') == 'cpu'
+                )
+                self.assertEqual(
+                    worker['spec']['replicas'],
+                    None if replicas is None else int(replicas),
                 )
 
-    def test_v2_rejects_hosted_release_names_despite_short_services(self) -> None:
-        for replicas in [1, 100, 101]:
-            with self.subTest(replicas=replicas):
-                selected = {**compute.pool('cpu', stateful=True), 'replicas': replicas}
-                result = self.chart.render(
-                    [selected], HOSTED_NAMESPACE, {'headlessServiceNamingVersion': 'v2'}
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('controller revision label', result.stderr)
-        too_long = self.chart.render(
-            [compute.pool('cpu-long', stateful=True)],
-            HOSTED_NAMESPACE,
-            {'headlessServiceNamingVersion': 'v2'},
-        )
-        self.assertNotEqual(too_long.returncode, 0)
-        self.assertIn('controller revision label', too_long.stderr)
+    def test_render_order_does_not_change_pool_identity(self) -> None:
+        pools = [compute.pool('a', stateful=True), compute.pool('a-headless')]
 
-    def test_unknown_versions_and_invalid_replica_shapes_reject(self) -> None:
-        for version in ['v3', '', 2, False]:
-            with self.subTest(version=version):
-                result = self.chart.render(
-                    [compute.pool('cpu')],
-                    executor_values={'headlessServiceNamingVersion': version},
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('executor identity:', result.stderr)
-        for replicas in [-1, 1.5, True, 'private-invalid-value', 10001]:
-            with self.subTest(replicas=replicas):
-                selected = {**compute.pool('cpu', stateful=True), 'replicas': replicas}
-                result = self.chart.render(
-                    [selected], executor_values={'headlessServiceNamingVersion': 'v2'}
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('executor identity:', result.stderr)
-                self.assertNotIn('private-invalid-value', result.stderr)
+        def services(selected: list[dict]) -> dict:
+            return {
+                item['metadata']['name']: item
+                for item in self.documents(selected)
+                if item['kind'] == 'Service'
+            }
 
-    def test_stateful_names_reserve_the_controller_revision_label_budget(self) -> None:
-        for version in ['v1', 'v2']:
-            for release_length, valid in [(39, True), (40, False)]:
-                with self.subTest(version=version, release_length=release_length):
-                    result = self.chart.render(
-                        [compute.pool('cpu', stateful=True)],
-                        'r' * release_length,
-                        {'headlessServiceNamingVersion': version},
-                    )
-                    self.assertEqual(result.returncode == 0, valid, result.stderr)
-                    if valid:
-                        documents = self.documents(result)
-                        worker = next(
-                            item
-                            for item in documents
-                            if item['kind'] == 'StatefulSet'
-                            and item['metadata']['name'].endswith('-executor-cpu')
-                        )
-                        self.assertLessEqual(
-                            len(worker['metadata']['name'] + '-4294967295'), 63
-                        )
-                    else:
-                        self.assertIn('controller revision label', result.stderr)
-
-    def test_v2_rejects_noncanonical_replica_strings(self) -> None:
-        for replicas in ['00010', '01000', '00', '01']:
-            with self.subTest(replicas=replicas):
-                selected = {**compute.pool('cpu', stateful=True), 'replicas': replicas}
-                result = self.chart.render(
-                    [selected], executor_values={'headlessServiceNamingVersion': 'v2'}
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('executor identity:', result.stderr)
+        self.assertEqual(services(pools), services(list(reversed(pools))))
 
 
 if __name__ == '__main__':

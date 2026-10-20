@@ -16,6 +16,7 @@ class QueryFixture:
     def __init__(self, name: str, password: str, folder: Path) -> None:
         self.name = name
         self.password = password
+        self.system_password = password
         self.folder = folder
 
     def query(
@@ -27,10 +28,9 @@ class QueryFixture:
             '-i',
             self.name,
             'clickhouse-client',
-            '--multiquery',
+            '--multiquery', '--password', self.password if reader or user else self.system_password,
+            '--user', user or ('studio_query' if reader else 'marie'),
         ]
-        if reader or user:
-            command += ['--user', user or 'studio_query', '--password', self.password]
         return subprocess.run(
             command, input=sql, text=True, capture_output=True, timeout=50
         )
@@ -61,9 +61,6 @@ def clickhouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QueryFixtur
     folder = tmp_path_factory.mktemp('query-explorer')
     password = uuid.uuid4().hex
     (folder / 'reader').write_text(password)
-    (folder / 'users.xml').write_text(
-        '<clickhouse><users><default><access_management>1</access_management></default></users></clickhouse>'
-    )
     name = 'query-explorer-test-' + uuid.uuid4().hex[:12]
     subprocess.run(
         ['docker', 'volume', 'create', name], check=True, capture_output=True
@@ -85,7 +82,10 @@ def clickhouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QueryFixtur
             '--mount',
             f'type=volume,src={name},dst=/var/lib/clickhouse',
             '--mount',
-            f'type=bind,src={folder / "users.xml"},dst=/etc/clickhouse-server/users.d/test.xml,readonly',
+            f'type=bind,src={ROOT / "config/clickhouse/telemetry-dictionary.xml"},dst=/etc/clickhouse-server/config.d/telemetry-dictionary.xml,readonly',
+            '-e', 'CLICKHOUSE_USER=marie',
+            '-e', f'CLICKHOUSE_PASSWORD={password}',
+            '-e', 'CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1',
             '--mount',
             f'type=bind,src={folder / "reader"},dst=/run/query-reader,readonly',
             '--mount',
@@ -104,19 +104,9 @@ def clickhouse(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QueryFixtur
             time.sleep(0.25)
         else:
             raise RuntimeError('Disposable ClickHouse did not start')
-        sql = (ROOT / 'config/clickhouse/init-clickhouse.sql').read_text()
-        base = sql[
-            sql.index('CREATE TABLE IF NOT EXISTS otel.otel_logs') : sql.index(
-                '-- ############### Metrics Tables'
-            )
-        ]
-        extra = sql[
-            sql.index(
-                '-- ############### OpenInference Materialized Columns'
-            ) : sql.index('-- ############### Useful Queries')
-        ]
-        setup = fixture.query('CREATE DATABASE otel;\n' + base + extra)
-        assert setup.returncode == 0, setup.stderr
+        for source in ['config/clickhouse/workspace-isolation/schema.sql', 'config/clickhouse/telemetry-system.sql']:
+            setup = fixture.query((ROOT / source).read_text())
+            assert setup.returncode == 0, setup.stderr
         fixture.apply()
         yield fixture
     finally:

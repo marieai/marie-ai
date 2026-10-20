@@ -12,12 +12,15 @@ receivers:
   filelog/docker:
     include:
       - /var/lib/docker/containers/*/*.log
-    # Docker names these files <container-id>-json.log, so containers cannot be
-    # excluded by name here. The collectors opt out via `logging: driver: local`
-    # in docker-compose.clickstack.yml.
+    exclude:
+      # Exclude noisy containers
+      - /var/lib/docker/containers/*/*hyperdx*.log
+      - /var/lib/docker/containers/*/*otel*.log
     start_at: end
     include_file_path: true
     include_file_name: true
+    multiline:
+      line_start_pattern: '^(INFO|WARN|ERROR|DEBUG|CRITICAL|FATAL|WARNI)'
 
     operators:
       # Parse Docker JSON log format first

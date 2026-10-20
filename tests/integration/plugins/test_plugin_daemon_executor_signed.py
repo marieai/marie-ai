@@ -16,6 +16,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 import pytest
+import yaml
 from docarray import DocList
 from docarray.documents import TextDoc
 
@@ -44,7 +45,7 @@ def daemon_binary(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return binary
 
 
-@pytest.mark.parametrize('mode', ['sidecar', 'child'])
+@pytest.mark.parametrize('mode', ['sidecar', 'child', 'helm'])
 @pytest.mark.timeout(60)
 def test_scheduled_executor_invokes_secured_daemon(
     mode: str,
@@ -69,11 +70,78 @@ def test_scheduled_executor_invokes_secured_daemon(
     daemon = None
     executor = None
     try:
-        if mode == 'sidecar':
+        if mode in ('sidecar', 'helm'):
             daemon = subprocess.Popen([str(daemon_binary), '--addr', addr], env=env)
-            monkeypatch.setenv('MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID', key_id)
-            monkeypatch.setenv('MARIE_PLUGIN_DAEMON_SIGNING_SECRET', secret)
-            executor = MariePluginDaemonExecutor(daemon_url=url, start=False)
+            if mode == 'helm':
+                chart = DAEMON_DIR.parents[1] / 'deploy/helm/charts/marie'
+                values = tmp_path / 'executor.yaml'
+                values.write_text(
+                    yaml.safe_dump(
+                        {
+                            'executor': {
+                                'pools': [
+                                    {
+                                        'name': 'plugins',
+                                        'enabled': True,
+                                        'replicas': 1,
+                                        'configFile': '/etc/marie/plugin-executor.yml',
+                                        'pluginRuntime': {
+                                            'serviceName': 'scheduled-plugins',
+                                            'signingSecret': 'execution-signing',
+                                        },
+                                        'resources': {},
+                                    }
+                                ]
+                            }
+                        }
+                    )
+                )
+                output = subprocess.run(
+                    [
+                        'helm',
+                        'template',
+                        'proof',
+                        str(chart),
+                        '--namespace',
+                        'child-proof',
+                        '-f',
+                        str(values),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=20,
+                )
+                worker = next(
+                    doc
+                    for doc in yaml.safe_load_all(output.stdout)
+                    if doc
+                    and doc['kind'] == 'Deployment'
+                    and doc['metadata'].get('labels', {}).get('marie.ai/pool')
+                    == 'plugins'
+                )
+                fixture_secret = {'key-id': key_id, 'secret': secret}
+                client_env = {}
+                for entry in worker['spec']['template']['spec']['containers'][0]['env']:
+                    if not entry['name'].startswith('MARIE_PLUGIN_DAEMON_'):
+                        continue
+                    if 'value' in entry:
+                        client_env[entry['name']] = entry['value']
+                    else:
+                        ref = entry['valueFrom']['secretKeyRef']
+                        assert ref['name'] == 'execution-signing'
+                        client_env[entry['name']] = fixture_secret[ref['key']]
+                assert (
+                    client_env['MARIE_PLUGIN_DAEMON_URL']
+                    == 'http://scheduled-plugins.child-proof.svc:8099'
+                )
+                # Replace only cluster transport; signing references come from the real chart.
+                client_env['MARIE_PLUGIN_DAEMON_URL'] = url
+                executor = MariePluginDaemonExecutor(start=False, env=client_env)
+            else:
+                monkeypatch.setenv('MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID', key_id)
+                monkeypatch.setenv('MARIE_PLUGIN_DAEMON_SIGNING_SECRET', secret)
+                executor = MariePluginDaemonExecutor(daemon_url=url, start=False)
         else:
             monkeypatch.setenv('MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID', 'parent-key')
             monkeypatch.setenv(

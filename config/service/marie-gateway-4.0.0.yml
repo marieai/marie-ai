@@ -251,7 +251,7 @@ with:
     clickhouse:
       host: localhost
       port: 9000
-      database: marie
+      database: telemetry
 
   llm_queue:
     fabric_group_id: default

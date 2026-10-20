@@ -51,9 +51,6 @@ global:
 
 enabled: true
 
-# Opt in only for new approved installations; v1 preserves existing identities.
-headlessServiceNamingVersion: v1
-
 # Optional default runtime class. A pool-level value takes precedence.
 runtimeClassName: ""
 
@@ -64,6 +61,8 @@ gpuMonitor:
   enabled: true
 
 # Define executor pools (can have multiple CPU and GPU pools)
+# A scheduled plugin pool may specify pluginRuntime.serviceName/signingSecret and
+# an explicit configFile packaged in its image. See README for ownership/setup.
 pools:
   # CPU executor pool for general workloads
   - name: cpu-general

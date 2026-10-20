@@ -1,5 +1,4 @@
 {{- if .Values.enabled }}
-{{- $identityVersion := include "executor.headlessNamingVersion" . }}
 {{- if not (kindIs "slice" .Values.pools) }}
 {{- fail "executor compute: pools must be a list" }}
 {{- end }}
@@ -12,13 +11,47 @@
 {{- fail "executor compute: enabled must be a boolean" }}
 {{- end }}
 {{- if $pool.enabled }}
+{{- if hasKey $pool "pluginRuntime" }}
+{{- $runtime := $pool.pluginRuntime }}
+{{- if not (kindIs "map" $runtime) }}
+{{- fail "executor plugin runtime: binding must be an object" }}
+{{- end }}
+{{- range $key, $_ := $runtime }}
+{{- if not (has $key (list "serviceName" "signingSecret")) }}
+{{- fail "executor plugin runtime: only serviceName and signingSecret are supported" }}
+{{- end }}
+{{- end }}
+{{- if not (kindIs "string" $runtime.serviceName) }}
+{{- fail "executor plugin runtime: serviceName must be a DNS service label" }}
+{{- end }}
+{{- if or (gt (len $runtime.serviceName) 63) (not (regexMatch "^[a-z]([-a-z0-9]*[a-z0-9])?$" $runtime.serviceName)) }}
+{{- fail "executor plugin runtime: serviceName must be a DNS service label" }}
+{{- end }}
+{{- if not (kindIs "string" $runtime.signingSecret) }}
+{{- fail "executor plugin runtime: signingSecret must be a Secret name" }}
+{{- end }}
+{{- if or (gt (len $runtime.signingSecret) 253) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $runtime.signingSecret)) }}
+{{- fail "executor plugin runtime: signingSecret must be a Secret name" }}
+{{- end }}
+{{- if not (kindIs "string" $pool.configFile) }}
+{{- fail "executor plugin runtime: configFile must select a literal absolute YAML Flow path" }}
+{{- end }}
+{{- if not (regexMatch "^/[^[:space:]$]+\\.ya?ml$" $pool.configFile) }}
+{{- fail "executor plugin runtime: configFile must select a literal absolute YAML Flow path" }}
+{{- end }}
+{{- range $entry := $pool.env }}
+{{- if has $entry.name (list "MARIE_PLUGIN_DAEMON_URL" "MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID" "MARIE_PLUGIN_DAEMON_SIGNING_SECRET") }}
+{{- fail "executor plugin runtime: connection environment is managed by the binding" }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if not (kindIs "string" $pool.name) }}
 {{- fail "executor compute: pool name must be a DNS label" }}
 {{- end }}
 {{- if or (gt (len $pool.name) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $pool.name)) }}
 {{- fail "executor compute: pool name must be a DNS label" }}
 {{- end }}
-{{- $name := include "executor.poolFullname" (list $pool $.Release.Name) }}
+{{- $name := include "executor.poolFullname" (dict "pool" $pool "root" $) }}
 {{- if hasKey $names $name }}
 {{- fail "executor compute: pool names must produce unique workload names" }}
 {{- end }}
@@ -41,7 +74,6 @@
 {{- if gt (len $name) 52 }}
 {{- fail "executor identity: stateful name exceeds the controller revision label limit" }}
 {{- end }}
-{{- if eq $identityVersion "v2" }}
 {{- $replicas := "1" }}
 {{- if hasKey $pool "replicas" }}
 {{- $replicas = toString $pool.replicas }}
@@ -55,7 +87,6 @@
 {{- $ordinal := max 0 (sub (int64 $replicas) 1) | toString }}
 {{- if gt (add (len $name) 1 (len $ordinal)) 63 }}
 {{- fail "executor identity: stateful pod hostname exceeds the DNS label limit" }}
-{{- end }}
 {{- end }}
 {{- end }}
 {{- if and (hasKey $pool "resources") (not (kindIs "map" $pool.resources)) }}

@@ -9,21 +9,21 @@ from conftest import IMAGE, ROOT, QueryFixture
 
 
 def test_reader_uses_explicit_definer_and_survives_repeat_upgrade(clickhouse: QueryFixture) -> None:
-    before = clickhouse.query('SELECT currentUser(), count() FROM query.spans', reader=True)
+    before = clickhouse.query('SELECT currentUser(), count() FROM workspace_query.shared_spans', reader=True)
     assert before.returncode == 0, before.stderr
     assert before.stdout.strip() == 'studio_query\t0'
     clickhouse.apply()
-    after = clickhouse.query('SELECT currentUser(), count() FROM query.spans', reader=True)
+    after = clickhouse.query('SELECT currentUser(), count() FROM workspace_query.shared_spans', reader=True)
     assert after.returncode == 0, after.stderr
     assert after.stdout == before.stdout
 
 
 @pytest.mark.parametrize('sql', [
-    'SELECT count() FROM otel.otel_traces',
+    'SELECT count() FROM telemetry.spans',
     'SELECT count() FROM system.users',
-    "SELECT dictGet('otel.model_price_dict', 'input_price', ('x', ''))",
+    "SELECT dictGet('telemetry.model_price_dict', 'input_price', ('x', ''))",
     'CREATE TABLE query.bad (x UInt64) ENGINE=Memory',
-    "INSERT INTO otel.otel_traces (TraceId) VALUES ('forbidden')",
+    "INSERT INTO telemetry.spans (TraceId) VALUES ('forbidden')",
     'SELECT 1 SETTINGS max_execution_time=60',
     'SELECT 1 SETTINGS max_result_rows=1000000',
     'SELECT 1 SETTINGS readonly=0',
@@ -40,36 +40,36 @@ def test_effective_limits_and_current_manifest(clickhouse: QueryFixture) -> None
     result = clickhouse.query("SELECT getSetting('readonly'), getSetting('max_execution_time'), getSetting('max_threads')", reader=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == '1\t30\t2'
-    manifest = clickhouse.query('SELECT version, length(artifact_hash) FROM query.schema_version', reader=True)
+    manifest = clickhouse.query('SELECT version, length(artifact_hash) FROM workspace_query.shared_schema_version', reader=True)
     assert manifest.returncode == 0, manifest.stderr
-    assert manifest.stdout.strip() == '1\t64'
+    assert manifest.stdout.strip() == '2\t64'
 
 
 def test_existing_volume_restart_rotation_and_rollback(clickhouse: QueryFixture) -> None:
-    inserted = clickhouse.query("INSERT INTO otel.otel_logs (Timestamp, Body) VALUES (now64(), 'persistent-lifecycle-fixture')")
+    inserted = clickhouse.query("INSERT INTO telemetry.logs (Timestamp, Body) VALUES (now64(), 'persistent-lifecycle-fixture')")
     assert inserted.returncode == 0, inserted.stderr
     subprocess.run(['docker', 'restart', '--time', '3', clickhouse.name], check=True, capture_output=True)
     for _ in range(120):
         if clickhouse.query('SELECT 1').returncode == 0:
             break
         time.sleep(0.1)
-    persisted = clickhouse.query("SELECT count() FROM query.logs WHERE Body='persistent-lifecycle-fixture'", reader=True)
+    persisted = clickhouse.query("SELECT count() FROM workspace_query.shared_logs WHERE Body='persistent-lifecycle-fixture'", reader=True)
     assert persisted.returncode == 0, persisted.stderr
     assert persisted.stdout.strip() == '1'
     old_password = clickhouse.password
     new_password = uuid.uuid4().hex
     (clickhouse.folder / 'reader').write_text(new_password)
     clickhouse.apply()
-    assert clickhouse.query('SELECT count() FROM query.logs', reader=True).returncode != 0
+    assert clickhouse.query('SELECT count() FROM workspace_query.shared_logs', reader=True).returncode != 0
     clickhouse.password = new_password
-    assert clickhouse.query('SELECT count() FROM query.logs', reader=True).returncode == 0
+    assert clickhouse.query('SELECT count() FROM workspace_query.shared_logs', reader=True).returncode == 0
     rollback = subprocess.run(['docker', 'exec', clickhouse.name, '/bin/sh', '/query-explorer/rollback.sh'], text=True, capture_output=True)
     assert rollback.returncode == 0, rollback.stderr
-    assert clickhouse.query('SELECT count() FROM query.logs', reader=True).returncode != 0
-    ingestion = clickhouse.query("INSERT INTO otel.otel_logs (Timestamp, Body) VALUES (now64(), 'ingestion-after-reader-rollback')")
+    assert clickhouse.query('SELECT count() FROM workspace_query.shared_logs', reader=True).returncode != 0
+    ingestion = clickhouse.query("INSERT INTO telemetry.logs (Timestamp, Body) VALUES (now64(), 'ingestion-after-reader-rollback')")
     assert ingestion.returncode == 0, ingestion.stderr
     clickhouse.apply()
-    restored = clickhouse.query("SELECT count() FROM query.logs WHERE Body='ingestion-after-reader-rollback'", reader=True)
+    restored = clickhouse.query("SELECT count() FROM workspace_query.shared_logs WHERE Body='ingestion-after-reader-rollback'", reader=True)
     assert restored.returncode == 0, restored.stderr
     assert restored.stdout.strip() == '1'
     assert old_password != new_password
@@ -80,6 +80,7 @@ def test_local_bootstrap_generates_and_reuses_private_reader_password(clickhouse
         return subprocess.run(
             ['docker', 'run', '--rm', '--network', f'container:{clickhouse.name}', '--user', '101:101',
              '--memory', '256m', '--cpus', '1', '--entrypoint', '/bin/sh',
+             '-e', 'CLICKHOUSE_USER=marie', '-e', f'CLICKHOUSE_PASSWORD={clickhouse.system_password}',
              '--mount', f'type=bind,src={ROOT / "config/clickhouse/query-explorer"},dst=/query-explorer,readonly',
              '--mount', f'type=volume,src={clickhouse.name},dst=/var/lib/clickhouse',
              IMAGE, '/query-explorer/bootstrap.sh'],
@@ -96,9 +97,9 @@ def test_local_bootstrap_generates_and_reuses_private_reader_password(clickhouse
         assert len(password) == 64
         assert password not in first_output
         clickhouse.password = password
-        assert clickhouse.query('SELECT count() FROM query.logs', reader=True).returncode == 0
+        assert clickhouse.query('SELECT count() FROM workspace_query.shared_logs', reader=True).returncode == 0
         apply_without_extra_parameters()
-        assert clickhouse.query('SELECT count() FROM query.logs', reader=True).returncode == 0
+        assert clickhouse.query('SELECT count() FROM workspace_query.shared_logs', reader=True).returncode == 0
         mode = subprocess.run(
             ['docker', 'exec', clickhouse.name, 'stat', '-c', '%a', '/var/lib/clickhouse/query-explorer/reader-password'],
             text=True, capture_output=True, check=True,

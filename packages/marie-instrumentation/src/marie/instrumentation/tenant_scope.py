@@ -24,11 +24,12 @@ def _uuid(value: str) -> str:
 @dataclass(frozen=True)
 class TelemetryScope:
     organization_id: str
-    workspace_id: str
+    workspace_id: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "organization_id", _uuid(self.organization_id))
-        object.__setattr__(self, "workspace_id", _uuid(self.workspace_id))
+        if self.workspace_id != "":
+            object.__setattr__(self, "workspace_id", _uuid(self.workspace_id))
 
 
 _scope: ContextVar[TelemetryScope | None] = ContextVar(

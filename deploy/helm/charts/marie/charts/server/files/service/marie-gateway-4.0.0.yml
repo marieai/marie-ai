@@ -112,7 +112,7 @@ with:
       # Auto-discover planners from packages
       discover_packages: []
       # Explicit planners (mock planners for testing)
-      planners: []
+      planners: __QUERY_PLANNERS__
 
   # Toast event tracking system
   # It can be backed by Message Queue or Database backed

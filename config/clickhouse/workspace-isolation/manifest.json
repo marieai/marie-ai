@@ -343,6 +343,17 @@
         "message",
         "Body"
       ]
+    },
+    "spans_trace_id_ts": {
+      "columns": [
+        "organization_id",
+        "workspace_id",
+        "identity_state",
+        "identity_version",
+        "TraceId",
+        "Start",
+        "End"
+      ]
     }
   },
   "views": {
@@ -360,13 +371,32 @@
     "error_spans": "error_spans",
     "events": "events",
     "job_events": "job_events",
-    "traces": "spans"
+    "traces": "spans",
+    "trace_id_ts": "spans_trace_id_ts"
   },
   "operator_only": [
-    "otel.*",
-    "query.*",
-    "platform capacity",
-    "custom model prices and dictionaries"
+    "workspace_query.shared_*",
+    "telemetry operator_objects"
   ],
-  "cost_semantics": "Recorded costs only; public/scoped price fallback is an admission gate."
+  "cost_semantics": "Recorded costs only; public/scoped price fallback is an admission gate.",
+  "operator_objects": {
+    "telemetry": [
+      "span_annotations",
+      "event_details",
+      "events_mv",
+      "capacity_ts",
+      "capacity_ts_ingest",
+      "model_prices",
+      "model_price_sync_runs",
+      "model_price_dict"
+    ],
+    "workspace_query": [
+      "shared_spans",
+      "shared_traces",
+      "shared_logs",
+      "shared_annotations",
+      "shared_model_prices",
+      "shared_schema_version"
+    ]
+  }
 }

@@ -1,9 +1,9 @@
 # Marie-AI Helm Chart - Local Development Values
 # Usage: helm install marie . -f values-local.yaml -n marie --create-namespace
 #
-# This configuration matches the local Docker environment:
+# Service image defaults:
 # - PostgreSQL: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
-# - MinIO: minio/minio:latest
+# - MinIO: coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
 # - RabbitMQ: rabbitmq:3-management-alpine
 # - Valkey: valkey/valkey:9-alpine
 
@@ -156,8 +156,8 @@ minio:
 
   image:
     registry: docker.io
-    repository: minio/minio
-    tag: latest
+    repository: coollabsio/minio
+    tag: RELEASE.2025-10-15T17-29-55Z
 
   mode: standalone
 
@@ -227,8 +227,8 @@ clickhouse:
     nativePort: 9000
 
   config:
-    defaultDatabase: marie
-    defaultUser: default
+    defaultDatabase: telemetry
+    defaultUser: marie
     defaultPassword: ""
     logLevel: information
 

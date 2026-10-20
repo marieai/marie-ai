@@ -97,7 +97,8 @@ class ExecutorComputeTest(unittest.TestCase):
                 document = next(
                     item
                     for item in documents
-                    if item['metadata']['name'].endswith('-' + selected['name'])
+                    if item['metadata']['labels'].get('marie.ai/pool')
+                    == selected['name']
                 )
                 self.assertEqual(
                     document['kind'],
@@ -134,6 +135,26 @@ class ExecutorComputeTest(unittest.TestCase):
         ]
         self.assertNotIn('nvidia.com/gpu', resources['requests'])
         self.assertNotIn('nvidia.com/gpu', resources['limits'])
+
+    def test_rolling_update_preserves_counts_zero_and_percentages(self) -> None:
+        for strategy, expected in (
+            ({}, {'maxSurge': 1, 'maxUnavailable': 0}),
+            (
+                {'maxSurge': 0, 'maxUnavailable': 1},
+                {'maxSurge': 0, 'maxUnavailable': 1},
+            ),
+            (
+                {'maxSurge': '25%', 'maxUnavailable': '10%'},
+                {'maxSurge': '25%', 'maxUnavailable': '10%'},
+            ),
+        ):
+            with self.subTest(strategy=strategy):
+                selected = pool('cpu')
+                selected['strategy'] = strategy
+                document = self.executors(self.render([selected]))[0]
+                self.assertEqual(
+                    document['spec']['strategy']['rollingUpdate'], expected
+                )
 
     def test_limit_only_gpu_reservation_is_valid(self) -> None:
         selected = pool('gpu', gpu=True)
@@ -182,17 +203,15 @@ class ExecutorComputeTest(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn('executor compute:', result.stderr)
 
-    def test_duplicate_and_truncated_workload_names_fail(self) -> None:
-        for release, names in [
-            ('compute-test', ['same', 'same']),
-            ('s' * 47, ['same-executor-cpu', 'same-executor-gpu']),
-        ]:
-            with self.subTest(release=release):
-                result = self.render(
-                    [pool(names[0]), pool(names[1], gpu=True)], release
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('executor compute:', result.stderr)
+    def test_duplicate_pool_names_fail(self) -> None:
+        result = self.render([pool('same'), pool('same', gpu=True)])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unique workload names', result.stderr)
+
+    def test_long_pool_names_do_not_collide_after_truncation(self) -> None:
+        selected = [pool('same-executor-cpu'), pool('same-executor-gpu', gpu=True)]
+        documents = self.executors(self.render(selected, 's' * 47))
+        self.assertEqual(len({item['metadata']['name'] for item in documents}), 2)
 
     def test_disabled_pool_does_not_need_complete_compute_configuration(self) -> None:
         documents = self.executors(
@@ -202,41 +221,33 @@ class ExecutorComputeTest(unittest.TestCase):
         )
         self.assertEqual(len(documents), 1)
 
-    def test_headless_service_names_cannot_collide_with_another_pool(self) -> None:
+    def test_headless_service_names_do_not_collide_with_another_pool(self) -> None:
         selected = [pool('a', stateful=True), pool('a-headless', gpu=True)]
         for pools in (selected, list(reversed(selected))):
-            with self.subTest(order=[item['name'] for item in pools]):
-                result = self.render(pools)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('executor compute:', result.stderr)
-
-    def test_headless_service_names_fit_the_dns_label_limit(self) -> None:
-        selected = pool('a' * 22, stateful=True)
-        valid = self.render([selected], 'r' * 20)
-        self.assertEqual(valid.returncode, 0, valid.stderr)
-        services = [
-            item
-            for item in yaml.safe_load_all(valid.stdout)
-            if item and item.get('kind') == 'Service'
-        ]
-        self.assertTrue(any(len(item['metadata']['name']) == 61 for item in services))
-        for release, name in [
-            ('r' * 20, 'a' * 25),
-            ('compute-test', 'a' * 60),
-            ('s' * 47, 'a'),
-        ]:
-            with self.subTest(release=release, name=name):
-                result = self.render([pool(name, stateful=True)], release)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('executor compute:', result.stderr)
+            result = self.render(pools)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            services = [
+                item
+                for item in yaml.safe_load_all(result.stdout)
+                if item
+                and item['kind'] == 'Service'
+                and item['metadata'].get('labels', {}).get('marie.ai/pool')
+            ]
+            self.assertEqual(len(services), 3)
+            self.assertEqual(len({item['metadata']['name'] for item in services}), 3)
+            self.assertTrue(
+                all(len(item['metadata']['name']) <= 63 for item in services)
+            )
 
     def test_numeric_pool_ids_remain_strings_in_labels_and_selectors(self) -> None:
         result = self.render([pool('123', stateful=True)])
         self.assertEqual(result.returncode, 0, result.stderr)
         checked = 0
         for document in yaml.safe_load_all(result.stdout):
-            if not document or 'executor-123' not in document.get('metadata', {}).get(
-                'name', ''
+            if (
+                not document
+                or document.get('metadata', {}).get('labels', {}).get('marie.ai/pool')
+                != '123'
             ):
                 continue
             self.assertEqual(document['metadata']['labels']['marie.ai/pool'], '123')

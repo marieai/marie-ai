@@ -109,7 +109,7 @@ llm_tracking:
   clickhouse:
     host: localhost
     port: 9000
-    database: marie
+    database: telemetry
 
 # FLOW / GATEWAY configuration
 

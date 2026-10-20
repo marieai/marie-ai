@@ -9,6 +9,8 @@ metadata:
 data:
   otel-schema.sql: |
 {{ .Files.Get "files/otel-schema.sql" | indent 4 }}
+  telemetry-system.sql: |
+{{ .Files.Get "files/telemetry-system.sql" | indent 4 }}
 {{- if .Values.queryExplorer.enabled }}
   views.sql: |
 {{ .Files.Get "files/query-explorer-views.sql" | indent 4 }}
@@ -66,6 +68,7 @@ spec:
                 sleep 3
               done
               clickhouse-client --host "$CLICKHOUSE_HOST" --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery < /schema/otel-schema.sql
+              clickhouse-client --host "$CLICKHOUSE_HOST" --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery < /schema/telemetry-system.sql
               {{- if .Values.queryExplorer.enabled }}
               /bin/sh /schema/bootstrap.sh
               {{- end }}

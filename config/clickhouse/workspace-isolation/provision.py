@@ -1,4 +1,4 @@
-"""Prepare and verify workspace readers using an operator-owned ClickHouse client."""
+"""Prepare organization or explicit workspace readers using an operator client."""
 
 from __future__ import annotations
 
@@ -38,6 +38,8 @@ LIMITS = {
     'use_query_cache': 0,
     'enable_reads_from_query_cache': 0,
     'enable_writes_to_query_cache': 0,
+    # Pinned-engine rewrites otherwise require ungranted hidden subcolumns.
+    'optimize_functions_to_subcolumns': 0,
     'output_format_json_quote_64bit_integers': 1,
     'output_format_json_quote_decimals': 1,
     'cancel_http_readonly_queries_on_client_close': 1,
@@ -65,12 +67,16 @@ class Scope:
         object.__setattr__(
             self, 'organization_id', canonical_uuid(self.organization_id)
         )
-        object.__setattr__(self, 'workspace_id', canonical_uuid(self.workspace_id))
+        if self.workspace_id != '':
+            object.__setattr__(self, 'workspace_id', canonical_uuid(self.workspace_id))
         if type(self.revision) is not int or not 1 <= self.revision < 2**31:
             raise ValueError('Revision must be a positive int32')
 
     @property
     def principal(self) -> str:
+        if self.workspace_id == '':
+            identity = f'{self.organization_id}/{self.revision}'
+            return 'orgq_' + hashlib.sha256(identity.encode()).hexdigest()[:32]
         identity = f'{self.organization_id}/{self.workspace_id}/{self.revision}'
         return 'wsq_' + hashlib.sha256(identity.encode()).hexdigest()[:32]
 
@@ -84,9 +90,12 @@ def literal(value: str | int) -> str:
 
 def expected_filter(scope: Scope) -> str:
     # Same canonical expression ClickHouse stores in system.row_policies.
+    workspace = (
+        f"(workspace_id = '{scope.workspace_id}') AND " if scope.workspace_id else ''
+    )
     return (
         f"(organization_id = '{scope.organization_id}') AND "
-        f"(workspace_id = '{scope.workspace_id}') AND "
+        f'{workspace}'
         "(identity_state = 'verified') AND (identity_version = 1)"
     )
 
@@ -150,11 +159,21 @@ def rows(query: Query, sql: str) -> list[dict]:
 
 
 def schema_snapshot(query: Query) -> list[dict]:
-    """Fingerprint every prepared table, MV and view including its expressions."""
-    return rows(
+    """Fingerprint the tenant schema; omit only listed operator objects."""
+    snapshot = rows(
         query,
         "SELECT database, name, create_table_query FROM system.tables WHERE database IN ('telemetry', 'workspace_query') ORDER BY database, name",
     )
+    excluded = {
+        (database, name)
+        for database, names in MANIFEST['operator_objects'].items()
+        for name in names
+    }
+    if any(('telemetry', name) in excluded for name in MANIFEST['tables']) or any(
+        ('workspace_query', name) in excluded for name in MANIFEST['views']
+    ):
+        raise RuntimeError('Operator exclusions overlap tenant grants')
+    return [row for row in snapshot if (row['database'], row['name']) not in excluded]
 
 
 def verify(query: Query, scope: Scope) -> str:
@@ -321,7 +340,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['prepare', 'activate', 'verify', 'suspend'])
     parser.add_argument('--organization', required=True)
-    parser.add_argument('--workspace', required=True)
+    parser.add_argument('--workspace', default='')
     parser.add_argument('--revision', required=True, type=int)
     args = parser.parse_args()
     scope = Scope(args.organization, args.workspace, args.revision)

@@ -23,22 +23,23 @@ definer_hash=$(head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1)
 
 run() {
   clickhouse-client --host "${CLICKHOUSE_HOST:-localhost}" --port "${CLICKHOUSE_PORT:-9000}" \
-    --user "${CLICKHOUSE_USER:-default}" --multiquery
+    --user "${CLICKHOUSE_USER:-marie}" --multiquery
 }
 
 run <<SQL
-CREATE DATABASE IF NOT EXISTS query;
+CREATE DATABASE IF NOT EXISTS workspace_query;
 CREATE USER IF NOT EXISTS studio_query_definer IDENTIFIED WITH sha256_hash BY '$definer_hash' HOST NONE;
-CREATE USER IF NOT EXISTS studio_query IDENTIFIED WITH sha256_hash BY '$reader_hash' DEFAULT DATABASE query;
-ALTER USER studio_query IDENTIFIED WITH sha256_hash BY '$reader_hash' HOST ANY DEFAULT DATABASE query;
+CREATE USER IF NOT EXISTS studio_query IDENTIFIED WITH sha256_hash BY '$reader_hash' DEFAULT DATABASE workspace_query;
+ALTER USER studio_query IDENTIFIED WITH sha256_hash BY '$reader_hash' HOST ANY DEFAULT DATABASE workspace_query;
 REVOKE ALL ON *.* FROM studio_query;
 REVOKE ALL ON *.* FROM studio_query_definer;
-GRANT SELECT ON otel.otel_traces TO studio_query_definer;
-GRANT SELECT ON otel.otel_logs TO studio_query_definer;
-GRANT SELECT ON otel.span_annotations TO studio_query_definer;
-GRANT SELECT ON otel.model_prices TO studio_query_definer;
-GRANT dictGet ON otel.model_price_dict TO studio_query_definer;
-GRANT SELECT ON query.spans TO studio_query_definer;
+GRANT SELECT ON telemetry.spans TO studio_query_definer;
+GRANT SELECT ON telemetry.logs TO studio_query_definer;
+GRANT SELECT ON telemetry.span_annotations TO studio_query_definer;
+GRANT SELECT ON telemetry.annotations TO studio_query_definer;
+GRANT SELECT ON telemetry.model_prices TO studio_query_definer;
+GRANT dictGet ON telemetry.model_price_dict TO studio_query_definer;
+GRANT SELECT ON workspace_query.shared_spans TO studio_query_definer;
 CREATE SETTINGS PROFILE IF NOT EXISTS studio_query_limits;
 ALTER SETTINGS PROFILE studio_query_limits SETTINGS
   readonly = 1 CONST,
@@ -67,12 +68,12 @@ ALTER QUOTA studio_query_hourly FOR INTERVAL 1 HOUR MAX queries = 120, execution
 SQL
 run < "$directory/views.sql"
 run <<'SQL'
-GRANT SELECT ON query.spans TO studio_query;
-GRANT SELECT ON query.traces TO studio_query;
-GRANT SELECT ON query.logs TO studio_query;
-GRANT SELECT ON query.annotations TO studio_query;
-GRANT SELECT ON query.model_prices TO studio_query;
-GRANT SELECT ON query.schema_version TO studio_query;
+GRANT SELECT ON workspace_query.shared_spans TO studio_query;
+GRANT SELECT ON workspace_query.shared_traces TO studio_query;
+GRANT SELECT ON workspace_query.shared_logs TO studio_query;
+GRANT SELECT ON workspace_query.shared_annotations TO studio_query;
+GRANT SELECT ON workspace_query.shared_model_prices TO studio_query;
+GRANT SELECT ON workspace_query.shared_schema_version TO studio_query;
 GRANT SELECT(quota_name, duration, max_queries, max_execution_time) ON system.quota_usage TO studio_query;
 SQL
 

@@ -55,6 +55,8 @@ global:
     maxBufferedRequestsPerPool: 32
     maxInlinePayloadBytes: "16777216"
 
+queryPlanners: []
+
 enabled: true
 replicas: 1
 progressDeadlineSeconds: 600

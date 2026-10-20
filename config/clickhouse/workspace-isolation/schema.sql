@@ -11,11 +11,12 @@ CREATE TABLE IF NOT EXISTS telemetry.spans (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
 
     Timestamp DateTime64(9) CODEC(Delta, ZSTD(1)),
     TraceId String CODEC(ZSTD(1)),
@@ -55,6 +56,25 @@ ORDER BY (organization_id, workspace_id, identity_state, identity_version, Times
 TTL toDateTime(Timestamp) + INTERVAL 30 DAY
 SETTINGS index_granularity = 8192, ttl_only_drop_parts = 1;
 
+CREATE TABLE IF NOT EXISTS telemetry.spans_trace_id_ts (
+    organization_id String,
+    workspace_id String,
+    identity_state Enum8('unattributed' = 0, 'verified' = 1, 'platform' = 2),
+    identity_version UInt8,
+    TraceId String,
+    Start DateTime64(9),
+    End DateTime64(9)
+) ENGINE = MergeTree()
+PARTITION BY toDate(Start)
+ORDER BY (organization_id, workspace_id, identity_state, identity_version, TraceId, Start)
+TTL toDateTime(Start) + INTERVAL 30 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS telemetry.spans_trace_id_ts_ingest TO telemetry.spans_trace_id_ts AS
+SELECT organization_id, workspace_id, identity_state, identity_version, TraceId,
+       min(Timestamp) AS Start, max(Timestamp) AS End
+FROM telemetry.spans WHERE TraceId != ''
+GROUP BY organization_id, workspace_id, identity_state, identity_version, TraceId;
+
 CREATE TABLE IF NOT EXISTS telemetry.logs (
     organization_id String DEFAULT '',
     workspace_id String DEFAULT '',
@@ -62,11 +82,12 @@ CREATE TABLE IF NOT EXISTS telemetry.logs (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
 
     Timestamp DateTime64(9) CODEC(Delta, ZSTD(1)),
     TraceId String CODEC(ZSTD(1)),
@@ -101,11 +122,12 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics_gauge (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
 
     ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     ResourceSchemaUrl String CODEC(ZSTD(1)),
@@ -143,11 +165,12 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics_sum (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
 
     ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     ResourceSchemaUrl String CODEC(ZSTD(1)),
@@ -187,11 +210,12 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics_histogram (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
 
     ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     ResourceSchemaUrl String CODEC(ZSTD(1)),
@@ -235,11 +259,12 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics_exponential_histogram (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
 
     ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     ResourceSchemaUrl String CODEC(ZSTD(1)),
@@ -287,11 +312,12 @@ CREATE TABLE IF NOT EXISTS telemetry.metrics_summary (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
 
     ResourceAttributes Map(LowCardinality(String), String) CODEC(ZSTD(1)),
     ResourceSchemaUrl String CODEC(ZSTD(1)),
@@ -366,11 +392,12 @@ CREATE TABLE IF NOT EXISTS telemetry.annotations (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
     id UUID DEFAULT generateUUIDv4(),
     trace_id String,
     span_id String,
@@ -394,11 +421,12 @@ CREATE TABLE IF NOT EXISTS telemetry.model_names (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
     model String,
     provider String,
     last_seen DateTime
@@ -413,11 +441,12 @@ CREATE TABLE IF NOT EXISTS telemetry.event_counts (
     identity_version UInt8 DEFAULT 0,
     CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
         (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
-         AND toUUIDOrNull(workspace_id) IS NOT NULL
          AND organization_id = toString(toUUIDOrNull(organization_id))
-         AND workspace_id = toString(toUUIDOrNull(workspace_id))
          AND organization_id != '00000000-0000-0000-0000-000000000000'
-         AND workspace_id != '00000000-0000-0000-0000-000000000000'),
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000'))),
     timestamp_hour DateTime,
     source_type String,
     event_type String,
@@ -510,3 +539,175 @@ CREATE VIEW IF NOT EXISTS workspace_query.events SQL SECURITY INVOKER AS SELECT 
 CREATE VIEW IF NOT EXISTS workspace_query.job_events SQL SECURITY INVOKER AS SELECT `organization_id`, `workspace_id`, `identity_state`, `identity_version`, `Timestamp`, `job_id`, `job_tag`, `event_type`, `status`, `message`, `Body` FROM telemetry.job_events;
 
 CREATE VIEW IF NOT EXISTS workspace_query.traces SQL SECURITY INVOKER AS SELECT * FROM workspace_query.spans WHERE ParentSpanId = '';
+
+CREATE VIEW IF NOT EXISTS workspace_query.trace_id_ts SQL SECURITY INVOKER AS SELECT organization_id, workspace_id, identity_state, identity_version, TraceId, Start, End FROM telemetry.spans_trace_id_ts;
+
+-- Metadata-only upgrade for retained tables on pinned ClickHouse 25.12.
+-- Each DROP/ADD is one atomic ALTER: no unconstrained intermediate table state.
+-- Keep writers paused until the migration and schema fingerprint verification pass.
+-- No historical attribution, row mutation, table replacement, or data copy.
+
+ALTER TABLE telemetry.spans
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.logs
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.metrics_gauge
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.metrics_sum
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.metrics_histogram
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.metrics_exponential_histogram
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.metrics_summary
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.annotations
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.model_names
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.event_counts
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.error_logs
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.error_spans
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.events
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.job_events
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));
+
+ALTER TABLE telemetry.spans_trace_id_ts
+    DROP CONSTRAINT IF EXISTS valid_verified_scope,
+    ADD CONSTRAINT valid_verified_scope CHECK identity_state != 'verified' OR
+        (identity_version = 1 AND toUUIDOrNull(organization_id) IS NOT NULL
+         AND organization_id = toString(toUUIDOrNull(organization_id))
+         AND organization_id != '00000000-0000-0000-0000-000000000000'
+         AND (workspace_id = '' OR
+              (toUUIDOrNull(workspace_id) IS NOT NULL
+               AND workspace_id = toString(toUUIDOrNull(workspace_id))
+               AND workspace_id != '00000000-0000-0000-0000-000000000000')));

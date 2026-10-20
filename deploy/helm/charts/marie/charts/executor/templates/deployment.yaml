@@ -30,7 +30,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}
+  name: {{ include "executor.poolFullname" (dict "pool" $pool "root" $) }}
   namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "executor.poolLabels" (list $pool $) | nindent 4 }}
@@ -45,8 +45,8 @@ spec:
     type: {{ $strategyType }}
     {{- if eq $strategyType "RollingUpdate" }}
     rollingUpdate:
-      maxSurge: {{ $strategy.maxSurge | default 1 | quote }}
-      maxUnavailable: {{ $strategy.maxUnavailable | default 0 | quote }}
+      maxSurge: {{ ternary $strategy.maxSurge 1 (hasKey $strategy "maxSurge") | toJson }}
+      maxUnavailable: {{ ternary $strategy.maxUnavailable 0 (hasKey $strategy "maxUnavailable") | toJson }}
     {{- end }}
   selector:
     matchLabels:
@@ -85,7 +85,7 @@ spec:
             - server
             - --start
             - --uses
-            - {{ $pool.configFile | default "/etc/marie/config/service/extract/marie-extract-4.0.0.yml" }}
+            - {{ $pool.configFile | default "/etc/marie/config/service/extract/marie-extract-4.0.0.yml" | quote }}
           ports:
             - name: grpc
               containerPort: {{ $port }}
@@ -103,7 +103,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.uid
             - name: K8S_DEPLOYMENT_NAME
-              value: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}
+              value: {{ include "executor.poolFullname" (dict "pool" $pool "root" $) }}
             - name: K8S_NAMESPACE_NAME
               value: {{ $.Release.Namespace }}
             - name: K8S_POD_NAME
@@ -343,6 +343,7 @@ spec:
             - name: LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES
               value: {{ $.Values.global.llmQueue.maxInlinePayloadBytes | default "16777216" | quote }}
             {{- end }}
+            {{- include "executor.pluginRuntimeEnv" (dict "pool" $pool "root" $) | nindent 12 }}
             {{- with $pool.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -371,6 +372,11 @@ spec:
             - name: config
               mountPath: /etc/marie/config/service/extract
               readOnly: true
+            {{- if eq ($pool.configFile | default "") "/etc/marie/config/service/mock/marie-mock-sandbox.yml" }}
+            - name: config
+              mountPath: /etc/marie/config/service/mock
+              readOnly: true
+            {{- end }}
           lifecycle:
             preStop:
               exec:

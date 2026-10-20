@@ -24,10 +24,10 @@ services:
     restart: unless-stopped
     environment:
       # Default user configuration
-      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-marie}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?Supply the existing marie system password}
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=${CLICKHOUSE_ACCESS_MANAGEMENT:-1}
-      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-marie}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-telemetry}
       # Performance tuning
       - CLICKHOUSE_MAX_MEMORY_USAGE=${CLICKHOUSE_MAX_MEMORY:-4000000000}
       - CLICKHOUSE_MAX_MEMORY_USAGE_FOR_USER=${CLICKHOUSE_MAX_MEMORY_USER:-3000000000}
@@ -38,8 +38,12 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
-      # Bootstrap: create users, databases, and OTel schema on init
-      - ./config/clickhouse/init-clickhouse.sql:/docker-entrypoint-initdb.d/init-clickhouse.sql:ro
+      # Reuse the system credential for the local price dictionary.
+      - ./config/clickhouse/telemetry-dictionary.xml:/etc/clickhouse-server/config.d/telemetry-dictionary.xml:ro
+      # Bootstrap canonical telemetry and private system projections on init
+      - ./config/clickhouse/init-clickhouse.sql:/docker-entrypoint-initdb.d/00-system.sql:ro
+      - ./config/clickhouse/workspace-isolation/schema.sql:/docker-entrypoint-initdb.d/10-telemetry.sql:ro
+      - ./config/clickhouse/telemetry-system.sql:/docker-entrypoint-initdb.d/20-telemetry-system.sql:ro
     ulimits:
       nofile:
         soft: 262144
@@ -69,16 +73,24 @@ services:
     profiles: [schema]
     restart: "no"
     user: "101:101"
-    entrypoint: [/bin/sh, /query-explorer/bootstrap.sh]
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        clickhouse-client --host "$$CLICKHOUSE_HOST" --user "$$CLICKHOUSE_USER" --multiquery < /schema/telemetry.sql
+        clickhouse-client --host "$$CLICKHOUSE_HOST" --user "$$CLICKHOUSE_USER" --multiquery < /schema/telemetry-system.sql
+        /bin/sh /query-explorer/bootstrap.sh
     environment:
       CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-marie}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Supply the existing marie system password}
     depends_on:
       clickhouse:
         condition: service_healthy
     volumes:
       - ./config/clickhouse/query-explorer:/query-explorer:ro
+      - ./config/clickhouse/workspace-isolation/schema.sql:/schema/telemetry.sql:ro
+      - ./config/clickhouse/telemetry-system.sql:/schema/telemetry-system.sql:ro
       - clickhouse_data:/var/lib/clickhouse
     networks: [marie_default]
 

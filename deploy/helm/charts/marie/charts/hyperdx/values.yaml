@@ -42,7 +42,7 @@ postgresql:
 clickhouse:
   host: ""
   httpPort: 8123
-  database: otel
+  database: telemetry
   username: default
   password: ""
 

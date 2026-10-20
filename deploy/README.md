@@ -175,14 +175,17 @@ If this is empty, the full scheduler schema did not apply. Check the migration j
 ```bash
 kubectl rollout status statefulset/marie-clickhouse -n marie --timeout=5m
 kubectl rollout status deployment/marie-server -n marie --timeout=5m
-kubectl rollout status deployment/marie-executor-cpu-local -n marie --timeout=5m
+kubectl rollout status deployment -n marie \
+  --selector 'app.kubernetes.io/instance=marie,marie.ai/pool=cpu-local' --timeout=5m
 kubectl get pods -n marie
 ```
 
 If the gateway or executor was already crashlooping before the migration completed, restart them after the migration passes:
 
 ```bash
-kubectl rollout restart deployment/marie-server deployment/marie-executor-cpu-local -n marie
+kubectl rollout restart deployment/marie-server -n marie
+kubectl rollout restart deployment -n marie \
+  --selector 'app.kubernetes.io/instance=marie,marie.ai/pool=cpu-local'
 ```
 
 ## Inspect With Headlamp Desktop
@@ -212,7 +215,7 @@ Open Headlamp, select the current local cluster, then inspect:
 
 - `marie` namespace pods and events
 - `marie-server` deployment logs
-- `marie-executor-cpu-local` deployment logs
+- executor logs selected by `app.kubernetes.io/instance=marie,marie.ai/pool=cpu-local`
 - `marie-postgresql-migrate` job logs
 - `marie-server` service ports `51000` and `52000`
 

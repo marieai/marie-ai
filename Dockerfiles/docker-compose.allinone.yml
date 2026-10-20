@@ -239,7 +239,7 @@ services:
 
   # --------------- ClickHouse Analytics Database ---------------
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:25.12.1.649@sha256:7234d193fbeb3a375f21f0bb99040396f68bb2e82cada4f4947d7fcf9638bbf3
     container_name: marie-clickhouse
     init: true
     restart: unless-stopped
@@ -247,10 +247,10 @@ services:
       db-init:
         condition: service_completed_successfully
     environment:
-      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
-      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-marie}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?Supply the existing marie system password}
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=${CLICKHOUSE_ACCESS_MANAGEMENT:-1}
-      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-marie}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DB:-telemetry}
       - CLICKHOUSE_MAX_MEMORY_USAGE=${CLICKHOUSE_MAX_MEMORY:-4000000000}
       - CLICKHOUSE_MAX_MEMORY_USAGE_FOR_USER=${CLICKHOUSE_MAX_MEMORY_USER:-3000000000}
     ports:
@@ -260,6 +260,10 @@ services:
     volumes:
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
+      - ./config/clickhouse/telemetry-dictionary.xml:/etc/clickhouse-server/config.d/telemetry-dictionary.xml:ro
+      - ./config/clickhouse/init-clickhouse.sql:/docker-entrypoint-initdb.d/00-system.sql:ro
+      - ./config/clickhouse/workspace-isolation/schema.sql:/docker-entrypoint-initdb.d/10-telemetry.sql:ro
+      - ./config/clickhouse/telemetry-system.sql:/docker-entrypoint-initdb.d/20-telemetry-system.sql:ro
     ulimits:
       nofile:
         soft: 262144

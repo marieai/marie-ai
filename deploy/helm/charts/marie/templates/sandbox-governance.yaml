@@ -106,10 +106,13 @@ metadata:
   labels:
     {{- include "marie.labels" . | nindent 4 }}
 spec:
-  podSelector: {}   # applies to ALL pods in the namespace
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: NotIn
+        values: [plugin-daemon]
   policyTypes:
     - Ingress
-    - Egress
 
   ingress:
     # Allow all traffic between pods in the same sandbox namespace
@@ -122,6 +125,18 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: ingress-nginx
 
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "marie.fullname" . }}-sandbox-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "marie.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
   egress:
     # Allow all traffic between pods in the same sandbox namespace
     - to:

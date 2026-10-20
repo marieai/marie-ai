@@ -48,14 +48,14 @@ ClickHouse connection HyperDX creates for the first team (DEFAULT_CONNECTIONS).
 {{- end }}
 
 {{/*
-Log, trace and metric sources over the "otel" tables (DEFAULT_SOURCES). Sources refer
+Log, trace and metric sources over the "telemetry" tables (DEFAULT_SOURCES). Sources refer
 to the connection and to each other by name; HyperDX resolves the names to ids.
 */}}
 {{- define "hyperdx.defaultSources" -}}
 {{- $db := .Values.clickhouse.database -}}
 {{- $logs := dict
   "name" "Logs" "kind" "log" "connection" "Default"
-  "from" (dict "databaseName" $db "tableName" "otel_logs")
+  "from" (dict "databaseName" $db "tableName" "logs")
   "timestampValueExpression" "Timestamp"
   "displayedTimestampValueExpression" "Timestamp"
   "implicitColumnExpression" "Body"
@@ -70,7 +70,7 @@ to the connection and to each other by name; HyperDX resolves the names to ids.
   "traceSourceId" "Traces" "metricSourceId" "Metrics" -}}
 {{- $traces := dict
   "name" "Traces" "kind" "trace" "connection" "Default"
-  "from" (dict "databaseName" $db "tableName" "otel_traces")
+  "from" (dict "databaseName" $db "tableName" "spans")
   "timestampValueExpression" "Timestamp"
   "displayedTimestampValueExpression" "Timestamp"
   "implicitColumnExpression" "SpanName"
@@ -95,6 +95,6 @@ to the connection and to each other by name; HyperDX resolves the names to ids.
   "from" (dict "databaseName" $db "tableName" "")
   "timestampValueExpression" "TimeUnix"
   "resourceAttributesExpression" "ResourceAttributes"
-  "metricTables" (dict "gauge" "otel_metrics_gauge" "histogram" "otel_metrics_histogram" "sum" "otel_metrics_sum" "summary" "otel_metrics_summary" "exponential histogram" "otel_metrics_exp_histogram") -}}
+  "metricTables" (dict "gauge" "metrics_gauge" "histogram" "metrics_histogram" "sum" "metrics_sum" "summary" "metrics_summary" "exponential histogram" "metrics_exponential_histogram") -}}
 {{- list $logs $traces $metrics | toJson -}}
 {{- end }}

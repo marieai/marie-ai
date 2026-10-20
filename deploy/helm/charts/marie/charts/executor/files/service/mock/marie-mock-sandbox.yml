@@ -1,0 +1,55 @@
+jtype: Flow
+version: '1'
+
+with:
+  host: 0.0.0.0
+  port: ${{ ENV.MARIE_PORT }}
+  protocol: grpc
+  discovery: true
+  discovery_host: ${{ ENV.ETCD_HOSTNAME }}
+  discovery_port: ${{ ENV.ETCD_PORT }}
+  discovery_service_name: gateway/marie
+  discovery_namespace: marie
+  discovery_lease_sec: 6
+  discovery_heartbeat_sec: 1.5
+  discovery_timeout_sec: 10
+  discovery_retry_times: 5
+  kv_store_kwargs:
+    provider: postgresql
+    hostname: ${{ ENV.DATABASE_HOST }}
+    port: ${{ ENV.DATABASE_PORT }}
+    username: ${{ ENV.DATABASE_USER }}
+    password: ${{ ENV.DATABASE_PASSWORD }}
+    database: ${{ ENV.DATABASE_NAME }}
+    schema: marie_scheduler
+    default_table: kv_store_worker
+    max_pool_size: 2
+    max_connections: 2
+  tracing: false
+  metrics: false
+  event_tracking: false
+  expose_endpoints:
+    /document/process:
+      methods: [POST]
+      summary: Exercise mock executor setup
+
+executors:
+  - name: mock_executor_a
+    uses:
+      jtype: IntegrationExecutorMock
+      metas:
+        py_modules:
+          - marie.executor.mock
+      with:
+        device: cpu
+        process_time: 0
+        failure_rate: 0
+        failure_mode: exception
+        storage: {}
+        health:
+          gpu_monitor_enabled: false
+          torch_check_enabled: false
+    replicas: 1
+    timeout_ready: 60000
+
+prefetch: 1

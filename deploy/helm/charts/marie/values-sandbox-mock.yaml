@@ -1,0 +1,32 @@
+# Explicit setup overlay: replaces the executor pools list. It does not enable
+# sandbox creation or qualify CPU/GPU models. Supply the approved executor image
+# through global.marie.image or the retained publication's pool image binding.
+executor:
+  enabled: true
+  llmTracking:
+    enabled: false
+  gpuMonitor:
+    enabled: false
+  pools:
+    - name: mock
+      enabled: true
+      replicas: 1
+      gpu: false
+      stateful: false
+      configFile: /etc/marie/config/service/mock/marie-mock-sandbox.yml
+      service:
+        port: 52010
+      resources:
+        requests:
+          cpu: 500m
+          memory: 2Gi
+        limits:
+          cpu: '2'
+          memory: 4Gi
+      env:
+        - name: MARIE_DISABLE_CUDA
+          value: 'true'
+server:
+  queryPlanners:
+    - name: mock_planners
+      py_module: marie.query_planner.mock_query_plans

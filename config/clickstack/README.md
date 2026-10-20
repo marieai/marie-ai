@@ -83,18 +83,18 @@ MARIE_OTEL_GRPC_MAX_MESSAGE_BYTES=134217728
 | Host | `localhost` (external) / `marie-clickhouse` (Docker) |
 | HTTP Port | `8123` |
 | Native Port | `9000` |
-| Database | `otel` |
+| Database | `telemetry` |
 | Username | `marie` |
-| Password | `marie123` |
+| Password | Existing deployment credential |
 
 **JDBC URL:**
 ```
-jdbc:clickhouse://localhost:8123/otel?user=marie&password=marie123
+jdbc:clickhouse://localhost:8123/telemetry
 ```
 
 **CLI:**
 ```bash
-docker exec -it marie-clickhouse clickhouse-client -u marie --password marie123 -d otel
+docker exec -it marie-clickhouse clickhouse-client --user marie --database telemetry
 ```
 
 ### HyperDX UI
@@ -103,27 +103,27 @@ docker exec -it marie-clickhouse clickhouse-client -u marie --password marie123 
 |---------|-------|
 | URL | http://localhost:8080 |
 | Email | `marie@marie.local` |
-| Password | `MarieAI@2026!` |
+| Password | Existing deployment credential |
 
 ## OTel Tables
 
 | Table | Description |
 |-------|-------------|
-| `otel_logs` | Application and system logs |
-| `otel_traces` | Distributed traces and spans |
-| `otel_metrics_gauge` | Point-in-time metric values |
-| `otel_metrics_sum` | Cumulative/delta counters |
-| `otel_metrics_histogram` | Histogram distributions |
-| `otel_metrics_exponential_histogram` | High-cardinality histograms |
-| `otel_metrics_summary` | Summary statistics |
-| `error_logs_mv` | Materialized view: ERROR/FATAL logs |
-| `error_traces_mv` | Materialized view: Failed spans |
+| `telemetry.logs` | Application and system logs |
+| `telemetry.spans` | Distributed traces and spans |
+| `telemetry.metrics_gauge` | Point-in-time metric values |
+| `telemetry.metrics_sum` | Cumulative/delta counters |
+| `telemetry.metrics_histogram` | Histogram distributions |
+| `telemetry.metrics_exponential_histogram` | High-cardinality histograms |
+| `telemetry.metrics_summary` | Summary statistics |
+| `telemetry.error_logs` | Materialized view: ERROR/FATAL logs |
+| `telemetry.error_spans` | Materialized view: Failed spans |
 
 ## Useful Queries
 
 ### Recent Errors
 ```sql
-SELECT * FROM otel.error_logs_mv
+SELECT * FROM telemetry.error_logs
 ORDER BY Timestamp DESC
 LIMIT 100;
 ```
@@ -131,7 +131,7 @@ LIMIT 100;
 ### Error Count by Service (Last Hour)
 ```sql
 SELECT ServiceName, count() as error_count
-FROM otel.error_logs_mv
+FROM telemetry.error_logs
 WHERE Timestamp > now() - INTERVAL 1 HOUR
 GROUP BY ServiceName
 ORDER BY error_count DESC;
@@ -140,7 +140,7 @@ ORDER BY error_count DESC;
 ### Slowest Traces (Last Hour)
 ```sql
 SELECT ServiceName, SpanName, TraceId, Duration/1000000 as duration_ms
-FROM otel.otel_traces
+FROM telemetry.spans
 WHERE Timestamp > now() - INTERVAL 1 HOUR
 ORDER BY Duration DESC
 LIMIT 20;
@@ -152,7 +152,7 @@ SELECT
   toStartOfMinute(TimeUnix) as minute,
   sum(Count) as requests,
   avg(Sum / Count) * 1000 as avg_latency_ms
-FROM otel.otel_metrics_histogram
+FROM telemetry.metrics_histogram
 WHERE MetricName = 'marie_gateway_request_seconds'
   AND TimeUnix > now() - INTERVAL 1 HOUR
 GROUP BY minute
@@ -164,7 +164,7 @@ ORDER BY minute DESC;
 SELECT
   Attributes['executor'] as executor,
   max(Value) as capacity
-FROM otel.otel_metrics_gauge
+FROM telemetry.metrics_gauge
 WHERE MetricName = 'marie_executor_slot_capacity'
   AND TimeUnix > now() - INTERVAL 5 MINUTE
 GROUP BY executor;
@@ -219,15 +219,8 @@ curl http://localhost:13133/health
 ```
 
 ### Authentication failed
-```bash
-# Verify marie user exists
-docker exec marie-clickhouse clickhouse-client \
-  --query "SELECT name FROM system.users"
 
-# Re-run bootstrap if needed
-docker exec -i marie-clickhouse clickhouse-client \
-  < config/clickhouse/init-clickhouse.sql
-```
+Use the configured system account (`marie` by default) and its existing deployment credential. The container entrypoint owns that identity. The initialization SQL does not elevate a limited SQL user; an old limited account cannot grant itself new privileges. Fresh storage must be initialized with the configured system identity. Preserve application/provider configuration when replacing telemetry storage.
 
 ### Reset ClickHouse (WARNING: deletes all data)
 ```bash
@@ -240,12 +233,7 @@ docker compose --env-file ./config/.env.dev \
 
 ## Data Retention
 
-All tables have a 30-day TTL configured. To modify:
-
-```sql
-ALTER TABLE otel.otel_logs
-MODIFY TTL toDateTime(Timestamp) + INTERVAL 90 DAY;
-```
+Retention is declared in `config/clickhouse/workspace-isolation/schema.sql` (raw signals 30 days, annotations 90 days, event counts 7 days). Change the reviewed schema and regenerate/qualify its manifest before altering deployed tenant tables. Ad hoc DDL can invalidate scoped-reader readiness.
 
 ## Related Files
 
@@ -253,3 +241,13 @@ MODIFY TTL toDateTime(Timestamp) + INTERVAL 90 DAY;
 - `Dockerfiles/docker-compose.clickstack.yml` - HyperDX + OTel Collector
 - `config/.env.dev` - Environment variables (credentials)
 - `config/clickhouse/init-clickhouse.sql` - Bootstrap script
+
+## Fresh telemetry cutover
+
+The canonical store is `telemetry`; `workspace_query` contains scoped INVOKER views. `marie` holds private system projections/pricing. The separate `query` namespace is the existing administrator-only shared SQL interface. These are namespaces on the same ClickHouse server, not additional database services. Do not create a Project hierarchy or treat legacy project attributes as trusted workspace identity.
+
+Compose initialization and the existing `clickhouse-query-schema` service install the canonical schema and private system objects. The collector uses explicit canonical table names with schema creation disabled. Run schema updates before changing/restarting ingestion. The schema service reuses existing system credentials; the dictionary's server-side named collection reuses them internally, without another password setting.
+
+Already persisted HyperDX sources do not follow new defaults automatically. After installing the schema, run Studio's `packages/api/src/operator/cutover-telemetry.ts --connection UUID` using its existing operator environment. It preserves source IDs/connections and policy records while updating supported legacy source mappings, then updates a stored Studio `otel` database setting to `telemetry`. Restart the API to clear cached settings. Inspect unsupported custom source mappings manually.
+
+Do not drop `otel` until all writers, Studio readers and persisted provider sources have been retargeted and positively exercised, including actual alert evaluation and an isolated callback. `DROP DATABASE otel` is the final retirement step, not schema installation. Never drop HyperDX's state store, Studio Postgres, destinations or policies as part of fresh telemetry. Trusted tenant ingress and tenant activation remain separate release gates.

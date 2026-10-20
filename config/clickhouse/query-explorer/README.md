@@ -2,6 +2,10 @@
 
 SQL explorer stays off until its target passes release qualification. It is for Studio platform administrators and reads shared telemetry. Workspace membership does not isolate these views.
 
+The application has two ClickHouse databases: `telemetry` owns all data, model prices and lookup helpers; `workspace_query` owns query views. Shared administrator views use `shared_` names (`shared_spans`, `shared_traces`, `shared_logs`, `shared_annotations`, `shared_model_prices`). Workspace INVOKER views keep their unprefixed names and separate principals. Shared readers have no grant on those workspace views, and workspace principals have no grant on shared views. The retired `query`, `marie` and `otel` application databases are unnecessary.
+
+The legacy `otel.otel_traces` table is now `telemetry.spans`: one row per span, grouped into traces by `TraceId`. `workspace_query.traces` selects root spans; it is not an aggregate or a separate physical trace store. `telemetry.spans_trace_id_ts` and its ingest MV retain trace time bounds with tenant identity. `telemetry.model_names` replaces the old `llm_model_names` catalog and is populated by new LLM spans. Pricing lives in `telemetry.model_prices`, `model_price_sync_runs` and `model_price_dict`.
+
 ## Ownership and artifacts
 
 Bootstrap reuses the deployment’s existing ClickHouse operator connection. Compose generates and retains a reader password in the existing data volume; Helm uses one reader Secret. The application never provisions users. `studio_query_definer` cannot log in (`HOST NONE`); `studio_query` has SELECT on the five curated views, the internal version/readiness view and four columns of its own `system.quota_usage` metadata. No base, file/network, arbitrary dictionary, process-list or access-management grants are assigned to the reader.
@@ -18,6 +22,8 @@ pnpm --dir packages/api exec tsx scripts/generate-query-explorer-schema.ts --ai-
 ## Compose, including existing volumes
 
 Use the existing ClickHouse Compose file and the same connection settings used to start it. There is no overlay Compose file or additional connection configuration. With ClickHouse running, apply the SQL explorer schema:
+
+Set the existing system identity to `marie`, database to `telemetry`, and supply its existing password through `CLICKHOUSE_PASSWORD`. Compose rejects an empty/missing password. Where the deployment already defines `CLICKHOUSE_APP_PASSWORD`, the final environment-file entry can use `CLICKHOUSE_PASSWORD=${CLICKHOUSE_APP_PASSWORD}` to reuse it. Do not introduce a second system credential or commit passwords.
 
 ```bash
 docker compose --project-directory . -f Dockerfiles/docker-compose.clickhouse.yml --profile schema run --rm --no-deps clickhouse-query-schema

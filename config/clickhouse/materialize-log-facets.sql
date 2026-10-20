@@ -1,12 +1,3 @@
--- Store frequent log facets so their counts do not scan the complete attribute map.
-ALTER TABLE otel.otel_logs
-    ADD COLUMN IF NOT EXISTS event_type LowCardinality(String) MATERIALIZED LogAttributes['event.type'],
-    ADD COLUMN IF NOT EXISTS job_tag LowCardinality(String) MATERIALIZED LogAttributes['job.tag'],
-    ADD COLUMN IF NOT EXISTS event_source String MATERIALIZED LogAttributes['event.source'];
-
--- Run once for existing installations; wait until existing parts have stored values.
-ALTER TABLE otel.otel_logs
-    MATERIALIZE COLUMN event_type,
-    MATERIALIZE COLUMN job_tag,
-    MATERIALIZE COLUMN event_source
-    SETTINGS mutations_sync = 1;
+-- Retired legacy helper. Canonical schemas are installed through the schema job.
+-- Do not add unmanifested columns to telemetry.logs or recreate otel storage.
+SELECT throwIf(1, 'This legacy log-facet migration is retired. Install the canonical telemetry schema; Use LogAttributes on workspace_query.logs or the canonical event views.');

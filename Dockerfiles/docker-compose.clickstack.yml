@@ -41,6 +41,8 @@ services:
       driver: local
     command: ["--config=/etc/otel/config.yml"]
     environment:
+      - CLICKHOUSE_USERNAME=${CLICKHOUSE_USER:-marie}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:-}
       - DEPLOYMENT_ENV=${STACK_NAME:-dev}
     volumes:
       - ${PWD}/config/clickstack/otel-collector-config.yml:/etc/otel/config.yml:ro
@@ -197,7 +199,7 @@ networks:
 #    Open http://localhost:8080, go to Team Settings → Connections, add ClickHouse:
 #      Host: marie-clickhouse    Port: 8123
 #      Username: marie           Password: marie123
-#      Database: otel
+#      Database: telemetry
 #
 # 6. Configure Gateway to send metrics:
 #    marie gateway --uses config/service/gateway.yml \

@@ -18,7 +18,8 @@ replicas_for() {
   ' "${manifest}"
 }
 
-workloads=(lifecycle-proof-server lifecycle-proof-executor-default-local)
+# Executor identity for namespace m3-lifecycle-proof, release lifecycle-proof, pool default-local.
+workloads=(lifecycle-proof-server ex-619d196d7e98188632cb539c)
 infrastructure=(
   lifecycle-proof-gitea
   lifecycle-proof-postgresql

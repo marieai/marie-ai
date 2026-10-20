@@ -12,7 +12,8 @@ trap 'rm -f "${rendered}"' EXIT
   --values "${chart_dir}/values-appimage-amd64.yaml" \
   --values "${chart_dir}/tests/values-gpu-executor.yaml" >"${rendered}"
 
-grep -q '^  name: gpu-proof-executor-gpu-local$' "${rendered}"
+# Canonical identity for namespace m3-gpu-proof, release gpu-proof, pool gpu-local.
+grep -q '^  name: ex-aece48fb04355c5527775e57$' "${rendered}"
 grep -q '^      runtimeClassName: "nvidia"$' "${rendered}"
 grep -q '^        marie.ai/gpu: "true"$' "${rendered}"
 test "$(grep -c '^              nvidia.com/gpu: 1$' "${rendered}")" -eq 2

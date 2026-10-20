@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -27,6 +28,45 @@ def test_scope_principal_is_canonical_and_revision_bound() -> None:
     assert scope.principal == module.Scope(ORG, WORKSPACE, 1).principal
     assert scope.principal != module.Scope(ORG, WORKSPACE, 2).principal
     assert 'project' not in scope.principal
+
+
+def test_organization_reader_has_distinct_revision_bound_principal() -> None:
+    scope = module.Scope(ORG, '', 1)
+    assert scope.workspace_id == ''
+    assert (
+        scope.principal
+        == 'orgq_' + hashlib.sha256(f'{ORG}/1'.encode()).hexdigest()[:32]
+    )
+    assert scope.principal != module.Scope(ORG, '', 2).principal
+    assert scope.principal != module.Scope(ORG, WORKSPACE, 1).principal
+    assert module.expected_filter(scope) == (
+        f"(organization_id = '{ORG}') AND "
+        "(identity_state = 'verified') AND (identity_version = 1)"
+    )
+
+
+@pytest.mark.parametrize(
+    'workspace', ['invalid', '00000000-0000-0000-0000-000000000000']
+)
+def test_optional_workspace_still_rejects_invalid_association(workspace: str) -> None:
+    with pytest.raises(ValueError):
+        module.Scope(ORG, workspace, 1)
+
+
+def test_organization_suspend_cli_does_not_require_workspace(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(module, 'operator_query', lambda: lambda sql: '0')
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        ['provision.py', 'suspend', '--organization', ORG, '--revision', '1'],
+    )
+    module.main()
+    output = json.loads(capsys.readouterr().out)
+    assert output['workspaceId'] == ''
+    assert output['principal'].startswith('orgq_')
+    assert output['drained'] is True
 
 
 @pytest.mark.parametrize(

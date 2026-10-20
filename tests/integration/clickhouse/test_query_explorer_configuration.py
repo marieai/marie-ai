@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,10 +18,21 @@ def test_one_compose_file_uses_existing_credentials() -> None:
     config = yaml.safe_load(result.stdout)
     assert 'clickhouse-query-schema' in config['services']
     job = config['services']['clickhouse-query-schema']
-    assert job['environment']['CLICKHOUSE_PASSWORD'] == '${CLICKHOUSE_PASSWORD:-}'
-    assert job['environment']['CLICKHOUSE_USER'] == '${CLICKHOUSE_USER:-default}'
+    assert job['environment']['CLICKHOUSE_PASSWORD'] == '${CLICKHOUSE_PASSWORD:?Supply the existing marie system password}'
+    assert job['environment']['CLICKHOUSE_USER'] == '${CLICKHOUSE_USER:-marie}'
     assert 'secrets' not in job
     assert not (ROOT / 'Dockerfiles/docker-compose.clickhouse-query-explorer.yml').exists()
+
+
+def test_missing_system_password_cannot_create_an_empty_password_account() -> None:
+    environment = {key: value for key, value in os.environ.items() if key != 'CLICKHOUSE_PASSWORD'}
+    result = subprocess.run(
+        ['docker', 'compose', '--env-file', '/dev/null', '--project-directory', str(ROOT),
+         '-f', str(ROOT / 'Dockerfiles/docker-compose.clickhouse.yml'), 'config'],
+        env=environment, text=True, capture_output=True,
+    )
+    assert result.returncode != 0
+    assert 'Supply the existing marie system password' in result.stderr
 
 
 def test_helm_reuses_the_existing_schema_job() -> None:

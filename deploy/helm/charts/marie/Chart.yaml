@@ -70,7 +70,7 @@ dependencies:
     repository: "file://charts/clickhouse"
     condition: clickhouse.enabled
 
-  # Optional: OpenTelemetry Collector (OTLP -> ClickHouse "otel" database)
+  # Optional: OpenTelemetry Collector (OTLP -> ClickHouse "telemetry" database)
   - name: otel-collector
     version: "0.1.0"
     repository: "file://charts/otel-collector"

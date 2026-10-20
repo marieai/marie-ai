@@ -22,7 +22,7 @@ service:
   mysqlPort: 9004
   annotations: {}
 
-# Observability schema (database "otel": logs, traces, metrics, and the views and
+# Observability schema (database "telemetry": logs, traces, metrics, and the views and
 # columns marie-studio queries). Applied by a Job after install and upgrade.
 schema:
   enabled: true
@@ -39,9 +39,9 @@ queryExplorer:
 # ClickHouse configuration
 config:
   # Default database to create
-  defaultDatabase: marie
+  defaultDatabase: telemetry
   # Default user
-  defaultUser: default
+  defaultUser: marie
   # Default password (empty for local dev, set in production)
   defaultPassword: ""
   # Enable SQL-driven access management

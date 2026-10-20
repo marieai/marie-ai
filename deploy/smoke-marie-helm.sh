@@ -179,7 +179,8 @@ fi
 
 log "Waiting for core workloads"
 kubectl -n "${NAMESPACE}" rollout status "deploy/${RELEASE}-server" --timeout="${WAIT_TIMEOUT}"
-kubectl -n "${NAMESPACE}" rollout status "deploy/${RELEASE}-executor-cpu-local" --timeout="${WAIT_TIMEOUT}"
+kubectl -n "${NAMESPACE}" rollout status deployment \
+    --selector "app.kubernetes.io/instance=${RELEASE},marie.ai/pool=cpu-local" --timeout="${WAIT_TIMEOUT}"
 kubectl -n "${NAMESPACE}" rollout status "statefulset/${RELEASE}-valkey" --timeout="${WAIT_TIMEOUT}"
 
 log "Current pods"
