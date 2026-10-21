@@ -4,7 +4,7 @@
 
 services:
   marie-extract-executor:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.0.4-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.1.0-cuda}
     restart: unless-stopped
     container_name: 'marieai-${EXTRACT_STACK_NAME:-dev}-server'
     init: true
@@ -74,7 +74,7 @@ services:
 
     labels:
       - "marie.service=extract-executor"
-      - "marie.version=${EXTRACT_IMAGE_TAG:-5.0.4-cuda}"
+      - "marie.version=${EXTRACT_IMAGE_TAG:-5.1.0-cuda}"
 
 networks:
   marie_default:

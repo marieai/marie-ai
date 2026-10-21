@@ -23,7 +23,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "5.0.4-cuda"
+      tag: "5.1.0-cuda"
       digest: ""
     logging:
       level: INFO
@@ -133,7 +133,7 @@ global:
 marie:
   image:
     repository: marieai/marie
-    tag: "5.0.4-cuda"
+    tag: "5.1.0-cuda"
     pullPolicy: IfNotPresent
 
   # Configuration that maps to marie.yml
@@ -170,7 +170,7 @@ server:
 
   image:
     repository: marieai/marie-gateway
-    tag: "5.0.4-cpu"
+    tag: "5.1.0-cpu"
     digest: ""
 
   config:
