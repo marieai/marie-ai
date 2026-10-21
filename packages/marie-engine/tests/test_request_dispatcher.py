@@ -352,6 +352,19 @@ def dispatcher_for(store, url, *, retry_429=False, **kwargs):
     )
 
 
+async def test_startup_transfers_the_same_fenced_owner(store):
+    runtime = dispatcher_for(store, 'http://127.0.0.1:1/v1')
+    owner = store.acquire_owner(runtime.dispatcher_id, lease_ms=runtime.owner_lease_ms)
+    await runtime.start(owner=owner)
+    try:
+        await eventually(lambda: runtime._owner_ready)
+        assert runtime.owner == owner
+        assert store.acquire_owner('another-dispatcher', lease_ms=1000) is None
+        assert runtime._heartbeat is not None
+    finally:
+        await runtime.stop()
+
+
 @pytest.mark.parametrize('readd', [False, True])
 async def test_removed_replica_client_drains_before_close(store, http_endpoint, readd):
     from marie.engine.completion_contract import CompletionCallParams

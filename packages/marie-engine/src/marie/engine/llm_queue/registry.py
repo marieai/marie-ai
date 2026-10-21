@@ -80,11 +80,11 @@ execution_bytes protected_slots borrowed_slots config_generation waiting_reason 
 observed_at_ms policy_generation policy_digest endpoint_group_id revision replica_id group_id selected_replica_id
 charged_cost refunded_cost committed_charge accepted completed drain_references oldest_pending_age_seconds gate processing_truncated""".split()
     + """ charge_sequence refund_state endpoint_count endpoint_group_count details_truncated port
-held_reservations_sampled state_counts_truncated policy_refresh_inflight policy_refresh_timed_out
+held_reservations_sampled state_counts_truncated policy_refresh_inflight policy_refresh_timed_out configuration_ready
 state uncertainty_until release_after_ms""".split()
 )
 _ERRORS = frozenset(
-    """connect_refused connect_timeout timeout outcome_unknown
+    """connect_refused connect_timeout timeout outcome_unknown target_conflict backpressure registry_changed
 store_unavailable invalid_response response_too_large endpoint_policy request_rejected
 rate_limited authentication call_timeout connect_error invalid_request protocol_error provider_rejected read_error read_timeout route_or_model transport_unknown write_error write_timeout connect_unknown pool_pressure provider_unavailable provider_5xx replica_unavailable unsupported_streaming dispatch_start_failed runtime_mode_mismatch owner_lost cancelled expired queue_unavailable dispatch_error owner_uncertain start_unconfirmed policy_refresh_unavailable binding_conflict binding_migration_required""".split()
 )

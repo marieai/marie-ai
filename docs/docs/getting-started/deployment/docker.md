@@ -117,6 +117,21 @@ The easiest way to initialize the configs is by copying them from the project `c
 /mnt/data/marie-ai/config/marie.yml
 ```
 
+### Keep scheduler SQL aligned with the application
+
+When the gateway uses an external configuration mount, keep its `config/psql`
+bundle aligned with the exact application revision. Updating the checkout or
+container image does not refresh a bind-mounted copy. Include nested `schema/lease`
+files and the monitoring and cron SQL used by the installer.
+
+Follow [Scheduler database backups and upgrades](./scheduler-database-upgrades.md)
+for Docker dump commands, mount comparisons, missing-function diagnosis, and an
+upgrade procedure that preserves existing data.
+
+For a fresh database, also follow [LLM dispatch provisioning](./scheduler-database-upgrades.md#provision-llm-dispatch-on-a-fresh-database).
+The baseline fabric seed does not configure a provider. Keep `LLM_QUEUE_ENABLED=false`
+until the desired dispatch policy and its dependencies are provisioned.
+
 ## Application Logs with Docker
 There are couple ways that we can log from within a container to outside world.
 

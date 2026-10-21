@@ -292,6 +292,56 @@ def _non_negative_int(value: object, label: str, issues: list[str]) -> int:
 def validate_clean_dispatch_runtime(
     snapshot: dict[str, Any], required_execution_capacity: int | None = None
 ) -> dict[str, int]:
+    for dispatcher in snapshot.get('dispatchers') or []:
+        if (
+            isinstance(dispatcher, dict)
+            and dispatcher.get('role') != 'standby'
+            and dispatcher.get('configuration_ready') is False
+        ):
+            category = dispatcher.get('last_error')
+            category = (
+                category
+                if category
+                in {
+                    'target_conflict',
+                    'binding_conflict',
+                    'binding_migration_required',
+                    'backpressure',
+                    'registry_changed',
+                    'policy_refresh_unavailable',
+                }
+                else 'configuration_unavailable'
+            )
+            raise RuntimeError(
+                f'dispatch runtime is not ready: configuration failed [{category}]. '
+                'Review the saved targets and pools. For an idle fabric cutover, '
+                'click Save on the intended configuration and restart the gateway. '
+                'Missing replica counters do not establish that requests remain; '
+                'do not purge jobs to resolve a configuration failure.'
+            )
+    policy = snapshot.get('policy')
+    if (
+        not isinstance(policy, dict)
+        or type(policy.get('desired_generation')) is not int
+        or policy['desired_generation'] < 1
+        or not isinstance(policy.get('desired_digest'), str)
+        or re.fullmatch(r'[0-9a-f]{64}', policy['desired_digest']) is None
+    ):
+        raise RuntimeError(
+            'dispatch runtime is not ready: no active routing policy. '
+            'Restart the updated gateway to initialize the policy, or Save a '
+            'complete LLM Scheduler configuration and restart. No jobs were submitted.'
+        )
+    if (
+        policy.get('synchronized') is not True
+        or policy.get('observed_generation') != policy['desired_generation']
+        or policy.get('observed_digest') != policy['desired_digest']
+    ):
+        raise RuntimeError(
+            'dispatch runtime is not ready: the active routing policy is not '
+            'synchronized with the dispatcher. Wait for policy activation to '
+            'complete and retry. No jobs were submitted.'
+        )
     issues: list[str] = []
     observation = snapshot.get("observation")
     if not isinstance(observation, dict) or observation.get("stale") is not False:

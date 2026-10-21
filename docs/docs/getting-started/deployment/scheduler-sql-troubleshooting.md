@@ -14,6 +14,13 @@ messages. Keep query results in an access-controlled incident location. Do not
 paste full `data`, `output`, signed object URLs, or document content into tickets
 or chat systems.
 
+For startup errors such as `admission_candidate_dags is missing`, especially after
+`Tables installed: True`, follow
+[Scheduler database backups and upgrades](./scheduler-database-upgrades.md#diagnose-an-installed-version-with-missing-functions).
+That guide covers exact function signatures, stale external SQL mounts, and
+Docker exports before an upgrade. A schema-only dump is useful for comparing
+definitions; preserve data with a separate full database backup.
+
 ## Query safety
 
 Use a read-only transaction and a statement timeout while investigating:

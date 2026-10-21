@@ -54,7 +54,7 @@ from marie.engine.llm_queue.store import (
     StoreUnavailable,
     TransitionRejected,
 )
-from marie.instrumentation import get_tracer
+from marie.instrumentation import get_tracer, set_llm_io
 from marie.instrumentation.context import (
     extract_trace_context,
     start_trace_span,
@@ -666,6 +666,9 @@ class RequestDispatcher:
             draining=self._draining,
             owner_generation=self.owner.generation if self.owner else None,
             role="owner" if self.owner else "standby",
+            configuration_ready=self.owner is not None
+            and self._owner_ready
+            and not self._policy_paused,
             pool_ids=[lane.pool_id for lane in visible_lanes],
             endpoint_ids=sorted(visible_replica_ids),
             inflight_request_count=len(self._tasks),
@@ -914,9 +917,14 @@ class RequestDispatcher:
             for inflight in self._inflight_claims.values()
         ]
 
-    async def start(self) -> None:
+    async def start(self, *, owner: OwnerToken | None = None) -> None:
         if self._runner is not None:
             return
+        if owner is not None:
+            began = time.monotonic()
+            await self._io('renew_owner', owner, lease_ms=self.owner_lease_ms)
+            self.owner = owner
+            self._owner_until = began + self.owner_lease_ms / 1000
         self._clients = {
             identity: self.client_factory(endpoint)
             for identity, endpoint in self.endpoints.items()
@@ -930,6 +938,8 @@ class RequestDispatcher:
                 for lane in self.lanes
             )
         }
+        if owner is not None:
+            self._heartbeat = asyncio.create_task(self._renew())
         self._runner = asyncio.create_task(self._run())
         self._client_endpoints = {
             identity: self.endpoints[identity] for identity in self._clients
@@ -1760,6 +1770,8 @@ class RequestDispatcher:
                         "llm.model_name": attributes["marie.llm_dispatch.model"],
                     },
                 )
+                if span.is_recording():
+                    set_llm_io(span, input_messages=call.messages, context=call.context)
                 physical_attempt += 1
                 outcome = None
                 interrupted = None
@@ -2180,6 +2192,10 @@ def _emit_execution_history(
         )
     else:
         span.set_attributes(attributes)
+    if not failed and span.is_recording():
+        output = _completion_output_text(outcome.response)
+        if output is not None:
+            set_llm_io(span, output_messages=output)
     span.set_status(StatusCode.ERROR if failed else StatusCode.OK)
     span.end()
     dispatch_metrics.record_request_execution(
@@ -2193,6 +2209,17 @@ def _emit_execution_history(
         remote_settled=outcome.remote_settled,
         queue_wait_seconds=attributes[prefix + "queue_wait_ms"] / 1000,
     )
+
+
+def _completion_output_text(response: dict[str, Any] | None) -> str | None:
+    """Return deliverable assistant text, or None for truncated or malformed shapes."""
+    try:
+        if completion_finish_reason(response) == "length":
+            return None
+        _, text = extract_completion_text(response)
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
+        return None
+    return text
 
 
 def _normalize_length_response(

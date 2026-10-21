@@ -37,7 +37,7 @@ from marie.engine.llm_queue.store import (
     StoreUnavailable,
     TransitionRejected,
 )
-from marie.instrumentation import get_tracer
+from marie.instrumentation import get_tracer, set_llm_io
 from marie.instrumentation.context import (
     extract_trace_context,
     inject_trace_context,
@@ -408,6 +408,8 @@ class QueuedDispatchProducer:
                             "marie.llm_dispatch.mode": "queued-dispatch",
                         },
                     )
+                    if pending.result.error is None and delivery.is_recording():
+                        set_llm_io(delivery, output_messages=pending.result.response)
                     delivery.set_status(
                         StatusCode.OK
                         if pending.result.error is None

@@ -6,7 +6,10 @@ sidebar_position: 12
 
 Marie-AI exposes LLM and runtime observability through `marie.instrumentation`, using OpenTelemetry for transport and OpenInference for LLM/agent span semantics. The standard runtime path is OTLP collector to ClickHouse.
 
-For queue configuration and the isolated deployment qualification, follow [LLM dispatcher setup](./llm-dispatcher-setup.md).
+For queue configuration and SQL policy provisioning, follow [LLM dispatcher setup](./llm-dispatcher-setup.md).
+Optional deployment and recovery tests are documented separately in the
+[LLM dispatcher qualification runbook](https://github.com/marieai/marie-ai/blob/develop-agents/tools/stress/llm-dispatcher-qualification.md),
+at `tools/stress/llm-dispatcher-qualification.md` in the source checkout.
 
 ## Architecture overview
 
@@ -202,6 +205,21 @@ application
 ```
 
 The collector wiring in this repo lives in `config/clickstack/otel-collector-config.yml`, and the local stack reference is documented in `config/clickstack/README.md`.
+
+### Queued dispatch payloads
+
+With queued dispatch enabled, prompt and reply content appears on these spans, in the same `input.value`/`output.value` and `llm.input_messages.*`/`llm.output_messages.*` form as the direct `BatchProcessor.completion` span:
+
+| Span | Process | Payload |
+|------|---------|---------|
+| `LLMDispatch.completion` | Gateway dispatcher, one span per physical attempt | The messages actually sent, and the assistant text when the attempt succeeds |
+| `LLMQueue.result` | Executor | The delivered assistant text, on successful delivery only |
+
+Admission spans, dispatch scheduling spans, and metrics carry operational metadata. Transport credentials, endpoint URLs, and HTTP headers are excluded from that metadata. Result spans capture successful replies without retaining prompts. Failed attempts, unrecovered truncation, and repetition do not produce an output payload; provider error bodies are excluded.
+
+Inline `data:` images are replaced with the source media reference, or `marie://unresolved-media`, before export. Unsampled request spans skip payload serialization.
+
+To mask this content, use the standard OpenInference settings, for example `OPENINFERENCE_HIDE_INPUTS=true` or `OPENINFERENCE_HIDE_OUTPUTS=true`. Set them in the gateway and executor environments before the process starts.
 
 ## Analytics queries
 

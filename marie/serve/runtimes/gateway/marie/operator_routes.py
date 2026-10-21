@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 from uuid import UUID, uuid4
 
@@ -24,6 +25,14 @@ class RoutingPreviewRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     facts: dict[str, int | str]
+
+
+class TargetProbeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    base_url: str = Field(min_length=1, max_length=2048)
+    allow_private: bool = Field(default=False, strict=True)
+    allow_loopback: bool = Field(default=False, strict=True)
 
 
 class PolicyActivationRequest(BaseModel):
@@ -307,6 +316,46 @@ def add_runtime_routes(
         return {
             'status': 'OK',
             'result': {'attempt_id': attempt_id, 'disposition': disposition},
+        }
+
+    @app.post('/api/llm-dispatch/targets/probe')
+    async def probe_target(
+        request: TargetProbeRequest,
+        authorization: tuple[str, str] = Depends(authorize_routing_admin),
+    ) -> dict[str, object]:
+        from marie.engine.llm_queue.endpoint import (
+            EndpointPolicyError,
+            RegisteredEndpoint,
+            probe_endpoint_connection,
+        )
+
+        try:
+            endpoint = RegisteredEndpoint(
+                endpoint_id='connection-probe',
+                base_url=request.base_url,
+                allow_private=request.allow_private,
+                allow_loopback=request.allow_loopback,
+            )
+        except EndpointPolicyError:
+            result = {
+                'reachable': False,
+                'category': 'address_not_allowed',
+                'latency_ms': 0,
+            }
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail='invalid_endpoint_address'
+            ) from None
+        else:
+            result = await probe_endpoint_connection(endpoint)
+        return {
+            'status': 'OK',
+            'result': {
+                **result,
+                'checked_at': datetime.now(timezone.utc).isoformat(),
+                'vantage': 'gateway',
+                'protocol': 'tcp',
+            },
         }
 
     @app.post('/api/llm-dispatch/policy/preview')

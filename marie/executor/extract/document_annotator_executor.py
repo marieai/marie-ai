@@ -222,7 +222,7 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         if annotator_conf is None:
             raise ValueError(f"Invalid annotator key: {op_key}")
 
-        # Skip disabled annotators — enabled defaults to True if not set
+        # Skip disabled annotators - enabled defaults to True if not set
         if not annotator_conf.get("enabled", True):
             self.logger.info(f"Annotator '{op_key}' is disabled in config, skipping.")
             return {

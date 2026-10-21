@@ -53,6 +53,8 @@ Monitor and troubleshoot your deployment:
 |-------|-------------|
 | [Observability](./observability.md) | Prometheus, Grafana, Loki, and Jaeger setup |
 | [m3top Operational Terminal](./m3top.md) | Live gateway, executor, scheduler, job, DAG, and dependency analysis |
+| [Scheduler database backups and upgrades](./scheduler-database-upgrades.md) | Docker backups, SQL mount consistency, and upgrades that preserve existing data |
+| [Scheduler SQL troubleshooting](./scheduler-sql-troubleshooting.md) | Read-only database investigation for jobs, DAGs, leases, and worker history |
 | [Troubleshooting](./troubleshooting.md) | Common issues and solutions |
 
 ### Scaling

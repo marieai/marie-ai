@@ -10,6 +10,12 @@ For the production-rate mock qualification that submits 25,000 DAGs in 30
 minutes while preserving the 64-active-DAG production limit, see
 [50K DAGs/Hour Mock Gateway Qualification](gateway-50kph-mock-qualification.md).
 
+For queued LLM dispatch deployment and failure-recovery testing, see
+[LLM Dispatcher Qualification](llm-dispatcher-qualification.md). It covers the
+isolated test services, fixture manifest, and recovery scenarios. For ordinary
+gateway configuration and SQL policy provisioning, use
+[LLM dispatcher setup](../../docs/docs/guides/llm-dispatcher-setup.md).
+
 ## LLM Failure And Resume E2E
 
 Run the annotator through the real OpenAI-compatible HTTP client against AIMock:

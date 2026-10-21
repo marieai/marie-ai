@@ -16,6 +16,81 @@ def test_store_boundary_exists():
     assert importlib.util.find_spec('marie.engine.llm_queue.store') is not None
 
 
+def test_startup_binding_reset_requires_fenced_idle_routes(store):
+    from marie.engine.llm_queue.store import StaleOwner
+
+    assert store.reset_idle_bindings(store.test_owner).disposition == 'routes_enabled'
+    store.disable_route(store.test_owner, 'pool')
+    assert store.reset_idle_bindings(store.test_owner).disposition == 'reset'
+    assert store.client.scard(store.keys.prefix + 'endpoints') == 0
+    assert store.client.scard(store.keys.prefix + 'routes') == 0
+    store.release_owner(store.test_owner)
+    with pytest.raises(StaleOwner):
+        store.reset_idle_bindings(store.test_owner)
+
+
+def test_startup_binding_reset_releases_capacity_for_replacement_pools(store):
+    for index in range(1, store.limits.max_routes):
+        store.configure_route(
+            store.test_owner,
+            f'old-{index}',
+            'endpoint',
+            revision='r1',
+            execution_limit=2,
+            execution_bytes=100_000,
+        )
+    assert (
+        store.configure_route(
+            store.test_owner,
+            'replacement',
+            'endpoint',
+            revision='r1',
+            execution_limit=2,
+            execution_bytes=100_000,
+        ).disposition
+        == 'backpressure'
+    )
+    cursor = 0
+    while True:
+        cursor, pools = store.scan_routes(cursor=cursor, limit=100)
+        for pool in pools:
+            store.disable_route(store.test_owner, pool)
+        if cursor == 0:
+            break
+    assert store.reset_idle_bindings(store.test_owner).disposition == 'reset'
+    assert (
+        store.configure_route(
+            store.test_owner,
+            'replacement',
+            'endpoint',
+            revision='r2',
+            execution_limit=2,
+            execution_bytes=100_000,
+        ).disposition
+        == 'configured'
+    )
+
+
+@pytest.mark.parametrize('state', ['ready', 'held'])
+def test_startup_binding_reset_does_not_erase_existing_work(store, state):
+    req = request_for(store)
+    if state == 'held':
+        claim, seq = run_request(store, req)
+        store.mark_unknown(
+            store.test_owner,
+            req.attempt_id,
+            claim_id=claim,
+            execution_seq=seq,
+            category='read_timeout',
+        )
+    else:
+        assert store.admit(req).disposition == 'admitted'
+    store.disable_route(store.test_owner, 'pool')
+    before = store.client.hgetall(store.keys.request(req.attempt_id))
+    assert store.reset_idle_bindings(store.test_owner).disposition == 'work_pending'
+    assert store.client.hgetall(store.keys.request(req.attempt_id)) == before
+
+
 @pytest.mark.parametrize(
     'cleanup', ['ack', 'purge', 'producer_expiry', 'owner_recovery']
 )

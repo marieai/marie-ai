@@ -4,6 +4,7 @@ import json
 import os
 
 import pytest
+from test_queued_dispatch_trace_payload import _content_free
 from test_queued_dispatch_worker_lifetime import events, kill_and_reap, start_dispatcher
 from test_request_dispatcher import (
     admit_request,
@@ -15,7 +16,9 @@ from test_request_dispatcher import (
 
 
 @pytest.mark.parametrize('model', ['model', 'https://forbidden.example/path'])
-async def test_execution_exports_content_free_history_once(store, http_endpoint, model):
+async def test_execution_exports_history_once_without_transport_metadata(
+    store, http_endpoint, model
+):
     from marie.engine.completion_contract import CompletionCallParams
     from marie.engine.llm_queue.store import StoreUnavailable
     from opentelemetry import trace
@@ -79,16 +82,15 @@ async def test_execution_exports_content_free_history_once(store, http_endpoint,
         assert attributes[prefix + 'message_count'] == 1
         for field in ('queue_wait_ms', 'execution_ms', 'total_latency_ms'):
             assert attributes[prefix + field] >= 0
+        assert 'sentinel' in attributes['input.value']
+        # The fixture echoes the model as the assistant reply.
+        assert attributes['output.value'] == model
+        metadata = json.dumps(_content_free(attributes))
+        assert 'sentinel' not in metadata
+        assert 'https://forbidden.example/path' not in metadata
         exported = json.dumps(attributes)
         assert all(
-            value not in exported
-            for value in (
-                'sentinel',
-                'endpoint-secret',
-                url,
-                req.producer_id,
-                'https://forbidden.example/path',
-            )
+            value not in exported for value in ('endpoint-secret', url, req.producer_id)
         )
         assert not spans[0].events
         assert len(received) == 1
@@ -141,7 +143,9 @@ async def test_unknown_transport_exports_error_without_success_or_exception_cont
         }
         assert store.usage()['reserved_items'] == 1
         assert not spans[0].events
-        assert 'sentinel' not in json.dumps(attributes)
+        assert 'sentinel' in attributes['input.value']
+        assert not any(key.startswith('output.') for key in attributes)
+        assert 'sentinel' not in json.dumps(_content_free(attributes))
     finally:
         releases['model'].set()
         await runtime.stop()
@@ -333,8 +337,9 @@ async def test_queue_context_links_concurrent_producers_to_http_and_metrics(
             assert completion.attributes['marie.llm_dispatch.remote_settled'] is True
             assert not completion.events
             assert 'result_committed' in [event.name for event in dispatch.events]
+            assert 'private-sentinel' in completion.attributes['input.value']
             assert 'private-sentinel' not in json.dumps(
-                [dict(s.attributes) for s in related]
+                [_content_free(dict(s.attributes)) for s in related]
             )
         result = reader.get_metrics_data()
         measurements = {
@@ -563,8 +568,13 @@ async def test_actual_producer_manifest_dispatch_and_delivery_share_origin(
         ).get_span_context()
         assert wire.trace_id == origin.get_span_context().trace_id
         assert wire.span_id == spans['LLMDispatch.completion'].context.span_id
+        assert (
+            'private-sentinel'
+            in spans['LLMDispatch.completion'].attributes['input.value']
+        )
+        assert spans['LLMQueue.result'].attributes['output.value'] == 'model'
         assert 'private-sentinel' not in json.dumps(
-            [dict(s.attributes) for s in spans.values()]
+            [_content_free(dict(s.attributes)) for s in spans.values()]
         )
         assert store.usage()['records'] == 0
     finally:

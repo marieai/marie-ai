@@ -13,7 +13,7 @@ Common usage:
     provider = register(project_name="marie-prod")
 
 2. Decorator API:
-    from marie.instrumentation import get_tracer
+tor    from marie.instrumentation import get_tracer
 
     tracer = get_tracer()
 
@@ -294,7 +294,7 @@ _log = _logging.getLogger(__name__)
 _OI_SPAN_KIND_ATTR = SpanAttributes.OPENINFERENCE_SPAN_KIND
 
 # ---------------------------------------------------------------------------
-# Limits — used by agent/tool spans for summary fields only.
+# Limits - used by agent/tool spans for summary fields only.
 # Full I/O is NOT truncated (users need to see complete input/output).
 # ---------------------------------------------------------------------------
 
@@ -387,7 +387,7 @@ def start_span(
 
 
 # ---------------------------------------------------------------------------
-# Fallback helpers — give vanilla SDK spans set_input / set_output
+# Fallback helpers - give vanilla SDK spans set_input / set_output
 # ---------------------------------------------------------------------------
 
 
@@ -400,11 +400,11 @@ def _redact_for_span(value: Any, *, _seen: frozenset[int] = frozenset()) -> Any:
     - Strings are passed through unmodified except inline data URLs
     - Replaces circular containers with a placeholder
     """
-    # Raw binary objects → placeholder
+    # Raw binary objects -> placeholder
     if isinstance(value, (bytes, bytearray, memoryview)):
         return f"<binary {len(value)} bytes>"
 
-    # numpy arrays → shape summary
+    # numpy arrays -> shape summary
     try:
         import numpy as np
 
@@ -413,7 +413,7 @@ def _redact_for_span(value: Any, *, _seen: frozenset[int] = frozenset()) -> Any:
     except ImportError:
         pass
 
-    # torch tensors → shape summary
+    # torch tensors -> shape summary
     try:
         import torch
 
@@ -422,7 +422,7 @@ def _redact_for_span(value: Any, *, _seen: frozenset[int] = frozenset()) -> Any:
     except ImportError:
         pass
 
-    # Strings pass through — no truncation so users see full I/O.
+    # Strings pass through - no truncation so users see full I/O.
     # Inline data URLs are replaced so raw image bytes never land in traces.
     if isinstance(value, str):
         if _is_data_url(value):
@@ -434,7 +434,7 @@ def _redact_for_span(value: Any, *, _seen: frozenset[int] = frozenset()) -> Any:
             return "<circular reference>"
         _seen = _seen | {id(value)}
 
-    # Dicts → strip sensitive keys, recurse values
+    # Dicts -> strip sensitive keys, recurse values
     if isinstance(value, dict):
         return {
             k: _redact_for_span(v, _seen=_seen)
@@ -442,7 +442,7 @@ def _redact_for_span(value: Any, *, _seen: frozenset[int] = frozenset()) -> Any:
             if k.lower() not in _SENSITIVE_KEYS
         }
 
-    # Lists → recurse items (no length cap)
+    # Lists -> recurse items (no length cap)
     if isinstance(value, (list, tuple)):
         return [_redact_for_span(item, _seen=_seen) for item in value]
 
@@ -484,7 +484,7 @@ def _serialise(value):
     Handles dataclasses, Pydantic models, and optional NumPy values without
     depending on the Marie server package.
 
-    No truncation is applied — users need full I/O visibility.
+    No truncation is applied - users need full I/O visibility.
     Only sensitive keys and non-serializable types (bytes, numpy, torch)
     are redacted.  The OTLP/ClickHouse pipeline handles large attribute
     values natively (gRPC default 4 MiB).
@@ -566,11 +566,11 @@ class _FallbackSpanContextManager:
 
 
 # ---------------------------------------------------------------------------
-# LLM message attribute helpers — dual representation per OpenInference spec
+# LLM message attribute helpers - dual representation per OpenInference spec
 # ---------------------------------------------------------------------------
 # Real OI instrumenters (openai, langchain) set BOTH:
-#   1. input.value / output.value  — JSON blob for generic display
-#   2. llm.input_messages.{i}.message.role/content(s) — chat message fields
+#   1. input.value / output.value  - JSON blob for generic display
+#   2. llm.input_messages.{i}.message.role/content(s) - chat message fields
 # They use span.set_attribute() directly, not set_input()/set_output().
 # We follow the same pattern using only public semconv constants.
 
@@ -624,7 +624,7 @@ def set_llm_io(
 
     if output_messages is not None:
         if isinstance(output_messages, str):
-            # Plain string → set output.value directly and wrap as assistant msg
+            # Plain string -> set output.value directly and wrap as assistant msg
             text, mime = _serialise(output_messages)
             try:
                 span.set_attribute(SpanAttributes.OUTPUT_VALUE, text)
@@ -917,7 +917,7 @@ def _set_message_attributes(span, messages, base_key: str):
     """Expand a list of {role, content} dicts into per-message span attributes.
 
     Mirrors the pattern in openinference-instrumentation-openai's
-    _request_attributes_extractor.py — iterate messages and call
+    _request_attributes_extractor.py - iterate messages and call
     span.set_attribute() with the full attribute path.
     """
     if not isinstance(messages, (list, tuple)):

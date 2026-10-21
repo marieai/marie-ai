@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict
+from copy import deepcopy
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Any
 
 from marie.engine.llm_queue.admission_policy import AdmissionPolicy
@@ -14,6 +16,69 @@ from marie.engine.llm_queue.endpoint import (
 )
 from marie.engine.llm_queue.request_dispatcher import DispatchLane
 from marie.engine.llm_queue.store import StoreLimits
+
+
+class DispatchPolicyError(ValueError):
+    """Identify policy failures without exposing policy contents in startup logs."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class StartupDispatchPolicy:
+    request_id: str
+    requested_by: str
+    expected_generation: int | None
+    data: dict[str, Any]
+    dispatch: dict[str, Any]
+
+
+def parse_startup_dispatch_policy(
+    fabric_group_id: str, raw: object
+) -> StartupDispatchPolicy:
+    """Validate the captured startup policy without resolving its credentials."""
+    try:
+        if not isinstance(raw, dict) or set(raw) != {
+            'schema_version',
+            'request_id',
+            'requested_by',
+            'requested_at',
+            'expected_generation',
+            'policy',
+        }:
+            raise ValueError
+        if type(raw['schema_version']) is not int or raw['schema_version'] != 1:
+            raise ValueError
+        for field in ('request_id', 'requested_by'):
+            if not isinstance(raw[field], str) or not re.fullmatch(
+                r'[A-Za-z0-9_.@-]{1,128}', raw[field]
+            ):
+                raise ValueError
+        timestamp = datetime.fromisoformat(raw['requested_at'].replace('Z', '+00:00'))
+        if timestamp.tzinfo is None:
+            raise ValueError
+        generation = raw['expected_generation']
+        if generation is not None and (
+            type(generation) is not int or not 1 <= generation <= 2**53 - 1
+        ):
+            raise ValueError
+        data = deepcopy(raw['policy'])
+        if not isinstance(data, dict) or data.get('enabled') is not True:
+            raise ValueError
+        snapshot, _ = build_policy_generation_snapshot(fabric_group_id, 1, data)
+        return StartupDispatchPolicy(
+            raw['request_id'],
+            raw['requested_by'],
+            generation,
+            data,
+            snapshot['dispatch'],
+        )
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise DispatchPolicyError(
+            'dispatch_startup_policy_invalid', 'Invalid scheduled startup policy'
+        ) from None
 
 
 def validate_dispatch_policy(policy: dict[str, Any]) -> dict[str, Any]:
@@ -27,6 +92,10 @@ def validate_dispatch_policy(policy: dict[str, Any]) -> dict[str, Any]:
         'total_concurrent_dispatch',
     }:
         raise ValueError('Invalid dispatch policy')
+    if not policy:
+        raise DispatchPolicyError(
+            'dispatch_policy_not_configured', 'Invalid dispatch policy'
+        )
     limits = StoreLimits(**policy.get('limits', {}))
     scheduling = policy.get('policy', 'drr')
     total = policy.get('total_concurrent_dispatch', limits.max_execution_items)
@@ -35,10 +104,16 @@ def validate_dispatch_policy(policy: dict[str, Any]) -> dict[str, Any]:
         or type(total) is not int
         or not 1 <= total <= limits.max_execution_items
     ):
-        raise ValueError('Invalid dispatch scheduling policy')
+        raise DispatchPolicyError(
+            'dispatch_capacity_invalid', 'Invalid dispatch scheduling policy'
+        )
     endpoints = policy.get('endpoints', [])
     endpoint_groups = policy.get('endpoint_groups', [])
     lanes = policy.get('lanes', [])
+    if lanes == []:
+        raise DispatchPolicyError(
+            'dispatch_pools_missing', 'Invalid dispatch policy size'
+        )
     if (
         not isinstance(endpoints, list)
         or not isinstance(endpoint_groups, list)
@@ -164,13 +239,19 @@ def validate_dispatch_policy(policy: dict[str, Any]) -> dict[str, Any]:
 def persisted_dispatch_policy(data: dict[str, Any]) -> dict[str, Any]:
     """Read schema version 1; ordinary pool URLs never become trusted endpoints."""
     fabric = (data.get('metadata') or {}).get('llm_dispatch')
+    if fabric is None:
+        raise DispatchPolicyError(
+            'dispatch_policy_not_configured', 'Invalid persisted dispatch fabric policy'
+        )
     if (
         not isinstance(fabric, dict)
         or type(fabric.get('schema_version')) is not int
         or fabric['schema_version'] != 1
         or set(fabric) - {'schema_version', 'endpoints', 'endpoint_groups', 'limits'}
     ):
-        raise ValueError('Invalid persisted dispatch fabric policy')
+        raise DispatchPolicyError(
+            'dispatch_policy_invalid', 'Invalid persisted dispatch fabric policy'
+        )
     lanes = []
     for row in data.get('lanes', []):
         metadata = (row.get('metadata') or {}).get('llm_dispatch')
@@ -189,7 +270,9 @@ def persisted_dispatch_policy(data: dict[str, Any]) -> dict[str, Any]:
             or bool(metadata.get('endpoint_id'))
             == bool(metadata.get('endpoint_group_id'))
         ):
-            raise ValueError('Invalid persisted dispatch pool policy')
+            raise DispatchPolicyError(
+                'dispatch_policy_invalid', 'Invalid persisted dispatch pool policy'
+            )
         lane = {
             'pool_id': row['pool_id'],
             'enabled': row['enabled'],

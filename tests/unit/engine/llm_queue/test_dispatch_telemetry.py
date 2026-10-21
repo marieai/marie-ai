@@ -524,3 +524,183 @@ def test_trace_only_helpers_preserve_instrumentation_suppression() -> None:
     finally:
         context.detach(token)
     provider.shutdown()
+
+
+def _delivered_spans(monkeypatch, tracer, parent, result) -> list:
+    from marie.engine.llm_queue import producer as producer_module
+
+    monkeypatch.setattr(producer_module, '_tracer', tracer, raising=False)
+    producer = QueuedDispatchProducer(
+        config=LlmQueueRuntimeConfig(
+            enabled=True,
+            queue_url='redis://unused:6379/0',
+            fabric_group_id='analysis',
+        )
+    )
+    producer.producer_id = 'producer'
+
+    class Store:
+        def server_time_ms(self):
+            return 1000
+
+        def admit_from_manifest(self, request):
+            producer._pending[request.attempt_id].result = BatchResult(
+                request.logical_task_id, *result
+            )
+            return StoreReply(disposition='admitted')
+
+        def ack_result(self, *args):
+            return StoreReply(disposition='acked')
+
+    producer._store = Store()
+    producer._start = lambda *args: producer._store
+    producer._check = lambda: None
+    with trace.use_span(NonRecordingSpan(parent)):
+        return producer.execute(
+            calls=[
+                CompletionCallParams(
+                    model='model',
+                    messages=[{'role': 'user', 'content': 'private-sentinel'}],
+                    context=RequestContext(job_id='job', work_unit_id='work'),
+                )
+            ],
+            batch_request_id='batch',
+            batch_timeout=1,
+        )
+
+
+def test_successful_delivery_exports_reply_but_not_prompt(monkeypatch) -> None:
+    from openinference.instrumentation import OITracer, TraceConfig
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = OITracer(provider.get_tracer('delivery-test'), TraceConfig())
+    results = _delivered_spans(monkeypatch, tracer, PARENT, ('reply-sentinel', None))
+    assert results[0].response == 'reply-sentinel'
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    delivery = dict(spans['LLMQueue.result'].attributes)
+    assert delivery['output.value'] == 'reply-sentinel'
+    assert delivery['llm.output_messages.0.message.content'] == 'reply-sentinel'
+    assert delivery['marie.llm_dispatch.state'] == 'succeeded'
+    assert spans['LLMQueue.result'].status.status_code is trace.StatusCode.OK
+    assert not any(
+        key.startswith(('input.', 'llm.input_messages.')) for key in delivery
+    )
+    assert 'reply-sentinel' not in json.dumps(dict(spans['LLMQueue.admit'].attributes))
+    assert 'private-sentinel' not in json.dumps(
+        [dict(s.attributes) for s in spans.values()]
+    )
+    provider.shutdown()
+
+
+def test_delivery_reply_honours_trace_config_masking(monkeypatch) -> None:
+    from openinference.instrumentation import OITracer, TraceConfig
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer = OITracer(
+        provider.get_tracer('delivery-mask-test'), TraceConfig(hide_outputs=True)
+    )
+    _delivered_spans(monkeypatch, tracer, PARENT, ('reply-sentinel', None))
+    spans = {s.name: s for s in exporter.get_finished_spans()}
+    delivery = dict(spans['LLMQueue.result'].attributes)
+    assert delivery['output.value'] == '__REDACTED__'
+    assert 'reply-sentinel' not in json.dumps(delivery)
+    provider.shutdown()
+
+
+def test_unsampled_delivery_never_serializes_reply(monkeypatch) -> None:
+    from marie.engine.llm_queue import producer as producer_module
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    serialized = []
+    monkeypatch.setattr(
+        producer_module, 'set_llm_io', lambda *a, **k: serialized.append(k)
+    )
+    unsampled = SpanContext(
+        trace_id=1, span_id=2, is_remote=True, trace_flags=TraceFlags(0)
+    )
+    results = _delivered_spans(
+        monkeypatch,
+        provider.get_tracer('delivery-unsampled-test'),
+        unsampled,
+        ('reply-sentinel', None),
+    )
+    assert results[0].response == 'reply-sentinel'
+    assert serialized == []
+    assert not exporter.get_finished_spans()
+    provider.shutdown()
+
+
+def _history_attributes(monkeypatch, outcome: ExecutionOutcome) -> dict:
+    from marie.engine.llm_queue import request_dispatcher
+
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(
+        request_dispatcher, '_tracer', provider.get_tracer('history-output-test')
+    )
+    request_dispatcher._emit_execution_history(
+        {'marie.llm_dispatch.queue_wait_ms': 1},
+        outcome,
+        time.time_ns(),
+        time.monotonic(),
+        parent_context=trace.set_span_in_context(NonRecordingSpan(PARENT)),
+    )
+    (span,) = exporter.get_finished_spans()
+    provider.shutdown()
+    return dict(span.attributes)
+
+
+def test_history_output_strips_inline_reasoning_like_direct_path(monkeypatch) -> None:
+    attributes = _history_attributes(
+        monkeypatch,
+        ExecutionOutcome(
+            response={
+                'choices': [
+                    {
+                        'message': {
+                            'content': '<think>private-reasoning</think>answer-text'
+                        },
+                        'finish_reason': 'stop',
+                    }
+                ]
+            },
+            remote_settled=True,
+        ),
+    )
+    assert attributes['output.value'] == 'answer-text'
+    assert 'private-reasoning' not in json.dumps(attributes)
+
+
+def test_history_output_skips_malformed_truncated_and_failed_responses(
+    monkeypatch,
+) -> None:
+    for outcome in (
+        ExecutionOutcome(response={'choices': 'malformed-sentinel'}),
+        ExecutionOutcome(response={'choices': [{'message': None}]}),
+        ExecutionOutcome(
+            response={
+                'choices': [
+                    {
+                        'message': {'content': 'truncated-sentinel'},
+                        'finish_reason': 'length',
+                    }
+                ]
+            }
+        ),
+        ExecutionOutcome(
+            response={'choices': [{'message': {'content': 'error-body-sentinel'}}]},
+            category='http_500',
+        ),
+    ):
+        attributes = _history_attributes(monkeypatch, outcome)
+        assert not any(
+            key.startswith(('output.', 'llm.output_messages.')) for key in attributes
+        )
+        assert 'sentinel' not in json.dumps(attributes)

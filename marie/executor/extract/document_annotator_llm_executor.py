@@ -89,7 +89,7 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
             )
 
         except Exception as e:
-            # Sinc we are not throwing an exception the job will be marked as successful
+            # Since we are not throwing an exception the job will be marked as successful
             # we log the error and return an error message, later we can improve this to mark the job as failed
             # by introducing an improved error handling mechanism
             self.logger.error(f"Error during annotation: {e}")

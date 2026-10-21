@@ -13,6 +13,56 @@ from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
 )
 
 
+async def test_target_probe_authorizes_and_works_without_an_active_policy(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from marie.engine.llm_queue import endpoint
+
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    APIKeyManager.add_key(
+        dict(
+            name='probe-admin',
+            api_key='mas_' + 'a' * 54,
+            scopes=['runtime-routing-admin'],
+            allowed_fabrics=['a'],
+        )
+    )
+    probe = AsyncMock(
+        return_value={
+            'reachable': False,
+            'category': 'connection_failed',
+            'latency_ms': 1,
+        }
+    )
+    monkeypatch.setattr(endpoint, 'probe_endpoint_connection', probe)
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a')
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        path = '/api/llm-dispatch/targets/probe?fabric_group_id=a'
+        payload = {'base_url': 'http://127.0.0.1:4010/v1', 'allow_loopback': True}
+        assert (await client.post(path, json=payload)).status_code == 401
+        probe.assert_not_called()
+        response = await client.post(
+            path, json=payload, headers={'Authorization': 'Bearer mas_' + 'a' * 54}
+        )
+        assert response.status_code == 200
+        assert response.json()['result']['vantage'] == 'gateway'
+        assert response.json()['result']['reachable'] is False
+        assert response.json()['result']['checked_at']
+        probe.assert_awaited_once()
+        response = await client.post(
+            path,
+            json={**payload, 'allow_loopback': False},
+            headers={'Authorization': 'Bearer mas_' + 'a' * 54},
+        )
+        assert response.json()['result']['category'] == 'address_not_allowed'
+        assert probe.await_count == 1
+
+
 async def test_failure_report_requires_observer_scope_and_preserves_event_identity(
     monkeypatch,
 ):

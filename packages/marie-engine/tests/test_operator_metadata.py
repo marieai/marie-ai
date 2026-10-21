@@ -7,7 +7,15 @@ from test_request_store import store as store
 
 
 @pytest.mark.parametrize(
-    'category', ['provider_5xx', 'replica_unavailable', 'unsupported_streaming']
+    'category',
+    [
+        'provider_5xx',
+        'replica_unavailable',
+        'unsupported_streaming',
+        'target_conflict',
+        'backpressure',
+        'registry_changed',
+    ],
 )
 def test_runtime_snapshot_preserves_known_dispatcher_error_categories(category):
     from marie.engine.llm_queue.registry import _clean

@@ -428,6 +428,10 @@ class RequestStore:
         keys.extend(
             self.keys.endpoint(identity) for identity in args.get("registry_ids", [])
         )
+        if op == "reset_idle_bindings":
+            keys.extend(
+                self.keys.route(identity) for identity in args['registry_routes']
+            )
         payload = dict(
             op=op,
             fabric_id=self.keys.fabric_id,
@@ -519,6 +523,30 @@ class RequestStore:
     def release_owner(self, owner: OwnerToken) -> StoreReply:
         """Release only this still-current owner after local workers have stopped."""
         return self._change("owner_release", owner=owner)
+
+    def reset_idle_bindings(self, owner: OwnerToken) -> StoreReply:
+        """Reset endpoint and route identities under fenced, drained admission gates."""
+        registries = {}
+        for name in ('endpoints', 'routes'):
+            cursor = 0
+            identities = set()
+            while True:
+                cursor, page = self._read(
+                    'sscan',
+                    self.keys.prefix + name,
+                    cursor=cursor,
+                    count=self.limits.cleanup_page_size,
+                )
+                identities.update(page)
+                if cursor == 0:
+                    break
+            registries[name] = sorted(identities)
+        return self._change(
+            'reset_idle_bindings',
+            owner=owner,
+            registry_ids=registries['endpoints'],
+            registry_routes=registries['routes'],
+        )
 
     def endpoint_status(self, endpoint_id: str) -> dict[str, Any]:
         """Read bounded circuit metadata without credentials or addresses."""

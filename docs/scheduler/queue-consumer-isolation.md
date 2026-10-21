@@ -38,6 +38,12 @@ marker cleanup remains enabled because it does not supply local work.
 
 ## Prepare the coordinated cutover
 
+Before changing SQL or runtime mounts, follow
+[Scheduler database backups and upgrades](../docs/getting-started/deployment/scheduler-database-upgrades.md)
+to export a full backup through Docker, compare the effective SQL bundle, and
+rehearse the upgrade on an isolated restored database. Keep existing data and a
+tested rollback path through the cutover.
+
 1. Run `config/psql/validation/queue-consumer-isolation.sql` for read-only queue,
    active-sensor, backlog, expired-run, and bounded malformed-identity inventory.
    Inventory configured consumers across the fleet separately.

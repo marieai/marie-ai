@@ -20,7 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from httpcore import AsyncNetworkBackend
+from httpcore import AsyncNetworkBackend, ConnectError, ConnectTimeout
 from httpcore._backends.anyio import AnyIOBackend
 from marie.engine.completion_contract import (
     CompletionCallParams,
@@ -266,6 +266,34 @@ class _PinnedNetworkBackend(AsyncNetworkBackend):
 
     async def sleep(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
+
+
+async def probe_endpoint_connection(endpoint: RegisteredEndpoint) -> dict[str, Any]:
+    """Check TCP reachability once, without credentials or inference traffic."""
+    parsed = urlsplit(endpoint.base_url)
+    began = time.monotonic()
+    category = 'tcp_connected'
+    try:
+        stream = await asyncio.wait_for(
+            _PinnedNetworkBackend(endpoint).connect_tcp(
+                parsed.hostname,
+                parsed.port or (443 if parsed.scheme == 'https' else 80),
+                timeout=3.0,
+            ),
+            timeout=3.0,
+        )
+        await stream.aclose()
+    except EndpointPolicyError:
+        category = 'address_not_allowed'
+    except (TimeoutError, ConnectTimeout):
+        category = 'timeout'
+    except (OSError, ConnectError):
+        category = 'connection_failed'
+    return {
+        'reachable': category == 'tcp_connected',
+        'category': category,
+        'latency_ms': round((time.monotonic() - began) * 1000),
+    }
 
 
 @dataclass(slots=True)

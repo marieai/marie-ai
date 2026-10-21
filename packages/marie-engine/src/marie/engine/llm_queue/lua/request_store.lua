@@ -48,7 +48,7 @@ end
 local R, alive, members, ready, route, usage, owner, generation,
       delayed, processing, deadlines, retention, producers, limits_key, routes, endpoint, endpoints = unpack(KEYS)
 local manifest = KEYS[18]
-local operations = {route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
+local operations = {reset_idle_bindings=true,route_disable=true,initialize=true,owner_acquire=true,owner_renew=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,producer_create=true,
     producer_renew=true,producer_close=true,producer_expire=true,route=true,endpoint=true,admit=true,admit_manifest=true,
     metadata=true,result=true,ack_result=true,claim=true,reserve_replica=true,release_replica=true,payload=true,start=true,defer=true,promote=true,
     finish=true,cancel=true,recover=true,return_untransmitted=true,discard=true,purge=true,settle=true,prune=true,continue=true,record_attempt=true}
@@ -381,7 +381,7 @@ local function finish_terminal(state, result)
     if count_admission then redis.call('HINCRBY',route,'accepted',1) end
     redis.call('HINCRBY',route,'completed',1)
 end
-local dispatcher_ops = {route_disable=true,route=true,endpoint=true,claim=true,reserve_replica=true,release_replica=true,start=true,payload=true,defer=true,return_untransmitted=true,
+local dispatcher_ops = {reset_idle_bindings=true,route_disable=true,route=true,endpoint=true,claim=true,reserve_replica=true,release_replica=true,start=true,payload=true,defer=true,return_untransmitted=true,
     promote=true,finish=true,recover=true,purge=true,settle=true,prune=true,owner_release=true,circuit_feedback=true,mark_unknown=true,reject_claim=true,continue=true,record_attempt=true}
 if dispatcher_ops[op] and not owner_valid() then return reply('stale_owner') end
 if op == 'initialize' then
@@ -420,6 +420,35 @@ elseif op == 'producer_close' or op == 'producer_expire' then
     if live() then return reply('producer_live') end
     if redis.call('SCARD',members) == 0 then redis.call('ZREM',producers,a.producer_id) end
     return reply('producer_dead')
+elseif op == 'reset_idle_bindings' then
+    if n(usage,'active_items') ~= 0 or n(usage,'ready_ids') ~= 0 or n(usage,'reserved_items') ~= 0 or redis.call('ZCARD',processing) ~= 0 then
+        return reply('work_pending')
+    end
+    if type(a.registry_ids) ~= 'table' or type(a.registry_routes) ~= 'table' or
+       #a.registry_ids ~= redis.call('SCARD',endpoints) or #a.registry_routes ~= redis.call('SCARD',routes) or
+       #KEYS ~= 17+#a.registry_ids+#a.registry_routes then return reply('registry_changed') end
+    local prefix = string.sub(owner,1,#owner-#'owner')
+    local seen = {}
+    for i,id in ipairs(a.registry_ids) do
+        if seen[id] or redis.call('SISMEMBER',endpoints,id) ~= 1 or KEYS[17+i] ~= prefix..'endpoint:'..id then
+            return reply('registry_changed')
+        end
+        seen[id] = true
+        if n(KEYS[17+i],'reserved_items') ~= 0 then return reply('work_pending') end
+    end
+    seen = {}
+    for i,id in ipairs(a.registry_routes) do
+        local key = KEYS[17+#a.registry_ids+i]
+        if seen[id] or redis.call('SISMEMBER',routes,id) ~= 1 or key ~= prefix..'route:'..id then
+            return reply('registry_changed')
+        end
+        seen[id] = true
+        if h(key,'enabled') == '1' then return reply('routes_enabled') end
+        if n(key,'reserved_items') ~= 0 then return reply('work_pending') end
+    end
+    for i=18,#KEYS do redis.call('DEL',KEYS[i]) end
+    redis.call('DEL',endpoints,routes)
+    return reply('reset')
 elseif op == 'route_disable' then
     if redis.call('SISMEMBER',routes,a.pool_id) == 0 then return reply('missing') end
     redis.call('HSET',route,'enabled','0')

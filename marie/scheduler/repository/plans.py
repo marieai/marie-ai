@@ -146,6 +146,22 @@ def insert_llm_routes(schema: str) -> str:
                 route_digest text,
                 payload jsonb
             )
+        ), locked_policy AS MATERIALIZED (
+            SELECT config.fabric_group_id, config.active_policy_generation,
+                   generation.policy_digest
+            FROM {schema}.llm_queue_fabric_config config
+            JOIN {schema}.llm_queue_policy_generation generation
+              ON generation.fabric_group_id = config.fabric_group_id
+             AND generation.generation = config.active_policy_generation
+            WHERE config.fabric_group_id IN (SELECT fabric_group_id FROM routes)
+            ORDER BY config.fabric_group_id
+            FOR SHARE OF config
+        ), current_routes AS (
+            SELECT route.* FROM routes route
+            JOIN locked_policy config
+              ON config.fabric_group_id = route.fabric_group_id
+             AND config.active_policy_generation = route.policy_generation
+             AND config.policy_digest = route.policy_digest
         ), inserted_routes AS (
             INSERT INTO {schema}.llm_job_route (
                 work_unit_id, job_id, fabric_group_id, policy_generation,
@@ -160,7 +176,7 @@ def insert_llm_routes(schema: str) -> str:
                 effective_page_count, pool_id, logical_endpoint_group_id,
                 endpoint_revision, estimator_version, routing_source,
                 routing_actor, routing_reason
-            FROM routes
+            FROM current_routes
             RETURNING work_unit_id
         )
         INSERT INTO {schema}.llm_routing_outbox (

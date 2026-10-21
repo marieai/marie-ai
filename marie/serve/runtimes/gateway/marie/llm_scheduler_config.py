@@ -7,8 +7,9 @@ import json
 import re
 import time
 from dataclasses import dataclass, replace
-from datetime import datetime
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, Optional
+from uuid import uuid4
 
 import psycopg
 from marie.engine.llm_queue.admission_policy import AdmissionPolicy
@@ -17,7 +18,10 @@ from psycopg.types.json import Jsonb
 
 from marie.logging_core.logger import MarieLogger
 from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+    DispatchPolicyError,
+    StartupDispatchPolicy,
     build_policy_generation_snapshot,
+    parse_startup_dispatch_policy,
     persisted_dispatch_policy,
     validate_dispatch_policy,
 )
@@ -161,6 +165,68 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             self._close_cursor(cursor)
             self._close_connection(conn)
 
+    def _activate_policy_data(
+        self, cursor: Any, fabric_group_id: str, data: dict[str, Any], actor_id: str
+    ) -> ActivatedPolicy:
+        cursor.execute(
+            f"""
+            SELECT COALESCE(MAX(generation), 0)
+            FROM {self.config_schema}.llm_queue_policy_generation
+            WHERE fabric_group_id = %s
+            """,
+            (fabric_group_id,),
+        )
+        generation = int(cursor.fetchone()[0]) + 1
+        snapshot, _ = build_policy_generation_snapshot(
+            fabric_group_id, generation, data
+        )
+        digest = _policy_digest(snapshot)
+        cursor.execute(
+            f"""
+            SELECT generation, activated_by, created_on
+            FROM {self.config_schema}.llm_queue_policy_generation
+            WHERE fabric_group_id = %s AND policy_digest = %s
+            """,
+            (fabric_group_id, digest),
+        )
+        existing = cursor.fetchone()
+        if existing is None:
+            cursor.execute(
+                f"""
+                INSERT INTO {self.config_schema}.llm_queue_policy_generation (
+                    fabric_group_id,
+                    generation,
+                    policy_digest,
+                    policy_snapshot,
+                    activated_by
+                ) VALUES (%s, %s, %s, %s, %s)
+                RETURNING created_on
+                """,
+                (fabric_group_id, generation, digest, Jsonb(snapshot), actor_id),
+            )
+            created_on = cursor.fetchone()[0]
+            activated_by = actor_id
+        else:
+            generation = int(existing[0])
+            activated_by = str(existing[1])
+            created_on = existing[2]
+        cursor.execute(
+            f"""
+            UPDATE {self.config_schema}.llm_queue_fabric_config
+            SET active_policy_generation = %s,
+                    metadata = metadata - 'llm_dispatch_startup', updated_on = NOW()
+            WHERE fabric_group_id = %s
+            """,
+            (generation, fabric_group_id),
+        )
+        return ActivatedPolicy(
+            fabric_group_id=fabric_group_id,
+            generation=generation,
+            policy_digest=digest,
+            activated_by=activated_by,
+            created_on=created_on,
+        )
+
     def activate_admission_policy(
         self, fabric_group_id: str, actor_id: str
     ) -> ActivatedPolicy:
@@ -173,64 +239,123 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             cursor = conn.cursor()
             cursor.execute("SET LOCAL statement_timeout = '3000ms'")
             data = self._load_desired_policy(cursor, fabric_group_id, lock=True)
-            cursor.execute(
-                f"""
-                SELECT COALESCE(MAX(generation), 0)
-                FROM {self.config_schema}.llm_queue_policy_generation
-                WHERE fabric_group_id = %s
-                """,
-                (fabric_group_id,),
-            )
-            generation = int(cursor.fetchone()[0]) + 1
-            snapshot, _ = build_policy_generation_snapshot(
-                fabric_group_id, generation, data
-            )
-            digest = _policy_digest(snapshot)
-            cursor.execute(
-                f"""
-                SELECT generation, activated_by, created_on
-                FROM {self.config_schema}.llm_queue_policy_generation
-                WHERE fabric_group_id = %s AND policy_digest = %s
-                """,
-                (fabric_group_id, digest),
-            )
-            existing = cursor.fetchone()
-            if existing is None:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {self.config_schema}.llm_queue_policy_generation (
-                        fabric_group_id,
-                        generation,
-                        policy_digest,
-                        policy_snapshot,
-                        activated_by
-                    ) VALUES (%s, %s, %s, %s, %s)
-                    RETURNING created_on
-                    """,
-                    (fabric_group_id, generation, digest, Jsonb(snapshot), actor_id),
-                )
-                created_on = cursor.fetchone()[0]
-                activated_by = actor_id
-            else:
-                generation = int(existing[0])
-                activated_by = str(existing[1])
-                created_on = existing[2]
-            cursor.execute(
-                f"""
-                UPDATE {self.config_schema}.llm_queue_fabric_config
-                SET active_policy_generation = %s, updated_on = NOW()
-                WHERE fabric_group_id = %s
-                """,
-                (generation, fabric_group_id),
+            activation = self._activate_policy_data(
+                cursor, fabric_group_id, data, actor_id
             )
             conn.commit()
-            return ActivatedPolicy(
-                fabric_group_id=fabric_group_id,
-                generation=generation,
-                policy_digest=digest,
-                activated_by=activated_by,
-                created_on=created_on,
+            return activation
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
+    def load_startup_dispatch_policy(
+        self, fabric_group_id: str, *, initialize: bool = False
+    ) -> StartupDispatchPolicy | None:
+        """Load pending settings and optionally prepare the first policy activation."""
+        cursor = conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '1500ms'")
+            data = self._load_desired_policy(cursor, fabric_group_id, lock=initialize)
+            raw = data['metadata'].get('llm_dispatch_startup')
+            if (
+                initialize
+                and raw is None
+                and data['active_policy_generation'] is None
+                and data['enabled'] is True
+            ):
+                persisted_dispatch_policy(data)
+                raw = {
+                    'schema_version': 1,
+                    'request_id': uuid4().hex,
+                    'requested_by': 'gateway-startup',
+                    'requested_at': datetime.now(timezone.utc)
+                    .isoformat()
+                    .replace('+00:00', 'Z'),
+                    'expected_generation': None,
+                    'policy': {
+                        'enabled': True,
+                        'policy': data['policy'],
+                        'total_concurrent_dispatch': data['total_concurrent_dispatch'],
+                        'metadata': {'llm_dispatch': data['metadata']['llm_dispatch']},
+                        'lanes': data['lanes'],
+                    },
+                }
+                parse_startup_dispatch_policy(fabric_group_id, raw)
+                cursor.execute(
+                    f"""UPDATE {self.config_schema}.llm_queue_fabric_config
+                    SET metadata = jsonb_set(metadata, '{{llm_dispatch_startup}}', %s),
+                        updated_on = NOW()
+                    WHERE fabric_group_id = %s""",
+                    (Jsonb(raw), fabric_group_id),
+                )
+            request = (
+                parse_startup_dispatch_policy(fabric_group_id, raw)
+                if raw is not None
+                else None
             )
+            conn.commit()
+            return request
+        except Exception:
+            if conn is not None:
+                conn.rollback()
+            raise
+        finally:
+            self._close_cursor(cursor)
+            self._close_connection(conn)
+
+    def activate_startup_policy(
+        self,
+        fabric_group_id: str,
+        request: StartupDispatchPolicy,
+        check_store: Callable[[], None],
+    ) -> ActivatedPolicy:
+        """Activate exactly the captured request while admission is fenced."""
+        cursor = conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SET LOCAL statement_timeout = '3000ms'")
+            data = self._load_desired_policy(cursor, fabric_group_id, lock=True)
+            raw = data['metadata'].get('llm_dispatch_startup')
+            current = parse_startup_dispatch_policy(fabric_group_id, raw)
+            if (
+                current.request_id != request.request_id
+                or current.expected_generation != request.expected_generation
+                or data['active_policy_generation'] != request.expected_generation
+                or _policy_digest(current.data) != _policy_digest(request.data)
+                or data['enabled'] is not True
+            ):
+                raise DispatchPolicyError(
+                    'dispatch_startup_policy_conflict', 'Scheduled policy changed'
+                )
+            cursor.execute(
+                f"""SELECT EXISTS (
+                    SELECT 1 FROM {self.config_schema}.llm_job_route route
+                    LEFT JOIN {self.config_schema}.job job ON job.id = route.work_unit_id
+                    WHERE route.fabric_group_id = %s
+                      AND COALESCE(job.state NOT IN (
+                          'completed', 'skipped', 'expired', 'cancelled', 'failed'
+                      ), TRUE)
+                )""",
+                (fabric_group_id,),
+            )
+            if cursor.fetchone()[0]:
+                raise DispatchPolicyError(
+                    'dispatch_startup_work_pending', 'Existing routed work must drain'
+                )
+            check_store()
+            activation = self._activate_policy_data(
+                cursor, fabric_group_id, current.data, current.requested_by
+            )
+            check_store()
+            conn.commit()
+            return activation
         except Exception:
             if conn is not None:
                 conn.rollback()
@@ -283,7 +408,8 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             )
             cursor.execute(
                 f"""UPDATE {self.config_schema}.llm_queue_fabric_config
-                SET active_policy_generation = %s, updated_on = NOW()
+                SET active_policy_generation = %s,
+                    metadata = metadata - 'llm_dispatch_startup', updated_on = NOW()
                 WHERE fabric_group_id = %s""",
                 (generation, fabric_group_id),
             )
@@ -370,7 +496,10 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             )
             row = cursor.fetchone()
             if row is None:
-                raise ValueError('LLM routing fabric is not configured')
+                raise DispatchPolicyError(
+                    'dispatch_fabric_not_configured',
+                    'LLM routing fabric is not configured',
+                )
             if row[0] is None:
                 data = self._load_desired_policy(cursor, fabric_group_id, lock=False)
                 policy = persisted_dispatch_policy(data)
@@ -381,10 +510,16 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
             if not isinstance(row[2], dict) or not isinstance(
                 row[2].get('dispatch'), dict
             ):
-                raise ValueError('LLM routing policy generation is unavailable')
+                raise DispatchPolicyError(
+                    'dispatch_policy_generation_invalid',
+                    'LLM routing policy generation is unavailable',
+                )
             digest = str(row[1])
             if _policy_digest(row[2]) != digest:
-                raise ValueError('LLM routing policy digest mismatch')
+                raise DispatchPolicyError(
+                    'dispatch_policy_generation_invalid',
+                    'LLM routing policy digest mismatch',
+                )
             policy = validate_dispatch_policy(row[2]['dispatch'])
             policy['policy_generation'] = int(row[0])
             policy['policy_digest'] = digest
@@ -638,7 +773,9 @@ class PostgresSchedulerConfigRepository(PostgresqlMixin):
         )
         fabric = cursor.fetchone()
         if fabric is None:
-            raise ValueError('LLM routing fabric is not configured')
+            raise DispatchPolicyError(
+                'dispatch_fabric_not_configured', 'LLM routing fabric is not configured'
+            )
         cursor.execute(
             f"""
             SELECT pool_id, display_name, endpoint_url, quantum,

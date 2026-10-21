@@ -36,6 +36,13 @@ from tools.stress.llm_dispatch_stress_suite import (
 def _runtime_snapshot(*, reserved_items: int = 0) -> dict[str, object]:
     return {
         "observation": {"stale": False},
+        'policy': {
+            'desired_generation': 1,
+            'desired_digest': 'a' * 64,
+            'observed_generation': 1,
+            'observed_digest': 'a' * 64,
+            'synchronized': True,
+        },
         "runtime_summary": {
             "registered_dispatchers": 1,
             "running_dispatchers": 1,
@@ -84,6 +91,59 @@ def test_dispatch_preflight_accepts_an_idle_healthy_runtime() -> None:
         "endpoint_replicas": 1,
         "dispatch_execution_limit": 4,
     }
+
+
+@pytest.mark.parametrize(
+    'failure', ['missing', 'unactivated', 'unobserved', 'mismatched']
+)
+def test_dispatch_preflight_rejects_unavailable_active_policy_before_submitting_jobs(
+    failure,
+):
+    snapshot = _runtime_snapshot()
+    if failure == 'missing':
+        snapshot.pop('policy')
+    elif failure == 'unactivated':
+        snapshot['policy'] = {
+            'desired_generation': None,
+            'desired_digest': None,
+            'observed_generation': None,
+            'observed_digest': None,
+            'synchronized': False,
+        }
+    elif failure == 'unobserved':
+        snapshot['policy']['observed_generation'] = None
+        snapshot['policy']['synchronized'] = False
+    else:
+        snapshot['policy']['observed_digest'] = 'b' * 64
+    with pytest.raises(RuntimeError, match='routing policy'):
+        validate_clean_dispatch_runtime(snapshot)
+
+
+def test_dispatch_preflight_explains_configuration_failure_before_missing_counters() -> (
+    None
+):
+    snapshot = _runtime_snapshot()
+    snapshot['dispatchers'] = [
+        {'role': 'owner', 'configuration_ready': False, 'last_error': 'target_conflict'}
+    ]
+    snapshot['endpoint_groups'][0]['replicas'][0]['reserved_items'] = None
+    snapshot['endpoint_groups'][0]['replicas'][0]['reserved_bytes'] = None
+    with pytest.raises(
+        RuntimeError,
+        match=r'dispatch runtime is not ready.*target_conflict.*click Save',
+    ) as error:
+        validate_clean_dispatch_runtime(snapshot)
+    assert 'not clean' not in str(error.value)
+
+
+def test_dispatch_preflight_does_not_treat_a_standby_as_a_configuration_failure() -> (
+    None
+):
+    snapshot = _runtime_snapshot()
+    snapshot['dispatchers'] = [
+        {'role': 'standby', 'configuration_ready': False, 'last_error': None}
+    ]
+    assert validate_clean_dispatch_runtime(snapshot)['pending_requests'] == 0
 
 
 def test_dispatch_preflight_rejects_provider_limit_above_dispatch_capacity() -> None:
@@ -733,9 +793,9 @@ def _failure_phase_report(
                     "delta": {
                         "accepted": count,
                         "completed": count if completed else 0,
-                        "refunded_cost": refunded_cost
-                        if pool == "document-small"
-                        else 0,
+                        "refunded_cost": (
+                            refunded_cost if pool == "document-small" else 0
+                        ),
                     }
                 }
                 for pool, count in per_pool.items()

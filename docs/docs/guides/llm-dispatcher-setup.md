@@ -4,388 +4,426 @@ sidebar_position: 13
 
 # LLM dispatcher setup
 
-Run `tools/stress/llm_dispatch_deployment.py` to exercise the durable LLM dispatcher through a real gateway, scheduler, and external Document Annotator deployment. The gateway dispatches queued completion requests to AIMock; the Annotator processes synthetic pages and writes results to an isolated MinIO bucket.
+Use this guide to configure queued LLM dispatch for a regular gateway.
+Test fixtures and a fixture manifest are not required for installation.
 
-The runner generates its own gateway configuration, credentials, fabric ID, and ports. Use the steps below to prepare the Python environment and Docker fixtures, start the deployment, inspect it, and stop it.
+For a fresh application database, start with
+[LLM dispatch provisioning](../getting-started/deployment/scheduler-database-upgrades.md#provision-llm-dispatch-on-a-fresh-database).
+Ordinary schema installation creates a baseline fabric row, but provider endpoints,
+dispatch pools, and routing rules require deployment configuration.
 
-:::important Select a run mode
+## Provision a database policy with SQL
 
-Use `--start-only` for startup, `--invoke-only` for ordinary annotation, or a qualification mode such as `--s03`. Running with only `--output` and `--fixture-manifest` starts the services and then exits with `Deployment coverage has not executed`. Readiness alone does not mean the failure scenarios passed.
+Use this example for an initial `default` fabric configuration after installing
+the matching scheduler schema. Keep queued producers and submissions stopped.
+If the database contains existing application data, take the backups described in
+the provisioning guide first. The transaction below refuses to overwrite an
+active policy, registered dispatch metadata, or existing pools.
 
-:::
+The example provisions four pools in the `default` fabric with the document-size
+routing and DRR settings used by the previous installation:
 
-## Prepare the source environment
+| Pool | Effective pages | DRR quantum | Minimum concurrency | Maximum concurrency | Maximum burst per visit |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `document-small` | 1–4 | 4 | 1 | 4 | 2 |
+| `document-medium` | 5–16 | 2 | 1 | 4 | 1 |
+| `document-large` | 17+ | 1 | 0 | 4 | 1 |
+| `default` | Catch-all | 1 | 0 | 4 | Unset |
 
-Run these commands from your `marie-ai` checkout:
+The fabric permits four concurrent dispatch items in total, shared by all pools.
+Each pool can use the available shared capacity up to its own maximum. Routing
+uses `document.effective_page_count`; requests without matching page-count facts
+use the catch-all pool. The DRR quantum controls each pool's scheduling weight.
 
-```bash
-cd ~/dev/marieai/marie-ai
-.venv/bin/python --version
-docker info --format '{{.ServerVersion}}'
-docker compose version
-```
+This example uses the local AIMock provider at `http://127.0.0.1:4010/v1`, with
+loopback access enabled, matching the previous setup. The replica includes
+`"credential_env": "LLM_PROVIDER_API_KEY"`; supply that variable in the gateway
+environment, or remove the field when the provider does not require authentication.
+Never put the credential value in SQL.
+The address must be reachable from the gateway; `127.0.0.1` refers to the host or
+container where the gateway runs.
 
-Use Python 3.12 on Linux and a Docker Engine reachable by your user through the default local socket. The runner launches POSIX process groups, and the optional OOM case uses Linux cgroups and a systemd user session.
+For another OpenAI-compatible provider, change `base_url` in the replica
+registration. Set `allow_loopback` and `allow_private` to match the intended
+provider address. The logical inference target is the endpoint group `primary`;
+its physical provider is replica `primary-1`. Pools bind to that group and its
+revision. This format is supported by both the gateway and Studio's Inference
+Targets editor.
 
-The interpreter must be available at `<checkout>/.venv/bin/python`. A `.venv` symlink to a centrally managed environment works. Activating a different virtual environment does not change the interpreter selected by this script.
+If you already provisioned the earlier flat `endpoints` example, use
+[Convert the earlier flat endpoint example](#convert-the-earlier-flat-endpoint-example)
+instead of rerunning the initial provisioning transaction.
 
-If the source environment is missing dependencies, install the full source profile described in [Installation](../getting-started/installation.mdx). These commands use the dependency groups and compatibility patches from the repository setup helper:
+Execute the complete transaction in the application database, using a role
+authorized to write the scheduler configuration tables:
 
-```bash
-scripts/fetch-wheels.sh fetch
-uv sync --locked --extra cu130 --group dev --group legacy-gradio
-.venv/bin/python patches/patch-omegaconf-py312.py --no-confirm
-.venv/bin/python patches/patch-detectron2-metadata.py --no-confirm
-```
+```sql
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '30s';
 
-This profile requires the local wheels declared in `pyproject.toml` under `wheels/`. The fetch command retrieves the wheel inventory; use your usual GitHub authentication if its release assets require access. The Annotator imports the ML stack, including FAISS and SentenceTransformers, even though this qualification sets `CUDA_VISIBLE_DEVICES=''` and runs without GPU inference. A minimal gateway environment is insufficient. The generated synthetic annotation does not require model downloads.
-
-Check the main dependencies and entry point before creating containers:
-
-```bash
-.venv/bin/python - <<'PY'
-import boto3
-import httpx
-import psutil
-import psycopg
-import torch
-import transformers
-import yaml
-import marie.executor.extract
-
-print('Deployment imports available')
-PY
-.venv/bin/python -m tools.stress.llm_dispatch_deployment --help
-```
-
-The controller restarts in a deliberately restricted environment. It sets its own `PYTHONPATH`, cache directories, generated configuration, and offline Hugging Face settings. Shell exports such as `OPENAI_API_KEY`, `LLM_QUEUE_URL`, `MARIE_DEFAULT_MOUNT`, and `DOCKER_HOST` are not inherited. Docker must be available in `/usr/local/bin`, `/usr/bin`, or `/bin`; a remote Docker context or an executable available only through your virtual environment will not carry over.
-
-## Build and pull the required images
-
-The runner creates PostgreSQL, etcd, and MinIO. It reuses Valkey and AIMock from the fixture stack. That stack also includes Redis for the separate Redis and Valkey qualification tools.
-
-| Service | Image | Started by |
-| --- | --- | --- |
-| PostgreSQL with DocumentDB extensions | `marie-postgres-documentdb:17-0.103.0-repack-1.5.3` | Deployment runner |
-| etcd | `quay.io/coreos/etcd:v3.7.0` | Deployment runner |
-| MinIO | `minio/minio:latest` | Deployment runner |
-| Valkey | `valkey/valkey:9.1.2` | Fixture Compose stack |
-| Redis | `redis:7.4.2` | Fixture Compose stack |
-| AIMock | `marie-aimock-llm-dispatch-task10:qualification` | Fixture Compose stack |
-
-Build the two repository images and pull the others:
-
-```bash
-docker build \
-  -f Dockerfiles/postgres/Dockerfile \
-  -t marie-postgres-documentdb:17-0.103.0-repack-1.5.3 .
-
-docker build \
-  -f Dockerfiles/aimock/programmatic/Dockerfile \
-  -t marie-aimock-llm-dispatch-task10:qualification \
-  Dockerfiles/aimock/programmatic
-
-docker pull quay.io/coreos/etcd:v3.7.0
-docker pull minio/minio:latest
-docker pull valkey/valkey:9.1.2
-docker pull redis:7.4.2
-```
-
-Use this programmatic AIMock image: the qualification calls its admin `/fault-profile` endpoint as well as its OpenAI completion endpoint. An unrelated mock server with only `/v1/chat/completions` is insufficient. The deployment runner inspects infrastructure images before startup, so build or pull them first.
-
-The fixture pins Valkey to `9.1.2` for reproducible qualification. Its manifest and live server version checks require that exact release. When updating the pin, update the fixture Compose file, `STORE_VERSIONS` in `tools/stress/llm_queued_dispatch_aimock_e2e.py`, and the manifest together. Start a fresh fixture project and regenerate its manifest when moving from an older version.
-
-## Start the fixture stack
-
-Keep the following variables in the same shell for the rest of the walkthrough. Use an absolute artifact directory and unused loopback ports:
-
-```bash
-mkdir -p "$HOME/tmp"
-export QUAL_ROOT="$(mktemp -d "$HOME/tmp/llm-dispatch.XXXXXX")"
-export QUAL_PROJECT="marie-llm-fixtures-$(date +%Y%m%d%H%M%S)"
-export QUAL_COMPOSE_FILE="$PWD/Dockerfiles/docker-compose.llm-dispatch-qualification.yml"
-export QUAL_MOCK_PORT=4030
-export QUAL_ADMIN_PORT=4031
-export QUAL_VALKEY_PORT=4032
-export QUAL_REDIS_PORT=4033
-
-ss -ltn '( sport = :4030 or sport = :4031 or sport = :4032 or sport = :4033 )'
-```
-
-If the command lists listeners, choose different values for the corresponding port variables. Keep all four ports distinct and keep the same values when restarting or inspecting these fixtures.
-
-```bash
-docker compose --env-file /dev/null \
-  -p "$QUAL_PROJECT" -f "$QUAL_COMPOSE_FILE" up -d
-
-docker compose --env-file /dev/null \
-  -p "$QUAL_PROJECT" -f "$QUAL_COMPOSE_FILE" ps
-
-docker compose --env-file /dev/null \
-  -p "$QUAL_PROJECT" -f "$QUAL_COMPOSE_FILE" exec -T valkey valkey-cli ping
-
-curl --fail --silent --show-error "http://127.0.0.1:$QUAL_MOCK_PORT/health"
-curl --fail --silent --show-error "http://127.0.0.1:$QUAL_ADMIN_PORT/fault-profile"
-```
-
-Wait for Valkey to return `PONG` and for both HTTP checks to succeed before proceeding. No real provider API key is needed for this fixture.
-
-## Generate the fixture manifest
-
-The manifest records the current container IDs, image IDs, ownership labels, ports, and Compose project. Generate it from the running stack rather than copying IDs from another machine or an earlier run:
-
-```bash
-.venv/bin/python - <<'PY'
-import json
-import os
-import subprocess
-from pathlib import Path
-
-compose_file = str(Path(os.environ['QUAL_COMPOSE_FILE']).resolve())
-project = os.environ['QUAL_PROJECT']
-ports = {
-    name: os.environ[name]
-    for name in (
-        'QUAL_REDIS_PORT', 'QUAL_VALKEY_PORT',
-        'QUAL_MOCK_PORT', 'QUAL_ADMIN_PORT',
-    )
-}
-assert len(set(ports.values())) == 4, 'Choose four distinct ports'
-command = [
-    'docker', 'compose', '--env-file', '/dev/null',
-    '-p', project, '-f', compose_file,
-]
-manifest = {}
-for service, version in [('redis', '7.4.2'), ('valkey', '9.1.2')]:
-    identity = subprocess.check_output(
-        command + ['ps', '-a', '-q', service], text=True
-    ).strip()
-    info = json.loads(subprocess.check_output(['docker', 'inspect', identity]))[0]
-    labels = info['Config']['Labels']
-    assert info['State']['Running'], f'{service} is not running'
-    assert labels['marie.test.owner'] == 'llm-dispatch-task10'
-    assert labels['com.docker.compose.project'] == project
-    port = ports['QUAL_' + service.upper() + '_PORT']
-    binding = [{'HostIp': '127.0.0.1', 'HostPort': port}]
-    assert info['HostConfig']['PortBindings']['6379/tcp'] == binding
-    manifest[service] = {
-        'url': f'redis://127.0.0.1:{port}/0',
-        'version': version,
-        'container_id': info['Id'],
-        'image_id': info['Image'],
-        'compose_project': project,
-        'compose_file': compose_file,
-        'compose_ports': ports,
-        'service': service,
-        'owner_label': labels['marie.test.owner'],
-        'bindings': {'6379/tcp': port},
+DO $bootstrap$
+DECLARE
+    dispatch_metadata JSONB := $policy$
+    {
+      "llm_dispatch": {
+        "schema_version": 1,
+        "endpoint_groups": [
+          {
+            "group_id": "primary",
+            "revision": "r1",
+            "replicas": [
+              {
+                "replica_id": "primary-1",
+                "base_url": "http://127.0.0.1:4010/v1",
+                "credential_env": "LLM_PROVIDER_API_KEY",
+                "allow_loopback": true,
+                "execution_limit": 4,
+                "execution_bytes": 67108864
+              }
+            ]
+          }
+        ],
+        "limits": {
+          "max_execution_items": 4,
+          "max_execution_bytes": 67108864
+        }
+      }
     }
-path = Path(os.environ['QUAL_ROOT']) / 'fixtures.json'
-path.write_text(json.dumps(manifest, indent=2) + '\n')
-print(path)
-PY
+    $policy$::JSONB;
+BEGIN
+    IF dispatch_metadata #>> '{llm_dispatch,endpoint_groups,0,replicas,0,base_url}'
+       = 'https://your-provider.example/v1' THEN
+        RAISE EXCEPTION 'Replace the provider base_url placeholder before provisioning';
+    END IF;
+
+    PERFORM 1
+    FROM marie_scheduler.llm_queue_fabric_config
+    WHERE fabric_group_id = 'default'
+    FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1 FROM marie_scheduler.llm_queue_fabric_config
+        WHERE fabric_group_id = 'default'
+          AND (active_policy_generation IS NOT NULL OR metadata ? 'llm_dispatch')
+    ) OR EXISTS (
+        SELECT 1 FROM marie_scheduler.llm_queue_pool
+        WHERE fabric_group_id = 'default'
+    ) THEN
+        RAISE EXCEPTION 'Fabric already has policy or pools; use a reviewed policy update';
+    END IF;
+
+    INSERT INTO marie_scheduler.llm_queue_fabric_config (
+        fabric_group_id, policy, total_concurrent_dispatch, enabled, metadata
+    )
+    VALUES ('default', 'drr', 4, TRUE, dispatch_metadata)
+    ON CONFLICT (fabric_group_id) DO UPDATE SET
+        policy = EXCLUDED.policy,
+        total_concurrent_dispatch = EXCLUDED.total_concurrent_dispatch,
+        enabled = EXCLUDED.enabled,
+        metadata = marie_scheduler.llm_queue_fabric_config.metadata || EXCLUDED.metadata;
+
+    INSERT INTO marie_scheduler.llm_queue_pool (
+        fabric_group_id, pool_id, display_name, quantum,
+        min_concurrent, max_concurrent, max_burst_per_visit,
+        enabled, sort_order, metadata
+    )
+    SELECT
+        'default', preset.pool_id, preset.display_name, preset.quantum,
+        preset.min_concurrent, 4, preset.max_burst_per_visit,
+        TRUE, preset.sort_order,
+        jsonb_build_object(
+            'preset', 'document_size',
+            'llm_dispatch', jsonb_build_object(
+                'schema_version', 1,
+                'endpoint_group_id', 'primary',
+                'revision', 'r1',
+                'execution_bytes', 67108864
+            ),
+            'admission', jsonb_build_object(
+                'schema_version', 1,
+                'priority', preset.priority,
+                'accepting', TRUE,
+                'match', preset.match
+            )
+        ) || CASE WHEN preset.pool_id = 'default'
+             THEN '{"role":"catch_all"}'::JSONB ELSE '{}'::JSONB END
+    FROM (VALUES
+        ('default', 'Default', 1, 0, NULL::INTEGER, 0, 1000000,
+         '{}'::JSONB),
+        ('document-small', 'Document Small', 4, 1, 2, 20, 10,
+         '{"document.effective_page_count":{"gte":1,"lte":4}}'::JSONB),
+        ('document-medium', 'Document Medium', 2, 1, 1, 30, 20,
+         '{"document.effective_page_count":{"gte":5,"lte":16}}'::JSONB),
+        ('document-large', 'Document Large', 1, 0, 1, 40, 30,
+         '{"document.effective_page_count":{"gte":17}}'::JSONB)
+    ) AS preset (
+        pool_id, display_name, quantum, min_concurrent,
+        max_burst_per_visit, sort_order, priority, match
+    );
+END;
+$bootstrap$;
+
+COMMIT;
 ```
 
-Both entries use the `redis://` URL scheme. The deployment runner uses the Valkey entry and its AIMock ports. The Redis entry also makes the manifest compatible with the separate durable store qualification tools. If you recreate fixture containers, regenerate this manifest.
+If the transaction fails, issue `ROLLBACK` before retrying. This example creates
+three document-size admission rules and one catch-all rule. All four pools use
+the registered `primary` endpoint within a shared 64 MiB execution budget.
+Adapt the rules and capacity to the deployment. The submitted LLM request still selects
+its model. Setting only `llm_queue_pool.endpoint_url` does not register a trusted
+dispatch endpoint; the metadata above provides the endpoint binding.
 
-## Start and exercise the deployment
+Check the staged configuration without returning provider credentials or URLs:
 
-Use a new output directory for the initial command:
+```sql
+SELECT fabric_group_id, policy, total_concurrent_dispatch,
+       metadata ? 'llm_dispatch' AS has_dispatch_policy,
+       active_policy_generation
+FROM marie_scheduler.llm_queue_fabric_config
+WHERE fabric_group_id = 'default';
+
+SELECT pool_id, enabled, quantum, min_concurrent, max_concurrent,
+       max_burst_per_visit,
+       metadata #>> '{admission,priority}' AS admission_priority,
+       metadata #> '{admission,match}' AS admission_match,
+       metadata #>> '{llm_dispatch,endpoint_group_id}' AS endpoint_group_id,
+       metadata #>> '{llm_dispatch,revision}' AS revision
+FROM marie_scheduler.llm_queue_pool
+WHERE fabric_group_id = 'default'
+ORDER BY sort_order, pool_id;
+
+SELECT target ->> 'group_id' AS endpoint_group_id,
+       target ->> 'revision' AS revision,
+       replica ->> 'replica_id' AS replica_id,
+       replica ->> 'credential_env' AS credential_env,
+       replica ->> 'execution_limit' AS execution_limit
+FROM marie_scheduler.llm_queue_fabric_config fabric
+CROSS JOIN LATERAL jsonb_array_elements(
+    fabric.metadata #> '{llm_dispatch,endpoint_groups}'
+) AS targets(target)
+CROSS JOIN LATERAL jsonb_array_elements(target -> 'replicas') AS replicas(replica)
+WHERE fabric.fabric_group_id = 'default';
+```
+
+Expect four pool rows bound to `primary` at revision `r1` and one replica,
+`primary-1`. Studio should list `primary` under Inference Targets. A null
+`active_policy_generation` and "Policy not applied" are expected before first startup;
+"Destination registration complete" confirms the stored configuration, not a
+running gateway or resolved credentials.
+
+Restart the gateway with `LLM_QUEUE_ENABLED=true`, `LLM_QUEUE_FABRIC_GROUP_ID=default`,
+reachable Valkey configured through `LLM_QUEUE_URL`, any named provider credential
+required by your endpoint registration,
+and `llm_queue.llm_dispatch.policy_source: database` in its YAML configuration.
+When no active generation exists, startup automatically validates and activates
+the first policy from the SQL configuration using fenced ownership and drain
+checks. A separate Studio save or manual activation is not required. Look for
+`LLM routing policy activated: fabric=default generation=1` in the startup log,
+then verify that an active generation exists and the dispatcher reports it.
+
+For optional explicit activation of later saved policy changes, use an API key
+authorized for `runtime-routing-admin` on this fabric. Set `MARIE_GATEWAY_URL`
+to your gateway's HTTP address and supply
+`MARIE_GATEWAY_API_KEY` through your approved credential mechanism:
 
 ```bash
-export DEPLOYMENT_RUN="$QUAL_ROOT/deployment"
-
-.venv/bin/python -m tools.stress.llm_dispatch_deployment \
-  --output "$DEPLOYMENT_RUN" \
-  --fixture-manifest "$QUAL_ROOT/fixtures.json" \
-  --start-only
+curl --fail-with-body --silent --show-error \
+  --request POST \
+  --header "Authorization: Bearer ${MARIE_GATEWAY_API_KEY:?Set an authorized gateway API key}" \
+  "${MARIE_GATEWAY_URL:?Set the gateway HTTP address}/api/llm-dispatch/policy/activate?fabric_group_id=default"
 ```
 
-The runner creates three containers with a unique `marie-deployment-*` Compose project, chooses free loopback ports, and starts the gateway and Annotator as source Python processes. It generates queued dispatch configuration with the `document-small` pool, the `aimock` endpoint, one concurrent dispatch, and synthetic annotation templates. PostgreSQL credentials, the gateway API key, and MinIO credentials are generated automatically.
+The activation workflow validates admission rules and builds the immutable
+snapshot and digest. Do not manually insert policy-generation rows or set
+`active_policy_generation` to an arbitrary value. Confirm that the database shows
+an active generation, verify that the dispatcher reports the same generation,
+then enable matching queued producers and resume submissions. The policy-activation
+endpoint is unavailable while the gateway runs with `LLM_QUEUE_ENABLED=false`.
 
-Check readiness without printing credentials:
+### Convert the earlier flat endpoint example
 
-```bash
-.venv/bin/python - "$DEPLOYMENT_RUN/report.json" <<'PY'
-import json
-import sys
+Use this only if you already ran the earlier four-pool SQL example, which stored
+`metadata.llm_dispatch.endpoints`. The backend accepts that format, but Studio's
+Inference Targets editor manages `endpoint_groups`.
 
-report = json.load(open(sys.argv[1]))
-print('status:', report['status'])
-print('ports:', report.get('ports'))
-print('failures:', report['failures'])
-PY
+Keep queued submissions stopped and take a database backup first. The transaction
+below preserves the registered provider settings, credential binding, and four
+pools while converting their bindings to endpoint group `primary`. It refuses an
+active policy or a configuration that differs from the earlier example. An
+already converted configuration also refuses this one-time conversion.
+
+```sql
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SET LOCAL statement_timeout = '30s';
+
+DO $convert$
+DECLARE
+    fabric_metadata JSONB;
+    active_generation BIGINT;
+    dispatch_policy JSONB;
+    registered_endpoint JSONB;
+BEGIN
+    SELECT metadata, active_policy_generation
+    INTO fabric_metadata, active_generation
+    FROM marie_scheduler.llm_queue_fabric_config
+    WHERE fabric_group_id = 'default'
+    FOR UPDATE;
+
+    IF NOT FOUND OR active_generation IS NOT NULL THEN
+        RAISE EXCEPTION 'Conversion requires an existing, unactivated default fabric';
+    END IF;
+
+    dispatch_policy := fabric_metadata -> 'llm_dispatch';
+    IF jsonb_typeof(dispatch_policy -> 'endpoints') IS DISTINCT FROM 'array' THEN
+        RAISE EXCEPTION 'Expected the earlier flat endpoints configuration';
+    END IF;
+    IF jsonb_array_length(dispatch_policy -> 'endpoints') <> 1
+       OR (dispatch_policy ? 'endpoint_groups'
+           AND dispatch_policy -> 'endpoint_groups' <> '[]'::JSONB) THEN
+        RAISE EXCEPTION 'Conversion requires exactly one flat endpoint and no groups';
+    END IF;
+    registered_endpoint := dispatch_policy #> '{endpoints,0}';
+    IF registered_endpoint ->> 'endpoint_id' IS DISTINCT FROM 'primary' THEN
+        RAISE EXCEPTION 'Expected the earlier primary endpoint';
+    END IF;
+
+    PERFORM 1 FROM marie_scheduler.llm_queue_pool
+    WHERE fabric_group_id = 'default' FOR UPDATE;
+    IF (SELECT count(*) FROM marie_scheduler.llm_queue_pool
+        WHERE fabric_group_id = 'default') <> 4
+       OR EXISTS (
+           SELECT 1 FROM marie_scheduler.llm_queue_pool
+           WHERE fabric_group_id = 'default'
+             AND (pool_id NOT IN ('default', 'document-small', 'document-medium', 'document-large')
+                  OR metadata #>> '{llm_dispatch,endpoint_id}' IS DISTINCT FROM 'primary'
+                  OR metadata #>> '{llm_dispatch,revision}' IS DISTINCT FROM 'r1')
+       ) THEN
+        RAISE EXCEPTION 'Expected the earlier four pools bound to primary revision r1';
+    END IF;
+
+    dispatch_policy := (dispatch_policy - 'endpoints') || jsonb_build_object(
+        'endpoint_groups', jsonb_build_array(jsonb_build_object(
+            'group_id', 'primary',
+            'revision', 'r1',
+            'replicas', jsonb_build_array(
+                (registered_endpoint - 'endpoint_id')
+                || jsonb_build_object('replica_id', 'primary-1')
+            )
+        ))
+    );
+    UPDATE marie_scheduler.llm_queue_fabric_config
+    SET metadata = jsonb_set(fabric_metadata, '{llm_dispatch}', dispatch_policy)
+    WHERE fabric_group_id = 'default';
+
+    UPDATE marie_scheduler.llm_queue_pool
+    SET metadata = jsonb_set(
+        metadata, '{llm_dispatch}',
+        ((metadata -> 'llm_dispatch') - 'endpoint_id')
+        || jsonb_build_object('endpoint_group_id', 'primary')
+    )
+    WHERE fabric_group_id = 'default';
+END;
+$convert$;
+
+COMMIT;
 ```
 
-Successful startup records `ready_not_qualified` with no failures. Submit the synthetic nine-page annotation and then inspect gateway operations:
+After conversion, rerun the read-only verification queries above, supply the
+credential referenced by the policy in the gateway environment, restart the
+gateway, and verify the active policy generation. If you are provisioning a fresh database,
+use only the initial provisioning transaction; no conversion is needed.
 
-```bash
-.venv/bin/python -m tools.stress.llm_dispatch_deployment \
-  --output "$DEPLOYMENT_RUN" \
-  --fixture-manifest "$QUAL_ROOT/fixtures.json" \
-  --resume --invoke-only
+## Configure the gateway
 
-.venv/bin/python -m tools.stress.llm_dispatch_deployment \
-  --output "$DEPLOYMENT_RUN" \
-  --fixture-manifest "$QUAL_ROOT/fixtures.json" \
-  --resume --inspect
+The SQL provisioning workflow above uses a database policy. In your existing
+gateway YAML, keep this block under `with`:
+
+```yaml
+llm_queue:
+  fabric_group_id: default
+  llm_dispatch:
+    policy_source: database
 ```
 
-Every subsequent command against this output directory needs `--resume`. Each invocation replaces `report.json` and archives the previous report under `reports/`; the original runtime identity and generated credentials remain in `private-runtime.json`.
+For a mounted installation, the gateway configuration may be
+`/mnt/data/marie-ai/config/service/marie-gateway-4.0.0.yml`.
+The selector tells the gateway to load the selected fabric's dispatch policy
+from PostgreSQL. It reuses the PostgreSQL connection from `job_scheduler_kwargs`
+unless a separate connection is configured under `llm_queue.scheduler`.
+Keep the provider and pool settings in the database when using this mode:
 
-## Run dispatcher recovery scenarios
-
-Run each case with a separate, fresh output directory:
-
-```bash
-.venv/bin/python -m tools.stress.llm_dispatch_deployment \
-  --output "$QUAL_ROOT/s03" \
-  --fixture-manifest "$QUAL_ROOT/fixtures.json" \
-  --s03
-
-.venv/bin/python -m tools.stress.llm_dispatch_deployment \
-  --output "$QUAL_ROOT/sigkill" \
-  --fixture-manifest "$QUAL_ROOT/fixtures.json" \
-  --death
-```
-
-| Mode | Behavior |
+| Configuration | Location |
 | --- | --- |
-| `--prepare` | Create deployment infrastructure and runtime metadata without starting source processes. |
-| `--start-only` | Start source processes and wait for dispatcher and executor readiness. |
-| `--resume --invoke-only` | Submit synthetic annotation to an existing deployment. |
-| `--resume --inspect` | Save authenticated gateway operations snapshots. |
-| `--resume --restart --start-only` | Stop and restart source processes using the recorded infrastructure. |
-| `--s03` | Exercise a provider outage and recovery during annotation. |
-| `--death` | Kill the executor worker, check abandoned request cleanup, and explicitly launch a replacement Deployment. |
-| `--oom` | Trigger and verify a kernel OOM kill inside an executor scope limited to 8 GiB. |
+| Fabric ID and `policy_source: database` | Existing gateway YAML |
+| Provider URL, `credential_env` name, address permissions, and execution limits | Fabric policy metadata provisioned through SQL |
+| Four pools, DRR weights, capacity, endpoint bindings, and admission rules | Pool and fabric rows provisioned through SQL |
+| Active immutable policy generation | Created by the policy-activation workflow |
+| Credential values, `LLM_QUEUE_ENABLED`, and `LLM_QUEUE_URL` | Gateway environment |
 
-The OOM case requires cgroup v2 memory accounting and a working systemd user manager. Check `systemctl --user status` and the presence of `/sys/fs/cgroup/cgroup.controllers` first. Run this case only on a machine with memory available for an executor scope that deliberately fills an 8 GiB limit:
+Set `LLM_QUEUE_ENABLED=true` and point `LLM_QUEUE_URL` at the intended Valkey
+store. Supply the credential named by `credential_env` if that field is present.
+Use one consistent fabric ID in the gateway and producers. Enabled startup
+requires a complete registered policy; missing credentials, invalid policy,
+inconsistent fabric identity, or unavailable storage refuses startup. A disabled
+queue selects direct batch execution.
 
-```bash
-.venv/bin/python -m tools.stress.llm_dispatch_deployment \
-  --output "$QUAL_ROOT/oom" \
-  --fixture-manifest "$QUAL_ROOT/fixtures.json" \
-  --oom
-```
+### Save configuration and restart
 
-Each successful case retains a `case-report-*.json`. Verify the complete S03, SIGKILL, and OOM matrix before changing the source or stopping those deployments:
+In Studio's **LLM Scheduler**, click **Save** after editing a target, scheduler,
+or pool. This writes the settings to PostgreSQL immediately, including when the
+gateway is offline. The success message and pending-change banner explain:
+**Saved. Changes take effect after the gateway restarts.** There is no second
+save or scheduling step. Each Save replaces the previous pending configuration
+with the latest saved settings.
 
-```bash
-.venv/bin/python -m tools.stress.llm_dispatch_deployment_check \
-  --reports \
-    "$QUAL_ROOT/s03/case-report-S03.json" \
-    "$QUAL_ROOT/sigkill/case-report-SIGKILL.json" \
-    "$QUAL_ROOT/oom/case-report-OOM.json" \
-  --output "$QUAL_ROOT/deployment-check.json"
-```
+The running gateway continues using its active immutable policy revision. On
+restart, it loads the saved configuration and resolves its credentials before
+using the old policy's credentials. It validates the configuration, acquires
+exclusive fenced ownership, closes old admission gates, and requires durable
+PostgreSQL routes and the Valkey queue to be drained. It then replaces idle
+endpoint/route registrations, creates or reuses an immutable revision, updates
+the active pointer and consumes the pending change in one PostgreSQL transaction.
+No schema migration is needed. An incomplete or disabled configuration is saved
+without scheduling an enabled runtime policy; complete setup before starting
+queued dispatch.
 
-This checker compares the retained startup manifests to the current checkout and requires all three cases. A startup or ordinary annotation run does not supply that matrix. The worker replacement in these scenarios is explicit; it does not demonstrate automatic executor supervision.
+Missing credentials, another dispatcher owner, invalid or changed configuration,
+or outstanding work blocks startup activation. A failed preflight preserves the
+pending change and active revision. It can leave admission gates closed. If work
+must drain, choose **Cancel pending change** and restart the existing active
+configuration; normal dispatcher startup restores its admission gates. Drain the
+work, click **Save** again, then restart. Existing work is never discarded to
+force a configuration change. Fabric storage limits remain immutable.
 
-## Find logs and stop the deployments
+This also lets you repair a credential binding that prevents startup: save the
+correct environment variable name, or remove it for a provider that requires no
+authentication, then restart. Credential values still belong in the gateway
+environment. If startup activation commits but a later runtime failure occurs,
+the new revision remains active; correct that runtime failure and restart.
+PostgreSQL and Valkey do not share a distributed transaction.
 
-Use the artifact directory to inspect results:
+Each replica offers **Test connection**, an optional, timestamped TCP reachability
+check from the gateway's network context. It uses the selected private-network and
+loopback permissions and a three-second timeout. It sends no HTTP or inference
+request and does not check credentials, TLS negotiation, models, or inference
+readiness. The gateway must be available to run it. Results are not persisted or
+used as health, save, activation, or startup conditions; a target can come online
+after a failed check.
 
-| Artifact | Contents |
-| --- | --- |
-| `report.json` and `reports/` | Latest result and earlier controller reports. |
-| `commands/` | Subprocess commands, environment metadata, and process logs. |
-| `gateway.yml`, `executor.yml`, `generated-config/` | Configuration generated for this run. |
-| `probe.jsonl` | Process, dispatcher, admission, and output observations. |
-| `operations-*.json` | Gateway operations snapshots from inspection. |
-| `private-runtime.json` | Resource identities and generated credentials; keep this file private. |
+### Alternative: a static YAML policy
 
-Stop each output directory you created, including failed startup or scenario runs:
-
-```bash
-.venv/bin/python -m tools.stress.llm_dispatch_deployment \
-  --output "$DEPLOYMENT_RUN" \
-  --fixture-manifest "$QUAL_ROOT/fixtures.json" \
-  --resume --stop-owned
-```
-
-Repeat with the `s03`, `sigkill`, or `oom` output path if you ran those cases. `--stop-owned` verifies recorded ownership and stops the source processes and deployment infrastructure containers. It retains containers, volumes, and artifacts, and it leaves the shared Valkey, Redis, and AIMock fixtures running. `--stop-sources` stops only the gateway and Annotator processes.
-
-After all deployments using the fixtures have stopped, remove this fixture Compose project while retaining its data volumes:
-
-```bash
-docker compose --env-file /dev/null \
-  -p "$QUAL_PROJECT" -f "$QUAL_COMPOSE_FILE" down
-```
-
-## Resolve setup failures
-
-| Symptom | Action |
-| --- | --- |
-| Missing `.venv/bin/python` or an import fails | Repair the source environment in this checkout, including the ML profile and local wheels. |
-| `command_image_postgres_exit_1` or another image inspection failure | Build or pull the exact image tag listed above. |
-| Docker works in your shell but fails in the runner | Check the default Docker socket and restricted `PATH`; the runner does not inherit Docker context configuration. |
-| `reused_valkey_identity` | Regenerate the manifest from the running fixture project; verify its image and ownership labels. |
-| `FileExistsError` for the output directory | Use a new directory for a fresh deployment or `--resume` for an existing run. |
-| `Gateway readiness timeout` | Inspect executor and gateway logs in `commands/`, the latest report, and Valkey/AIMock health. |
-| `Address already in use` on a gateway port | Inspect all TCP connections, including outbound connections, and [reserve the gateway ports on Linux](#reserve-gateway-ports-on-linux). |
-| `prewrite retry evidence missing` in the local stress suite | Use [direct AIMock networking](#use-direct-aimock-networking-for-the-local-stress-suite). A published Docker port can produce an ambiguous read failure rather than a connection refusal. |
-| `Deployment coverage has not executed` | Select an explicit startup or qualification mode. Stop resources from the failed invocation before retrying. |
-| OOM scope setup or identity fails | Check cgroup v2 and the systemd user session; use `--death` to test worker death without allocating the OOM scope. |
-| Current-source matrix verification fails after edits | Rerun the cases against the current source; retained evidence is tied to the startup source inventory. |
-
-## Configure a regular gateway separately
-
-For an ordinary deployment, use `config/service/llm-dispatch.example.yml` as the dispatcher configuration reference. Enable the queue with `LLM_QUEUE_ENABLED=true` and set `LLM_QUEUE_URL` to the intended store. Queue enablement selects durable queued dispatch. A disabled queue uses direct batch execution. Enabled startup requires a complete registered policy; ordinary scheduler defaults or pool URLs do not provide endpoint registration.
-
-Configure one consistent fabric ID in the gateway and producer, endpoint credentials through `credential_env`, lane bindings, and store/execution limits. Use explicit static policy or complete registered policy from scheduler persistence. Missing credentials, invalid policy, inconsistent fabric identity, or unavailable storage refuses enabled startup. Enable loopback only for a local fixture. Those settings are generated by the qualification runner above; exporting them in your shell will not override its isolated deployment configuration.
+`config/service/llm-dispatch.example.yml` is a static policy fragment with
+endpoints, lanes, and limits supplied in YAML. Use it as a reference only when
+choosing `llm_dispatch.policy_source: static`; static is also the default when
+the selector is omitted. Database mode loads the persisted policy instead of
+the static endpoint and lane definitions. You do not need to copy that example
+into your gateway configuration for the SQL provisioning workflow.
 
 This is a fresh-install setup. The store initializes current fabric policy in
 `llm:dispatch:{fabric:<id>}:`; producers attach to that policy. Startup does not
 scan historical queue namespaces or require a legacy migration procedure.
-
-### Use direct AIMock networking for the local stress suite
-
-The local mixed-pool suite's `unreachable` phase qualifies an unsent retry:
-the provider connection must fail before transmission and the dispatcher must
-refund its scheduling charge. Stopping the inference listener inside a
-bridge-networked container does not stop Docker's published-port proxy. That
-proxy can accept the connection and produce `read_error` after transmission,
-which retains an uncertain reservation instead of refunding the charge.
-
-Programmatic AIMock uses host networking by default for a local gateway on Linux.
-Run from the checkout root and use the same Compose project
-name as your existing AIMock service (`marie` in this example):
-
-```bash
-docker compose --env-file /dev/null -p marie \
-  -f Dockerfiles/docker-compose.mock-llm-programmatic.yml \
-  up -d --build --force-recreate aimock-programmatic
-```
-
-This recreates the local mock service. The Compose file binds inference and admin
-listeners directly to host loopback ports `4010` and `4011`, without bridge
-membership or published ports. Set `AIMOCK_PORT` and `AIMOCK_ADMIN_PORT` if your
-registered policy and suite use different ports. Set `AIMOCK_HOST` explicitly if
-clients must reach the mock through another host interface; clients in isolated
-bridge containers cannot use their own loopback address to reach this service.
-See [Docker host networking](https://docs.docker.com/engine/network/drivers/host/).
-
-Once the test fabric is clean, rerun the failed phase with a new artifact ID:
-
-```bash
-.venv/bin/python tools/stress/llm_dispatch_stress_suite.py \
-  --runtime-mode queued-dispatch \
-  --suite-id local-baseline-prewrite-recheck \
-  --phases unreachable
-```
-
-Keep the refund assertion: successful document jobs alone do not qualify an
-unsent retry. The suite also rejects ambiguous remote outcomes in this phase,
-even if other calls were refunded. The timed outage must overlap actual dispatch;
-if it ends before requests arrive, there is no failure evidence to qualify.
-
-Changing networking or restarting a process does not settle reservations already
-left by a failed run. Use affirmative provider evidence to reconcile those
-attempts under the normal settlement procedure, or provision a separate clean
-test fabric after confirming the old test executions have ended. Do not erase
-held reservations or reinterpret read failures as unsent requests.
-
 ### Reserve gateway ports on Linux
 
 The regular gateway uses HTTP port `51000` and gRPC port `52000`. These ports
@@ -429,4 +467,17 @@ listening. Close the conflicting connection or stop its owning application,
 then retry once the port is free. A closed connection may remain in `TIME_WAIT`
 until the kernel releases it.
 
-See [LLM tracking and observability](./llm-tracking.md) for telemetry configuration in a regular deployment. This qualification disables OpenTelemetry export.
+See [LLM tracking and observability](./llm-tracking.md) for telemetry configuration.
+
+## Resolve startup failures
+
+For missing policy, pool, credential, fabric, or store configuration, see
+[LLM dispatch provisioning and startup diagnostics](../getting-started/deployment/scheduler-database-upgrades.md#provision-llm-dispatch-on-a-fresh-database).
+
+## Run optional qualification
+
+For automated deployment and failure-recovery testing, follow the
+[LLM dispatcher qualification runbook](https://github.com/marieai/marie-ai/blob/develop-agents/tools/stress/llm-dispatcher-qualification.md)
+at `tools/stress/llm-dispatcher-qualification.md` in your source checkout.
+That runbook covers the isolated test services, fixture manifest, load and
+recovery scenarios, and cleanup. These steps are optional for normal setup.

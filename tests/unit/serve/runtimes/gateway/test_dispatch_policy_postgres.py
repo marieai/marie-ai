@@ -45,6 +45,9 @@ class _PolicyDatabase:
                 compact = ' '.join(query.split())
                 if compact.startswith('SET LOCAL'):
                     return
+                if compact.startswith('SELECT EXISTS'):
+                    self.result = (getattr(database, 'routes_in_use', False),)
+                    return
                 if 'SELECT config.active_policy_generation' in compact:
                     if database.active_generation is None:
                         self.result = (None, None, None)
@@ -101,7 +104,14 @@ class _PolicyDatabase:
                     )
                     self.result = (created_on,)
                 elif 'UPDATE marie_scheduler.llm_queue_fabric_config' in compact:
+                    if 'jsonb_set(metadata' in compact:
+                        database.data['metadata']['llm_dispatch_startup'] = params[
+                            0
+                        ].obj
+                        return
                     database.active_generation = params[0]
+                    if "metadata - 'llm_dispatch_startup'" in compact:
+                        database.data['metadata'].pop('llm_dispatch_startup', None)
                 elif 'SELECT active_policy_generation' in compact:
                     self.result = (database.active_generation,)
                 elif 'SELECT policy_digest, policy_snapshot' in compact:

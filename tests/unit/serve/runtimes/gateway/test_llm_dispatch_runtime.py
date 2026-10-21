@@ -392,7 +392,7 @@ async def test_gateway_llm_dispatch_runtime_requires_store_when_enabled():
 
     assert runtime.health()["queue_configured"] is False
     with mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}):
-        with pytest.raises(RuntimeFailToStart, match="store is unavailable"):
+        with pytest.raises(RuntimeFailToStart, match="dispatch_store_not_configured"):
             await runtime.start()
 
 
