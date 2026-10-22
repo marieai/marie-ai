@@ -3,10 +3,14 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
+from tests.integration.scheduler._queue_consumer_harness import owned_database
 from tools.stress.scheduler_correctness import SchedulerCorrectnessVerifier
 from tools.stress.scheduler_db_stresser import (
     CorpusGenerator,
@@ -16,6 +20,36 @@ from tools.stress.scheduler_db_stresser import (
 )
 
 pytestmark = pytest.mark.slow
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def owned_stress_database(monkeypatch: pytest.MonkeyPatch):
+    if os.environ.get("MARIE_SCHEDULER_DB_STRESS_INTEGRATION") != "1":
+        yield
+        return
+    async with owned_database() as (_, connection, database):
+        validation = (
+            Path(__file__).parents[3]
+            / "config/psql/high-availability/scheduler_attempt_invariant_checks.sql"
+        )
+        await connection.execute(validation.read_text())
+        original_connect = connect
+
+        def connect_owned(config):
+            return original_connect(
+                replace(
+                    config,
+                    database=dict(
+                        host=database["hostname"],
+                        port=database["port"],
+                        user=database["username"],
+                        dbname=database["database"],
+                    ),
+                )
+            )
+
+        monkeypatch.setattr(__name__ + ".connect", connect_owned)
+        yield
 
 
 @pytest.mark.skipif(

@@ -81,7 +81,7 @@ func (c *Config) SetDefaults() {
 	if strings.TrimSpace(c.StorageRoot) == "" {
 		c.StorageRoot = strings.TrimSpace(c.MarieDefaultMount)
 		if c.StorageRoot == "" {
-			c.StorageRoot = "./storage"
+			c.StorageRoot = "/mnt/data/marie-ai"
 		}
 	}
 }

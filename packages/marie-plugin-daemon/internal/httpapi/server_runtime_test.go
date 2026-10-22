@@ -28,6 +28,11 @@ const fixturePackageRef = "ext.test.fixture-echo"
 var envelopeNonce atomic.Int64
 
 func newRuntimeServer(t *testing.T) http.Handler {
+	server, _ := newRuntimeServerAndPool(t)
+	return server
+}
+
+func newRuntimeServerAndPool(t *testing.T) (http.Handler, *io_tunnel.Pool) {
 	t.Helper()
 	root := t.TempDir()
 	manager := plugin_manager.NewManager(root)
@@ -40,7 +45,7 @@ func newRuntimeServer(t *testing.T) http.Handler {
 		WithEnvelopeVerifier(verifier),
 		WithManager(manager),
 		WithPool(pool),
-	)
+	), pool
 }
 
 func requireUV(t *testing.T) {
@@ -187,7 +192,7 @@ func TestInstallListInvokeRemoveLifecycle(t *testing.T) {
 		t.Fatalf("expected ready install in list, got %s", list.Body.String())
 	}
 
-	invokeEnvelope := runtimeEnvelope(t, map[string]any{"payload": map[string]any{"ping": true}})
+	invokeEnvelope := runtimeEnvelope(t, map[string]any{"packageDigest": installedDigest(t, server, fixturePackageRef), "payload": map[string]any{"ping": true}})
 	invokeBody, err := json.Marshal(invokeEnvelope)
 	if err != nil {
 		t.Fatal(err)
@@ -257,6 +262,53 @@ func TestInvokeStorageRoundTripSSE(t *testing.T) {
 	}
 	if !strings.Contains(body, `"type":"end"`) {
 		t.Fatalf("expected end frame, got %s", body)
+	}
+}
+
+func TestInvokeRejectsMismatchedPackageDigest(t *testing.T) {
+	requireUV(t)
+	server := newRuntimeServer(t)
+	archive := fixtureArchive(t)
+	if response := installArchive(t, server, archive); response.Code != http.StatusOK {
+		t.Fatalf("install failed: %s", response.Body.String())
+	}
+	for _, digest := range []string{"sha256:" + strings.Repeat("0", 64), strings.Repeat("0", 64)} {
+		body, err := json.Marshal(runtimeEnvelope(t, map[string]any{
+			"packageDigest": digest,
+			"payload":       map[string]any{"ping": true},
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/dispatch/invoke", bytes.NewReader(body)))
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "package_digest_mismatch") {
+			t.Errorf("signed mismatched digest was not rejected: %d %s", response.Code, response.Body.String())
+		}
+		if strings.Contains(response.Body.String(), `"type":"stream"`) {
+			t.Error("mismatched digest executed plugin")
+		}
+	}
+}
+
+func TestLazyInvokeChecksDigestBeforeStartingWorker(t *testing.T) {
+	requireUV(t)
+	server, pool := newRuntimeServerAndPool(t)
+	if response := installArchive(t, server, fixtureArchive(t)); response.Code != http.StatusOK {
+		t.Fatal(response.Body.String())
+	}
+	digest := installedDigest(t, server, fixturePackageRef)
+	if err := pool.Stop("org1__ws1", fixturePackageRef); err != nil {
+		t.Fatal(err)
+	}
+	if response := invokeDigest(t, server, fixturePackageRef, "sha256:"+strings.Repeat("0", 64), map[string]any{}); response.Code != http.StatusConflict {
+		t.Fatalf("mismatched digest was not rejected: %d %s", response.Code, response.Body.String())
+	}
+	if pool.ReadyCount() != 0 {
+		t.Fatal("invalid digest started a worker")
+	}
+	if response := invokeDigest(t, server, fixturePackageRef, digest, map[string]any{}); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"type":"stream"`) {
+		t.Fatalf("matching digest did not lazy-start: %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -331,6 +383,7 @@ for line in sys.stdin:
 
 	envelope := runtimeEnvelope(t, map[string]any{
 		"packageRef":    "ext.test.slow",
+		"packageDigest": installedDigest(t, server, "ext.test.slow"),
 		"payload":       map[string]any{"ping": true},
 		"runtimePolicy": map[string]any{"timeoutMs": float64(300), "maxConcurrent": float64(1), "maxMemoryBytes": float64(536870912), "networkPolicy": "none"},
 	})
@@ -399,7 +452,33 @@ func pluginArchive(t *testing.T, packageRef, script string) []byte {
 
 func invokeRef(t *testing.T, server http.Handler, packageRef string, payload any) *httptest.ResponseRecorder {
 	t.Helper()
-	body, err := json.Marshal(runtimeEnvelope(t, map[string]any{"packageRef": packageRef, "payload": payload}))
+	return invokeDigest(t, server, packageRef, installedDigest(t, server, packageRef), payload)
+}
+
+func installedDigest(t *testing.T, server http.Handler, packageRef string) string {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/v1/plugins", nil)
+	request.Header.Set("X-Marie-Envelope", envelopeHeader(t, runtimeEnvelope(t, nil)))
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	var result struct {
+		Plugins []plugin_manager.Install `json:"plugins"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	for _, install := range result.Plugins {
+		if install.PackageRef == packageRef {
+			return install.Digest
+		}
+	}
+	t.Fatalf("package not listed: %s", packageRef)
+	return ""
+}
+
+func invokeDigest(t *testing.T, server http.Handler, packageRef, digest string, payload any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(runtimeEnvelope(t, map[string]any{"packageRef": packageRef, "packageDigest": digest, "payload": payload}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -417,6 +496,7 @@ func TestReinstallReplacesRunningInstance(t *testing.T) {
 		t.Fatalf("install v1 returned %d: %s", response.Code, response.Body.String())
 	}
 	invoke := invokeRef(t, server, "ext.test.version", map[string]any{})
+	oldDigest := installedDigest(t, server, "ext.test.version")
 	if invoke.Code != http.StatusOK || !strings.Contains(invoke.Body.String(), `"v":1`) {
 		t.Fatalf("expected v1 response, got %d: %s", invoke.Code, invoke.Body.String())
 	}
@@ -428,6 +508,92 @@ func TestReinstallReplacesRunningInstance(t *testing.T) {
 	invoke = invokeRef(t, server, "ext.test.version", map[string]any{})
 	if invoke.Code != http.StatusOK || !strings.Contains(invoke.Body.String(), `"v":2`) {
 		t.Fatalf("expected v2 response after re-install, got %d: %s", invoke.Code, invoke.Body.String())
+	}
+	if stale := invokeDigest(t, server, "ext.test.version", oldDigest, map[string]any{}); stale.Code != http.StatusConflict {
+		t.Fatalf("stale invocation ran replacement: %d %s", stale.Code, stale.Body.String())
+	}
+}
+
+func TestIdenticalReinstallPreservesRunningEnvironment(t *testing.T) {
+	requireUV(t)
+	server := newRuntimeServer(t)
+	script := strings.Replace(versionScriptTemplate, "import sys", "import sys\nimport os", 1)
+	script = strings.Replace(script, `{"v": %d}`, `{"v": %d, "pid": os.getpid(), "venv": os.path.exists(sys.executable)}`, 1)
+	archive := pluginArchive(t, "ext.test.idempotent", fmt.Sprintf(script, 1))
+	if response := installArchive(t, server, archive); response.Code != http.StatusOK {
+		t.Fatalf("first install failed: %s", response.Body.String())
+	}
+	before := invokeVersion(t, server, "ext.test.idempotent")
+	if response := installArchive(t, server, archive); response.Code != http.StatusOK {
+		t.Fatalf("reinstall failed: %s", response.Body.String())
+	}
+	after := invokeVersion(t, server, "ext.test.idempotent")
+	if !after.Venv || after.PID != before.PID {
+		t.Fatalf("reinstall replaced worker or deleted its environment: before=%+v after=%+v", before, after)
+	}
+	responses := make(chan *httptest.ResponseRecorder, 4)
+	for range 4 {
+		request := httptest.NewRequest(http.MethodPost, "/v1/plugins/install", bytes.NewReader(archive))
+		request.Header.Set("X-Marie-Envelope", envelopeHeader(t, installEnvelope(t, archive, nil)))
+		go func() {
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			responses <- response
+		}()
+	}
+	for range 4 {
+		response := <-responses
+		if response.Code != http.StatusOK {
+			t.Fatalf("concurrent reinstall failed: %d %s", response.Code, response.Body.String())
+		}
+	}
+	if concurrent := invokeVersion(t, server, "ext.test.idempotent"); !concurrent.Venv || concurrent.PID != before.PID {
+		t.Fatalf("concurrent reinstall changed environment: %+v", concurrent)
+	}
+}
+
+type versionResult struct {
+	V    int  `json:"v"`
+	PID  int  `json:"pid"`
+	Venv bool `json:"venv"`
+}
+
+func invokeVersion(t *testing.T, server http.Handler, packageRef string) versionResult {
+	t.Helper()
+	response := invokeRef(t, server, packageRef, map[string]any{})
+	for _, line := range strings.Split(response.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var frame struct {
+			Type string        `json:"type"`
+			Data versionResult `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &frame); err != nil {
+			t.Fatal(err)
+		}
+		if frame.Type == "stream" {
+			return frame.Data
+		}
+	}
+	t.Fatalf("no version result returned: %d %s", response.Code, response.Body.String())
+	return versionResult{}
+}
+
+func TestFailedReplacementPreservesRunningVersion(t *testing.T) {
+	requireUV(t)
+	server := newRuntimeServer(t)
+	packageRef := "ext.test.keep-active"
+	v1 := pluginArchive(t, packageRef, fmt.Sprintf(versionScriptTemplate, 1))
+	if response := installArchive(t, server, v1); response.Code != http.StatusOK {
+		t.Fatalf("first install failed: %s", response.Body.String())
+	}
+	broken := pluginArchive(t, packageRef, "raise RuntimeError('failed replacement')\n")
+	if response := installArchive(t, server, broken); response.Code != http.StatusInternalServerError {
+		t.Fatalf("expected replacement to fail: %d %s", response.Code, response.Body.String())
+	}
+	if result := invokeVersion(t, server, packageRef); result.V != 1 {
+		t.Fatalf("failed replacement lost original version: %+v", result)
 	}
 }
 

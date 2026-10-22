@@ -7,6 +7,7 @@ from typing import Any
 from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.services.dag_submission_service import DagSubmissionService
+from marie.scheduler.util import validate_queue_scope
 
 
 class SchedulerDiagnostics:
@@ -21,6 +22,7 @@ class SchedulerDiagnostics:
         event_queue: asyncio.Queue[Any],
         active_dags: dict[str, Any],
         known_queues: set[str],
+        subscribed_queues: frozenset[str] | None,
         scheduling_engine: Any,
         gateway_instance_id: str,
         lease_owner: str,
@@ -36,6 +38,8 @@ class SchedulerDiagnostics:
         self.event_queue = event_queue
         self.active_dags = active_dags
         self.known_queues = known_queues
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self.scheduling_engine = scheduling_engine
         self.gateway_instance_id = gateway_instance_id
         self.lease_owner = lease_owner
@@ -70,6 +74,11 @@ class SchedulerDiagnostics:
 
     async def job(self, job_id: str) -> dict[str, Any] | None:
         return await self.repository.get_operational_job(job_id)
+
+    async def failure_report(
+        self, job_id: str, history_id: int
+    ) -> dict[str, Any] | None:
+        return await self.repository.get_failure_report(job_id, history_id)
 
     async def execution_history(
         self,
@@ -215,6 +224,14 @@ class SchedulerDiagnostics:
                 'scheduler_lease_owner': self.lease_owner,
                 'max_concurrent_dags': self.max_concurrent_dags,
                 'known_queues': list(self.known_queues),
+                "queue_scope": (
+                    "all" if self.subscribed_queues is None else "restricted"
+                ),
+                "subscribed_queues": (
+                    None
+                    if self.subscribed_queues is None
+                    else sorted(self.subscribed_queues)
+                ),
                 'active_dags_count': len(self.active_dags),
             },
             'timing_info': {
@@ -260,11 +277,11 @@ class SchedulerDiagnostics:
             }
 
         try:
-            debug_data['frontier_summary'] = self.frontier.summary(detail=True)
+            debug_data['frontier_summary'] = await self.frontier.summary(detail=True)
         except Exception as error:
             debug_data['frontier_summary_error'] = str(error)
 
-        debug_data['frontier'] = self._frontier_info()
+        debug_data['frontier'] = await self._frontier_info()
         return debug_data
 
     def _update_counts(self, result: Any, *, job: bool) -> str | None:
@@ -283,15 +300,15 @@ class SchedulerDiagnostics:
         except Exception:
             return 'unknown'
 
-    def _frontier_info(self) -> dict[str, Any]:
+    async def _frontier_info(self) -> dict[str, Any]:
         info: dict[str, Any] = {'available': self.frontier is not None}
         if self.frontier is None:
             return info
         try:
-            info['summary'] = self.frontier.summary(detail=True, top_n=10)
+            info['summary'] = await self.frontier.summary(detail=True, top_n=10)
         except TypeError:
             try:
-                info['summary'] = self.frontier.summary(detail=True)
+                info['summary'] = await self.frontier.summary(detail=True)
             except Exception as error:
                 info['summary_error'] = str(error)
         except Exception as error:

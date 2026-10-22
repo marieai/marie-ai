@@ -3,8 +3,7 @@ import os
 import time
 import warnings
 from pathlib import Path
-from typing import Any
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import boto3
 from boto3.s3.transfer import TransferConfig
@@ -263,13 +262,8 @@ class S3StorageHandler(PathHandler):
                 f'Could not connect to the endpoint URL: {self.config["S3_ENDPOINT_URL"]}'
             ) from e
 
-    def create_s3_resource(self, config) -> Any:
+    def create_s3_resource(self, config: Dict[str, Any]) -> Any:
         """Create a boto3 S3 resource from config."""
-
-        # print config for debugging
-        logger.info("S3 config:")
-        for key, value in config.items():
-            logger.info(f"{key}: {value}")
 
         s3_resource = boto3.resource(
             "s3",

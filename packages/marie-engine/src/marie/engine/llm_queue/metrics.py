@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from opentelemetry import metrics as otel_metrics
-
 from marie.engine.llm_queue.registry import dispatch_runtime_snapshot
+from opentelemetry import metrics as otel_metrics
 
 try:  # pragma: no cover - import surface varies by OTel version
     from opentelemetry.metrics import Observation
@@ -13,8 +12,10 @@ except ImportError:  # pragma: no cover
 
 
 class DispatchMetrics:
-    def __init__(self) -> None:
-        self._meter = otel_metrics.get_meter("marie.engine.llm_queue.dispatcher")
+    def __init__(self, meter: otel_metrics.Meter | None = None) -> None:
+        self._meter = meter or otel_metrics.get_meter(
+            "marie.engine.llm_queue.dispatcher"
+        )
         self._batches_counter = self._meter.create_counter(
             name="marie_llm_dispatch_batches",
             description="Number of LLM dispatch batches executed",
@@ -49,6 +50,15 @@ class DispatchMetrics:
         self._dropped_replies = self._meter.create_counter(
             name="marie_llm_dispatch_dropped_replies",
             description="Number of queued replies dropped before delivery",
+        )
+        self._queue_wait = self._meter.create_histogram(
+            name="marie_llm_dispatch_queue_wait_seconds",
+            unit="s",
+            description="Time from admission until a provider attempt begins",
+        )
+        self._request_outcomes = self._meter.create_counter(
+            name="marie_llm_dispatch_request_outcomes",
+            description="Dispatcher lifecycle outcomes, including deferral and settlement",
         )
 
         if Observation is not None:
@@ -100,6 +110,24 @@ class DispatchMetrics:
                 description="Age of the oldest pending request per DRR lane",
                 unit="s",
             )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_charged_cost_total",
+                callbacks=[self._observe_lane_charged_cost],
+                description="Cumulative durable DRR charge per lane",
+                unit="{cost_units}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_lane_refunded_cost_total",
+                callbacks=[self._observe_lane_refunded_cost],
+                description="Cumulative durable DRR refund per lane",
+                unit="{cost_units}",
+            )
+            self._meter.create_observable_gauge(
+                name="marie_llm_dispatch_replica_reserved_items",
+                callbacks=[self._observe_replica_reserved_items],
+                description="Current reserved calls per physical replica",
+                unit="{requests}",
+            )
 
     def record_batch(
         self,
@@ -122,15 +150,47 @@ class DispatchMetrics:
         dispatcher_id: str,
         duration_seconds: float,
         ok: bool,
+        fabric_group_id: str = "",
+        mode: str = "queued-dispatch",
+        category: str = "none",
+        remote_settled: bool = True,
+        queue_wait_seconds: float | None = None,
     ) -> None:
         attrs = self._attrs(
             pool_id=pool_id,
             dispatcher_id=dispatcher_id,
             status="ok" if ok else "error",
+            fabric_group_id=fabric_group_id,
+            mode=mode,
+            category=category,
+            remote_settled=remote_settled,
         )
         self._request_duration.record(duration_seconds, attributes=attrs)
+        if queue_wait_seconds is not None:
+            self._queue_wait.record(queue_wait_seconds, attributes=attrs)
         if not ok:
             self._execution_failures.add(1, attributes=attrs)
+
+    def record_request_outcome(
+        self,
+        *,
+        pool_id: str,
+        dispatcher_id: str,
+        fabric_group_id: str,
+        disposition: str,
+        category: str = "none",
+    ) -> None:
+        self._request_outcomes.add(
+            1,
+            attributes=self._attrs(
+                pool_id=pool_id,
+                dispatcher_id=dispatcher_id,
+                fabric_group_id=fabric_group_id,
+                mode="queued-dispatch",
+                disposition=disposition,
+                category=category,
+            ),
+        )
 
     def record_request_drop(
         self,
@@ -173,7 +233,7 @@ class DispatchMetrics:
         return [
             Observation(
                 snapshot.get("registered_dispatchers", 0),
-                {"contract_version": str(snapshot.get("contract_version", "unknown"))},
+                {"mode": str(snapshot.get("mode", "unknown"))},
             )
         ]
 
@@ -182,14 +242,14 @@ class DispatchMetrics:
         return [
             Observation(
                 snapshot.get("running_dispatchers", 0),
-                {"contract_version": str(snapshot.get("contract_version", "unknown"))},
+                {"mode": str(snapshot.get("mode", "unknown"))},
             )
         ]
 
     def _observe_queue_depth(self, _options: Any):
         snapshot = dispatch_runtime_snapshot()
         observations = []
-        contract_version = str(snapshot.get("contract_version", "unknown"))
+        mode = str(snapshot.get("mode", "unknown"))
         for dispatcher in snapshot.get("dispatchers", []):
             depth = dispatcher.get("request_queue_depth")
             if depth is None:
@@ -198,7 +258,7 @@ class DispatchMetrics:
                 Observation(
                     depth,
                     {
-                        "contract_version": contract_version,
+                        "mode": mode,
                         "pool_id": str(dispatcher.get("pool_id", "")),
                         "dispatcher_id": str(dispatcher.get("dispatcher_id", "")),
                     },
@@ -221,10 +281,40 @@ class DispatchMetrics:
     def _observe_lane_oldest_pending_seconds(self, _options: Any):
         return self._observe_lane_metric("oldest_pending_age_seconds")
 
+    def _observe_lane_charged_cost(self, _options: Any):
+        return self._observe_lane_metric("charged_cost")
+
+    def _observe_lane_refunded_cost(self, _options: Any):
+        return self._observe_lane_metric("refunded_cost")
+
+    def _observe_replica_reserved_items(self, _options: Any):
+        snapshot = dispatch_runtime_snapshot()
+        observations = []
+        mode = str(snapshot.get("mode", "unknown"))
+        for dispatcher in snapshot.get("dispatchers", []):
+            for replica_id, replica in (dispatcher.get("endpoints") or {}).items():
+                value = replica.get("reserved_items")
+                if value is None:
+                    continue
+                observations.append(
+                    Observation(
+                        value,
+                        {
+                            "mode": mode,
+                            "dispatcher_id": str(dispatcher.get("dispatcher_id", "")),
+                            "fabric_group_id": str(
+                                dispatcher.get("fabric_group_id", "")
+                            ),
+                            "replica_id": str(replica_id),
+                        },
+                    )
+                )
+        return observations
+
     def _observe_lane_metric(self, value_key: str):
         snapshot = dispatch_runtime_snapshot()
         observations = []
-        contract_version = str(snapshot.get("contract_version", "unknown"))
+        mode = str(snapshot.get("mode", "unknown"))
         for dispatcher in snapshot.get("dispatchers", []):
             dispatcher_id = str(dispatcher.get("dispatcher_id", ""))
             fabric_group_id = str(dispatcher.get("fabric_group_id", ""))
@@ -238,7 +328,7 @@ class DispatchMetrics:
                     Observation(
                         value,
                         {
-                            "contract_version": contract_version,
+                            "mode": mode,
                             "dispatcher_id": dispatcher_id,
                             "fabric_group_id": fabric_group_id,
                             "gateway_id": gateway_id,

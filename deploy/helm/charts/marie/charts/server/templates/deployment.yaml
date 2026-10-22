@@ -9,6 +9,7 @@
 {{- $etcdExternal := $etcd.external | default dict }}
 {{- $minio := .Values.global.minio | default dict }}
 {{- $minioExternal := $minio.external | default dict }}
+{{- $minioAuth := $minio.auth | default dict }}
 {{- $storage := .Values.global.storage | default dict }}
 {{- $storageS3 := $storage.s3 | default dict }}
 {{- $metrics := .Values.config.metrics | default dict }}
@@ -194,12 +195,12 @@ spec:
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  name: {{ $postgresqlAuth.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
                   key: postgres-password
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" .Release.Name }}
+                  name: {{ $postgresqlAuth.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
                   key: postgres-password
             {{- else if $postgresqlExternal.host }}
             - name: DATABASE_HOST
@@ -243,9 +244,9 @@ spec:
               value: "2379"
             {{- end }}
             - name: OTEL_EXPORTER_HOST
-              value: localhost
+              value: {{ tpl ((($.Values.global).otel).host | default "localhost") $ | quote }}
             - name: OTEL_EXPORTER_ENDPOINT
-              value: http://localhost:4317
+              value: {{ tpl ((($.Values.global).otel).endpoint | default "http://localhost:4317") $ | quote }}
             - name: CLICKHOUSE_HOSTNAME
               value: {{ printf "%s-clickhouse" .Release.Name | quote }}
             {{- if $rabbitmq.enabled }}
@@ -307,13 +308,13 @@ spec:
             - name: S3_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-minio" .Release.Name }}
-                  key: root-user
+                  name: {{ $minioAuth.existingSecret | default (printf "%s-minio" .Release.Name) }}
+                  key: {{ $minioAuth.rootUserKey | default "root-user" }}
             - name: S3_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-minio" .Release.Name }}
-                  key: root-password
+                  name: {{ $minioAuth.existingSecret | default (printf "%s-minio" .Release.Name) }}
+                  key: {{ $minioAuth.rootPasswordKey | default "root-password" }}
             {{- else if eq ($storage.type | default "") "s3" }}
             - name: S3_ENDPOINT_URL
               value: {{ $storageS3.endpoint | default $minioExternal.endpoint | quote }}
@@ -334,22 +335,10 @@ spec:
                   key: {{ $storageS3.existingSecretSecretKeyKey | default "secret-key" }}
             {{- end }}
             {{- end }}
-            {{- if .Values.global.valkey.enabled }}
-            {{- $valkeyHost := default (printf "%s-valkey" .Release.Name) .Values.global.valkey.host }}
-            {{- $valkeyPort := default 6379 .Values.global.valkey.port }}
-            {{- $valkeyDatabase := default 0 .Values.global.valkey.database }}
-            {{- $valkeyTls := default false .Values.global.valkey.tls }}
-            {{- if .Values.global.valkey.auth.enabled }}
-            - name: VALKEY_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (printf "%s-valkey-auth" .Release.Name) .Values.global.valkey.auth.existingSecret }}
-                  key: {{ .Values.global.valkey.auth.existingSecretPasswordKey | default "password" }}
-            {{- end }}
             - name: LLM_QUEUE_ENABLED
               value: {{ .Values.global.llmQueue.enabled | default false | quote }}
-            - name: LLM_QUEUE_VALKEY_URL
-              value: {{ printf "%s://%s%s:%v/%v" (ternary "rediss" "redis" $valkeyTls) (ternary ":$(VALKEY_PASSWORD)@" "" .Values.global.valkey.auth.enabled) $valkeyHost $valkeyPort $valkeyDatabase | quote }}
+            {{- include "marie.llmQueueConnection" . | nindent 12 }}
+            {{- if .Values.global.llmQueue.enabled }}
             - name: LLM_QUEUE_POOL_ID
               value: {{ .Values.global.llmQueue.poolId | default "default" | quote }}
             - name: LLM_QUEUE_FABRIC_GROUP_ID

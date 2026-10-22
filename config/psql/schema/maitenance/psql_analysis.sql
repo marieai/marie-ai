@@ -38,7 +38,8 @@ WITH statements AS (
     JOIN pg_roles AS r
       ON r.oid = p.userid
     WHERE p.calls > 0
-      AND p.query NOT ILIKE '%pg_stat_statements%'
+        AND p.toplevel
+        AND p.query NOT ILIKE '%pg_stat_statements%'
 )
 SELECT
     datname,
@@ -413,6 +414,7 @@ SELECT
     candidate.dag_id,
     candidate.serialized_dag
 FROM marie_scheduler.admission_candidate_dags(
+    NULL::text[], -- all queues; use ARRAY['extract']::text[] for restricted scope
     100,
     600,
     ARRAY[]::uuid[]

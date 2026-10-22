@@ -24,6 +24,7 @@ dependencies = [
     "json5>=0.12.0",
     "json-repair>=0.55.0",
     "marie-instrumentation",
+    "marie-registry",
     "openinference-semantic-conventions>=0.1.30",
     "opentelemetry-api>=1.20.0",
     "pillow>=11.0,<13",
@@ -40,10 +41,11 @@ openai = [
 ]
 agent = ["marie-agent"]
 transformers = [
+    "marie-registry[huggingface]",
     "torch>=2.1.0",
     "transformers>=4.49.0",
 ]
-queue = ["valkey>=6.0.0"]
+queue = ["valkey>=6.0.0", "httpx>=0.28,<0.29", "httpcore>=1.0.9,<1.1", "anyio>=4,<5"]
 dev = [
     "marie-agent",
     "openai>=1.0.0",
@@ -67,6 +69,7 @@ packages = ["src/marie"]
 [tool.uv.sources]
 marie-agent = {path = "../marie-agent", editable = true}
 marie-instrumentation = {path = "../marie-instrumentation", editable = true}
+marie-registry = {path = "../marie-registry", editable = true}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

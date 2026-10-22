@@ -1,0 +1,6 @@
+apiVersion: v2
+name: hyperdx
+description: HyperDX - alert evaluation and observability UI on top of ClickHouse
+type: application
+version: 0.1.0
+appVersion: "2.39.1"

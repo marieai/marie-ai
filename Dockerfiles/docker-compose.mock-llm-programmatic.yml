@@ -2,6 +2,7 @@
 #
 # This compose file runs the programmatic AIMock server with custom handlers.
 # Use this when you need dynamic mock responses based on request content.
+# Linux host networking makes inference outages produce direct connection refusals.
 #
 # Usage:
 #   docker compose -f docker-compose.mock-llm-programmatic.yml up -d
@@ -15,13 +16,11 @@ services:
       context: ./aimock/programmatic
       dockerfile: Dockerfile
     container_name: marie-aimock-programmatic
-    ports:
-      - "${AIMOCK_PORT:-4010}:4010"
-      - "${AIMOCK_ADMIN_PORT:-4011}:4011"
+    network_mode: host
     environment:
       - AIMOCK_PORT=${AIMOCK_PORT:-4010}
       - AIMOCK_ADMIN_PORT=${AIMOCK_ADMIN_PORT:-4011}
-      - AIMOCK_HOST=${AIMOCK_HOST:-0.0.0.0}
+      - AIMOCK_HOST=${AIMOCK_HOST:-127.0.0.1}
       - AIMOCK_FAULT_PROFILE=${AIMOCK_FAULT_PROFILE:-normal}
       - AIMOCK_TIMEOUT_MS=${AIMOCK_TIMEOUT_MS:-180000}
       - AIMOCK_CHAOS_ERROR_RATE=${AIMOCK_CHAOS_ERROR_RATE:-0.15}
@@ -36,12 +35,6 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-    networks:
-      - marie_default
     labels:
       - "com.marie-ai.service=aimock-programmatic"
       - "com.marie-ai.description=Programmatic mock LLM server with custom handlers"
-
-networks:
-  marie_default:
-    external: true

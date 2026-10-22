@@ -41,6 +41,52 @@ Create a default fully qualified app name.
 {{- if eq (include "marie.lifecycleSuspended" .root) "true" -}}0{{- else -}}{{ .replicas }}{{- end -}}
 {{- end -}}
 
+{{- define "marie.llmQueueConnection" -}}
+{{- $global := .Values.global | default dict -}}
+{{- $queue := $global.llmQueue | default dict -}}
+{{- if $queue.enabled | default false -}}
+{{- $queueURL := trim ($queue.url | default "") -}}
+{{- if $queueURL }}
+- name: LLM_QUEUE_URL
+  value: {{ $queueURL | quote }}
+- name: LLM_QUEUE_VALKEY_URL
+  value: {{ $queueURL | quote }}
+{{- else if $queue.existingSecret }}
+- name: LLM_QUEUE_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $queue.existingSecret }}
+      key: {{ $queue.existingSecretUrlKey | default "url" }}
+- name: LLM_QUEUE_VALKEY_URL
+  valueFrom:
+    secretKeyRef:
+      name: {{ $queue.existingSecret }}
+      key: {{ $queue.existingSecretUrlKey | default "url" }}
+{{- else -}}
+{{- $valkey := $global.valkey | default dict -}}
+{{- if not ($valkey.enabled | default false) -}}
+{{- fail "global.llmQueue.url or global.llmQueue.existingSecret must be set when global.llmQueue.enabled=true and global.valkey.enabled=false" -}}
+{{- end -}}
+{{- $valkeyAuth := $valkey.auth | default dict -}}
+{{- $valkeyHost := default (printf "%s-valkey" .Release.Name) $valkey.host -}}
+{{- $valkeyPort := default 6379 $valkey.port -}}
+{{- $valkeyDatabase := default 0 $valkey.database -}}
+{{- $valkeyTLS := $valkey.tls | default false -}}
+{{- if $valkeyAuth.enabled }}
+- name: VALKEY_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ default (printf "%s-valkey-auth" .Release.Name) $valkeyAuth.existingSecret }}
+      key: {{ $valkeyAuth.existingSecretPasswordKey | default "password" }}
+{{- end }}
+- name: LLM_QUEUE_URL
+  value: {{ printf "%s://%s%s:%v/%v" (ternary "rediss" "redis" $valkeyTLS) (ternary ":$(VALKEY_PASSWORD)@" "" ($valkeyAuth.enabled | default false)) $valkeyHost $valkeyPort $valkeyDatabase | quote }}
+- name: LLM_QUEUE_VALKEY_URL
+  value: {{ printf "%s://%s%s:%v/%v" (ternary "rediss" "redis" $valkeyTLS) (ternary ":$(VALKEY_PASSWORD)@" "" ($valkeyAuth.enabled | default false)) $valkeyHost $valkeyPort $valkeyDatabase | quote }}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 Create chart name and version as used by the chart label.
 */}}
@@ -151,7 +197,7 @@ different name that does not exist — so we use `.Release.Name` directly.
 */}}
 {{- define "marie.postgresql.secretName" -}}
 {{- if .Values.postgresql.enabled }}
-{{- printf "%s-postgresql" .Release.Name }}
+{{- .Values.postgresql.auth.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
 {{- else }}
 {{- .Values.postgresql.external.existingSecret }}
 {{- end }}

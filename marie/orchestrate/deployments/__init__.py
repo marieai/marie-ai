@@ -14,7 +14,17 @@ from argparse import Namespace
 from collections import defaultdict
 from contextlib import ExitStack
 from itertools import cycle
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Type, Union, overload
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Set,
+    Type,
+    Union,
+    overload,
+)
 
 from rich import print
 from rich.panel import Panel
@@ -59,6 +69,7 @@ WRAPPED_SLICE_BASE = r"\[[-\d:]+\]"
 
 if TYPE_CHECKING:
     from marie.clients.base import BaseClient
+    from marie.orchestrate.pods import BasePod
     from marie.serve.executors import BaseExecutor
 
 
@@ -1051,6 +1062,18 @@ class Deployment(JAMLCompatible, PostMixin, BaseOrchestrator, metaclass=Deployme
             for shard_id in self.shards:
                 num_pods += self.shards[shard_id].num_pods
         return num_pods
+
+    def _iter_pods(self) -> Iterator['BasePod']:
+        for pod in (
+            self.uses_before_pod,
+            self.uses_after_pod,
+            self.head_pod,
+            self.gateway_pod,
+        ):
+            if pod is not None:
+                yield pod
+        for replica_set in self.shards.values():
+            yield from replica_set._pods
 
     def __eq__(self, other: "Deployment"):
         return self.num_pods == other.num_pods and self.name == other.name

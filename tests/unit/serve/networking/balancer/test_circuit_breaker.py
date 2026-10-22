@@ -1,16 +1,33 @@
 """Unit tests for CircuitBreaker implementation."""
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock
 
 import pytest
-
 from marie.engine.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
     CircuitState,
     CircuitStats,
 )
+
+
+def test_probe_admission_is_atomic_across_threads():
+    breaker = CircuitBreaker(
+        CircuitBreakerConfig(failure_threshold=1, recovery_timeout=0)
+    )
+    breaker.record_failure('a')
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        permits = list(executor.map(lambda _: breaker.try_acquire('a'), range(20)))
+    admitted = [permit for permit in permits if permit is not None]
+    assert len(admitted) == 1
+    breaker.release(admitted[0])
+    next_permit = breaker.try_acquire('a')
+    assert next_permit is not None
+    breaker.release(admitted[0])
+    assert breaker.try_acquire('a') is None
+    breaker.release(next_permit)
 
 
 class TestCircuitBreakerConfig:

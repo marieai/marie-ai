@@ -1,3 +1,10 @@
+import argparse
+import os
+
+parser = argparse.ArgumentParser(description="Compute embeddings for an image")
+parser.add_argument("image", type=os.path.expanduser, help="Image to embed")
+args = parser.parse_args()
+
 from PIL import Image
 from torch.nn.functional import cosine_similarity
 from transformers import CLIPModel, CLIPProcessor
@@ -25,7 +32,7 @@ def get_image_embedding(image, text):
 
 
 # Load image and process
-image = Image.open("/home/greg/dev/flan-t5-text-classifier/sample-001.png")
+image = Image.open(args.image)
 if image.mode != "RGB":
     image = image.convert("RGB")
 text = "Patient Name: Robert Ullman, Claim ID: E5JNHRHSW00"

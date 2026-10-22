@@ -2,7 +2,7 @@
 
 import docarray
 
-__version__ = "5.0.4"
+__version__ = "5.1.0"
 __proto_version__ = "0.1.28"
 
 try:

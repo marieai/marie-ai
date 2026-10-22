@@ -103,6 +103,9 @@ async def test_scheduler_schema_precedes_dependent_runtimes(monkeypatch):
             order.append("scheduler")
 
     class LlmRuntime:
+        enabled = False
+        mode = 'direct-batch'
+
         async def start(self):
             order.append("llm")
 

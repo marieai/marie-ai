@@ -15,11 +15,13 @@ data:
   {{- $extractConfig = replace "__POSTGRES_HOST__" (printf "%s-postgresql" .Release.Name) $extractConfig }}
   {{- $extractConfig = replace "__POSTGRES_PASSWORD__" $postgresPassword $extractConfig }}
   {{- $extractConfig = replace "__CLICKHOUSE_HOST__" (printf "%s-clickhouse" .Release.Name) $extractConfig }}
-  {{- $extractConfig = replace "__OTEL_HOST__" "localhost" $extractConfig }}
+  {{- $extractConfig = replace "__OTEL_HOST__" (tpl (((.Values.global).otel).host | default "localhost") $) $extractConfig }}
   {{- $extractConfig = replace "__LLM_TRACKING_ENABLED__" (ternary "true" "false" .Values.llmTracking.enabled) $extractConfig }}
   {{- $extractConfig = replace "__GPU_MONITOR_ENABLED__" (ternary "true" "false" .Values.gpuMonitor.enabled) $extractConfig }}
   marie-extract-4.0.0.yml: |
 {{ $extractConfig | indent 4 }}
+  marie-mock-sandbox.yml: |
+{{ .Files.Get "files/service/mock/marie-mock-sandbox.yml" | indent 4 }}
   # Executor pools configuration
   EXECUTOR_POOLS: |
     {{- range $pool := .Values.pools }}

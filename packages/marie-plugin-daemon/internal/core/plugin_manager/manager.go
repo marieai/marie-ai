@@ -55,6 +55,18 @@ func NewManager(root string) *Manager {
 }
 
 func (m *Manager) Install(tenant string, archive []byte) (Install, error) {
+	install, err := m.Prepare(tenant, archive)
+	if err != nil {
+		return Install{}, err
+	}
+	if err := m.Activate(install); err != nil {
+		return Install{}, err
+	}
+	return install, nil
+}
+
+// Prepare extracts an immutable version without changing the active install.
+func (m *Manager) Prepare(tenant string, archive []byte) (Install, error) {
 	if err := validateName(tenant); err != nil {
 		return Install{}, err
 	}
@@ -70,19 +82,12 @@ func (m *Manager) Install(tenant string, archive []byte) (Install, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for _, previous := range m.installDirs(tenant, packageRef) {
-		if err := os.RemoveAll(previous); err != nil {
-			return Install{}, err
-		}
+	if current, ok := m.get(tenant, packageRef); ok && current.Digest == digest {
+		return current, nil
 	}
 
 	digestDir := packageRef + "@" + strings.ReplaceAll(digest, ":", "-")
 	workingDir := filepath.Join(m.tenantDir(tenant), digestDir)
-	if err := extractZip(archive, workingDir); err != nil {
-		os.RemoveAll(workingDir)
-		return Install{}, err
-	}
-
 	install := Install{
 		Tenant:     tenant,
 		PackageRef: packageRef,
@@ -90,11 +95,43 @@ func (m *Manager) Install(tenant string, archive []byte) (Install, error) {
 		WorkingDir: workingDir,
 		State:      StateInstalled,
 	}
-	if err := writeInstall(install); err != nil {
-		os.RemoveAll(workingDir)
+	if info, err := os.Stat(workingDir); err == nil && info.IsDir() {
+		return install, nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return Install{}, err
+	}
+	if err := os.MkdirAll(m.tenantDir(tenant), 0o755); err != nil {
+		return Install{}, err
+	}
+	stagingDir, err := os.MkdirTemp(m.tenantDir(tenant), ".stage-")
+	if err != nil {
+		return Install{}, err
+	}
+	defer os.RemoveAll(stagingDir)
+	if err := extractZip(archive, stagingDir); err != nil {
+		return Install{}, err
+	}
+	if err := os.Rename(stagingDir, workingDir); err != nil {
 		return Install{}, err
 	}
 	return install, nil
+}
+
+// Activate atomically selects a prepared version.
+func (m *Manager) Activate(install Install) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return writeInstall(m.installPath(install.Tenant, install.PackageRef), install)
+}
+
+// Discard removes a failed or retired version, never the active installation.
+func (m *Manager) Discard(install Install) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current, ok := m.get(install.Tenant, install.PackageRef); ok && current.WorkingDir == install.WorkingDir {
+		return nil
+	}
+	return os.RemoveAll(install.WorkingDir)
 }
 
 // Inspect decodes an archive's identity without installing it.
@@ -156,6 +193,9 @@ func (m *Manager) Remove(tenant, packageRef string) error {
 			return err
 		}
 	}
+	if err := os.Remove(m.installPath(tenant, packageRef)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	return nil
 }
 
@@ -180,7 +220,7 @@ func (m *Manager) SetState(tenant, packageRef, state string) error {
 		return fmt.Errorf("%w: %s", ErrInstallNotFound, packageRef)
 	}
 	install.State = state
-	return writeInstall(install)
+	return writeInstall(m.installPath(tenant, packageRef), install)
 }
 
 func (m *Manager) Count() int {
@@ -210,18 +250,30 @@ func (m *Manager) list(tenant string) []Install {
 		return installs
 	}
 
+	// New installs use one atomic selection record per package. Version-local
+	// records remain readable for storage created by older daemon versions.
+	paths := []string{}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+			paths = append(paths, filepath.Join(m.tenantDir(tenant), entry.Name()))
 		}
-		data, err := os.ReadFile(filepath.Join(m.tenantDir(tenant), entry.Name(), "install.json"))
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			paths = append(paths, filepath.Join(m.tenantDir(tenant), entry.Name(), "install.json"))
+		}
+	}
+	selected := map[string]bool{}
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
 		install := Install{}
-		if err := json.Unmarshal(data, &install); err != nil {
+		if err := json.Unmarshal(data, &install); err != nil || selected[install.PackageRef] {
 			continue
 		}
+		selected[install.PackageRef] = true
 		installs = append(installs, install)
 	}
 
@@ -242,6 +294,10 @@ func (m *Manager) get(tenant, packageRef string) (Install, bool) {
 
 func (m *Manager) tenantDir(tenant string) string {
 	return filepath.Join(m.root, pluginRuntimeDir, tenant)
+}
+
+func (m *Manager) installPath(tenant, packageRef string) string {
+	return filepath.Join(m.tenantDir(tenant), packageRef+".json")
 }
 
 func (m *Manager) installDirs(tenant, packageRef string) []string {
@@ -319,13 +375,13 @@ func extractFile(file *zip.File, destination string, remaining *int64) error {
 	return target.Close()
 }
 
-func writeInstall(install Install) error {
+func writeInstall(path string, install Install) error {
 	data, err := json.MarshalIndent(install, "", "  ")
 	if err != nil {
 		return err
 	}
 
-	temp, err := os.CreateTemp(install.WorkingDir, "install-*.json.tmp")
+	temp, err := os.CreateTemp(filepath.Dir(path), ".install-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -343,7 +399,7 @@ func writeInstall(install Install) error {
 		os.Remove(tempPath)
 		return err
 	}
-	if err := os.Rename(tempPath, filepath.Join(install.WorkingDir, "install.json")); err != nil {
+	if err := os.Rename(tempPath, path); err != nil {
 		os.Remove(tempPath)
 		return err
 	}

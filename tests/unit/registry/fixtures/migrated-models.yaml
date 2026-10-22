@@ -1,0 +1,216 @@
+# Deployment-owned model configuration; profiles preserve the prior vLLM settings.
+schema_version: 1
+defaults:
+  vllm:
+    loading:
+      quantization: bitsandbytes
+      load_format: bitsandbytes
+      dtype: bfloat16
+      requires: bitsandbytes
+      fallback:
+        quantization: null
+        load_format: auto
+        dtype: bfloat16
+    runtime:
+      max_model_len: 8192
+      tensor_parallel_size: 1
+      gpu_memory_utilization: 0.85
+      enable_prefix_caching: false
+      max_num_seqs: 1
+      enable_chunked_prefill: false
+      enforce_eager: false
+    processor: {}
+    generation:
+      max_tokens: 4096
+      temperature: 0
+      top_p: 1.0
+      top_k: -1
+      n: 1
+      stop_token_ids: null
+      structured_outputs:
+        disable_any_whitespace: true
+    prompt:
+      system: You are a helpful assistant for processing documents.
+      template: null
+    cache: false
+    image:
+      min_pixels: 784
+      max_pixels: 1003520
+profiles:
+  qwen2_5_vl:
+    vllm:
+      loading:
+        quantization: null
+        load_format: auto
+        requires: null
+        fallback: null
+        dtype: bfloat16
+      processor:
+        min_pixels: 784
+        max_pixels: 1003520
+        fps: 1
+      prompt:
+        template: '<|im_start|>system
+
+          SYSTEM_PROMPT_PLACEHOLDER<|im_end|>
+
+          <|im_start|>user
+
+          <|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>
+
+          <|im_start|>assistant
+
+          '
+  qwen3_vl:
+    vllm:
+      loading:
+        quantization: null
+        load_format: auto
+        requires: null
+        fallback: null
+        dtype: bfloat16
+      runtime:
+        max_model_len: 16384
+      processor:
+        min_pixels: 784
+        max_pixels: 1003520
+        fps: 1
+      prompt:
+        template: '<|im_start|>system
+
+          SYSTEM_PROMPT_PLACEHOLDER<|im_end|>
+
+          <|im_start|>user
+
+          <|vision_start|><|image_pad|><|vision_end|>QUESTION_PLACEHOLDER<|im_end|>
+
+          <|im_start|>assistant
+
+          '
+  qwen2_5:
+    vllm: {}
+  mllama:
+    vllm:
+      loading:
+        quantization: null
+        load_format: auto
+        requires: null
+        fallback: null
+        dtype: bfloat16
+  phi3v:
+    vllm:
+      loading:
+        quantization: null
+        load_format: auto
+        requires: null
+        fallback: null
+        dtype: bfloat16
+      runtime:
+        trust_remote_code: true
+      processor:
+        num_crops: 16
+      prompt:
+        template: '<|user|>
+
+          <|image_1|>
+
+          QUESTION_PLACEHOLDER<|end|>
+
+          <|assistant|>
+
+          '
+  mistral:
+    vllm:
+      loading:
+        quantization: fp8
+        load_format: auto
+        dtype: fp8
+        requires: null
+        fallback: null
+  opt125:
+    vllm:
+      loading:
+        quantization: fp8
+        load_format: auto
+        dtype: fp8
+        requires: null
+        fallback: null
+      runtime:
+        max_model_len: 2048
+      prompt:
+        template: QUESTION_PLACEHOLDER
+  phi4:
+    vllm:
+      loading:
+        dtype: bfloat16
+  llava_next:
+    vllm:
+      loading:
+        quantization: fp8
+        load_format: auto
+        dtype: fp8
+        requires: null
+        fallback: null
+      processor:
+        fps: 1
+      prompt:
+        template: '[INST] <image>
+
+          QUESTION_PLACEHOLDER [/INST]'
+  deepseek_r1:
+    vllm:
+      runtime:
+        enable_reasoning: true
+        enforce_eager: true
+models:
+  qwen2_5_vl_3b:
+    name: Qwen/Qwen2.5-VL-3B-Instruct
+    profile: qwen2_5_vl
+  qwen2_5_vl_7b:
+    name: Qwen/Qwen2.5-VL-7B-Instruct
+    profile: qwen2_5_vl
+  qwen2_5_vl_7b_awq:
+    name: Qwen/Qwen2.5-VL-7B-Instruct-AWQ
+    profile: qwen2_5_vl
+  qwen3_vl_4b:
+    name: Qwen/Qwen3-VL-4B-Instruct
+    profile: qwen3_vl
+  qwen3_vl_4b_merged_lora:
+    name: qwen3_vl_4b_merged_lora
+    multimodal: true
+    profile: qwen3_vl
+  qwen2_5_7b:
+    name: Qwen/Qwen2.5-7B-Instruct
+    profile: qwen2_5
+  qwen2_5_3b:
+    name: Qwen/Qwen2.5-3B-Instruct
+    profile: qwen2_5
+  qwen2_5_14b:
+    name: Qwen/Qwen2.5-14B-Instruct
+    profile: qwen2_5
+  meta_llama_11b:
+    name: meta-llama/Llama-3.2-11B-Vision-Instruct
+    profile: mllama
+  phi3_5_vl:
+    name: microsoft/Phi-3.5-vision-instruct
+    profile: phi3v
+  pixtral_12b:
+    name: mistralai/Pixtral-12B-2409
+    providers:
+      vllm:
+        enabled: false
+  mistral_7b:
+    name: mistralai/Mistral-7B-Instruct-v0.2
+    profile: mistral
+  opt_125m:
+    name: facebook/opt-125m
+    profile: opt125
+  phi4:
+    name: microsoft/phi-4
+    profile: phi4
+  llava_mistral_7b:
+    name: llava-hf/llava-v1.6-mistral-7b-hf
+    profile: llava_next
+  deepseek_r1_qwen_14b:
+    name: deepseek-ai/DeepSeek-R1-Distill-Qwen-14B
+    profile: deepseek_r1

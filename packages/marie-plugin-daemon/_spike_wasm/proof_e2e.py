@@ -9,7 +9,9 @@ from pathlib import Path
 from wasmtime import Config, Engine, Store, WasiConfig
 from wasmtime.component import Component, Linker, Record
 
-FIXTURE = "/home/gbugaj/dev/marieai/marie-ai/packages/marie-wasm/nodes/compiled/http-request.wasm"
+FIXTURE = str(
+    Path(__file__).resolve().parents[2] / "marie-wasm/nodes/compiled/http-request.wasm"
+)
 
 
 def start_server():

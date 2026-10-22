@@ -21,7 +21,7 @@ executor:
         type: Recreate
       image:
         repository: docker.io/marieai/marie
-        tag: "5.0.4-cuda"
+        tag: "5.1.0-cuda"
         digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
         pullPolicy: IfNotPresent
       resources:
@@ -54,11 +54,23 @@ etcd:
 
 minio:
   image:
-    digest: sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
+    digest: sha256:4f75fd76598afa23919555d1363e1fb13c632d9bcd4ce8edcf21d3cca2ed0579
   provisioning:
     image:
-      digest: sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
+      digest: sha256:4f75fd76598afa23919555d1363e1fb13c632d9bcd4ce8edcf21d3cca2ed0579
 
 clickhouse:
   image:
     digest: sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8
+
+otel-collector:
+  image:
+    digest: sha256:54312b4534a545f052b5d8232754c5329f7ac8779a4e9af167955d9f2bb657d1
+
+ferretdb:
+  image:
+    digest: sha256:5d8966f7ec1267d35fc61acc56fd9f3f62f22b4baf65ecb6c331b63b86a52aac
+
+hyperdx:
+  image:
+    digest: sha256:0f88ad527e43f8352f7decc44381c8741c4d5e0122429e95986e14340b98f3dc

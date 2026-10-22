@@ -23,11 +23,18 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "5.0.4-cuda"
+      tag: "5.1.0-cuda"
       digest: ""
     logging:
       level: INFO
     debugQueryPlanner: "FALSE"
+  # Where bundled Marie services send OTLP telemetry. Empty keeps the previous behaviour
+  # (localhost:4317, i.e. nowhere unless a sidecar listens). The otel-collector subchart's
+  # Service is "<release>-otel-collector".
+  # Host and endpoint values may contain Helm template expressions.
+  otel:
+    host: ""
+    endpoint: ""
   grpc:
     trace: ""
     verbosity: ""
@@ -52,8 +59,12 @@ global:
       enabled: false
       existingSecret: ""
       existingSecretPasswordKey: password
+  # Enabled queues require registered endpoint credentials, lanes, limits, and fabric identity.
   llmQueue:
     enabled: false
+    url: ""
+    existingSecret: ""
+    existingSecretUrlKey: url
     poolId: default
     fabricGroupId: default
     gatewayId: default
@@ -72,6 +83,7 @@ global:
     auth:
       username: postgres
       database: postgres
+      existingSecret: ""
     external:
       host: ""
       port: 5432
@@ -97,6 +109,10 @@ global:
     enabled: true
     port: 8000
     defaultBuckets: "marie"
+    auth:
+      existingSecret: ""
+      rootUserKey: root-user
+      rootPasswordKey: root-password
     external:
       endpoint: ""
       bucket: marie
@@ -117,7 +133,7 @@ global:
 marie:
   image:
     repository: marieai/marie
-    tag: "5.0.4-cuda"
+    tag: "5.1.0-cuda"
     pullPolicy: IfNotPresent
 
   # Configuration that maps to marie.yml
@@ -154,7 +170,7 @@ server:
 
   image:
     repository: marieai/marie-gateway
-    tag: "5.0.4-cpu"
+    tag: "5.1.0-cpu"
     digest: ""
 
   config:
@@ -464,8 +480,8 @@ minio:
 
   image:
     registry: docker.io
-    repository: minio/minio
-    tag: latest
+    repository: coollabsio/minio
+    tag: RELEASE.2025-10-15T17-29-55Z
     digest: ""
 
   mode: standalone
@@ -491,8 +507,8 @@ minio:
     enabled: true
     image:
       registry: docker.io
-      repository: minio/mc
-      tag: latest
+      repository: coollabsio/minio
+      tag: RELEASE.2025-10-15T17-29-55Z
       digest: ""
       pullPolicy: IfNotPresent
     users:
@@ -517,8 +533,8 @@ clickhouse:
 
   image:
     repository: clickhouse/clickhouse-server
-    tag: "latest"
-    digest: ""
+    tag: "25.12.1.649"
+    digest: "sha256:7234d193fbeb3a375f21f0bb99040396f68bb2e82cada4f4947d7fcf9638bbf3"
 
   service:
     type: ClusterIP
@@ -527,8 +543,8 @@ clickhouse:
     mysqlPort: 9004
 
   config:
-    defaultDatabase: marie
-    defaultUser: default
+    defaultDatabase: telemetry
+    defaultUser: marie
     defaultPassword: ""
     accessManagement: true
     maxMemoryUsage: "4000000000"
@@ -554,6 +570,29 @@ clickhouse:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+# -----------------------------------------------------------------------------
+# OpenTelemetry Collector (telemetry ingestion into ClickHouse)
+# Receives OTLP from Marie services and writes logs, traces and metrics to the
+# ClickHouse "telemetry" database that marie-studio's Observability pages read.
+# -----------------------------------------------------------------------------
+otel-collector:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# FerretDB (MongoDB wire protocol over the bundled PostgreSQL)
+# State store for HyperDX; requires postgresql.enabled.
+# -----------------------------------------------------------------------------
+ferretdb:
+  enabled: false
+
+# -----------------------------------------------------------------------------
+# HyperDX (alert evaluation)
+# Evaluates marie-studio alert policies against the ClickHouse "telemetry" database.
+# Requires clickhouse.enabled and ferretdb.enabled.
+# -----------------------------------------------------------------------------
+hyperdx:
+  enabled: false
 
 # -----------------------------------------------------------------------------
 # Gitea Configuration (Git Service)

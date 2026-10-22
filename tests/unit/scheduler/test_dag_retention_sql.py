@@ -4,7 +4,7 @@ from pathlib import Path
 def test_purge_dags_older_than_is_bounded_to_terminal_work() -> None:
     project_root = Path(__file__).parents[3]
     sql = (
-        project_root / "config/psql/schema/085_suppress_dag_purge_events.sql"
+        project_root / "config/psql/schema/088_purge_job_attempts.sql"
     ).read_text()
     normalized = " ".join(sql.lower().split())
 
@@ -24,14 +24,16 @@ def test_purge_dags_older_than_is_bounded_to_terminal_work() -> None:
     )
 
 
-def test_purge_dags_older_than_preserves_audit_tables() -> None:
+def test_purge_dags_older_than_deletes_attempts_and_preserves_history() -> None:
     project_root = Path(__file__).parents[3]
     sql = (
-        project_root / "config/psql/schema/085_suppress_dag_purge_events.sql"
+        project_root / "config/psql/schema/088_purge_job_attempts.sql"
     ).read_text()
     normalized = " ".join(sql.lower().split())
 
-    for table in ("dag_history", "job_history", "job_attempt"):
+    assert "delete from {schema}.job_attempt as ja" in normalized
+    assert "where ja.dag_id = c.id" in normalized
+    for table in ("dag_history", "job_history"):
         assert f"delete from {{schema}}.{table}" not in normalized
 
 

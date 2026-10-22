@@ -17,10 +17,6 @@ from typing import (
     Union,
 )
 
-from openinference.semconv.trace import SpanAttributes
-from opentelemetry import trace as trace_api
-from opentelemetry.trace import StatusCode
-
 from marie.agent.cancellation import AbortSignal
 from marie.agent.message import (
     ASSISTANT,
@@ -32,8 +28,12 @@ from marie.agent.message import (
 )
 from marie.agent.streaming import StreamChunk, ToolCallAccumulator
 from marie.agent.tool_call_parser import ToolCallTextParser
-from marie.instrumentation import set_llm_io, start_as_current_span, start_span
 from marie.instrumentation.openinference import infer_llm_system
+from openinference.semconv.trace import SpanAttributes
+from opentelemetry import trace as trace_api
+from opentelemetry.trace import StatusCode
+
+from marie.instrumentation import set_llm_io, start_as_current_span, start_span
 
 if TYPE_CHECKING:
     from marie.agent.emitter import Emitter
@@ -222,29 +222,10 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
         Yields:
             Response Messages
         """
-        # Convert messages to OpenAI format
-        openai_messages = [self._message_to_openai(msg) for msg in messages]
+        kwargs = self._build_api_kwargs(messages, functions, extra_generate_cfg)
 
-        # Build API call kwargs
-        kwargs: Dict[str, Any] = {
-            "model": self.model,
-            "messages": openai_messages,
-        }
-
-        if functions:
-            kwargs["tools"] = [{"type": "function", "function": f} for f in functions]
-
-        if extra_generate_cfg:
-            # Map common config keys
-            if "temperature" in extra_generate_cfg:
-                kwargs["temperature"] = extra_generate_cfg["temperature"]
-            if "max_tokens" in extra_generate_cfg:
-                kwargs["max_tokens"] = extra_generate_cfg["max_tokens"]
-
-        # Make API call
         response = self.client.chat.completions.create(**kwargs)
 
-        # Parse response
         choice = response.choices[0]
         message = self._openai_to_message(choice.message)
 
@@ -275,6 +256,43 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             )
         return self._async_client
 
+    # Generation options forwarded to the API as-is when present in extra_generate_cfg.
+    _PASSTHROUGH_KEYS = (
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "seed",
+        "stop",
+        "response_format",
+        "reasoning_effort",
+        "presence_penalty",
+        "frequency_penalty",
+    )
+
+    @classmethod
+    def _apply_generate_cfg(
+        cls, kwargs: Dict[str, Any], extra_generate_cfg: Optional[Dict[str, Any]]
+    ) -> None:
+        """Map extra_generate_cfg onto chat.completions.create kwargs.
+
+        Known OpenAI parameters are forwarded directly. ``extra_body`` is forwarded as the SDK's
+        ``extra_body`` so server-specific fields reach the endpoint, and ``chat_template_kwargs``
+        (e.g. ``{"enable_thinking": False}`` for Qwen3 on vLLM) is folded into it.
+        """
+        if not extra_generate_cfg:
+            return
+        for key in cls._PASSTHROUGH_KEYS:
+            if key in extra_generate_cfg and extra_generate_cfg[key] is not None:
+                kwargs[key] = extra_generate_cfg[key]
+        extra_body: Dict[str, Any] = dict(extra_generate_cfg.get("extra_body") or {})
+        if extra_generate_cfg.get("chat_template_kwargs"):
+            extra_body["chat_template_kwargs"] = {
+                **extra_body.get("chat_template_kwargs", {}),
+                **extra_generate_cfg["chat_template_kwargs"],
+            }
+        if extra_body:
+            kwargs["extra_body"] = {**kwargs.get("extra_body", {}), **extra_body}
+
     def _build_api_kwargs(
         self,
         messages: List[Message],
@@ -293,10 +311,31 @@ class OpenAICompatibleWrapper(BaseLLMWrapper):
             kwargs["tools"] = [{"type": "function", "function": f} for f in functions]
 
         if extra_generate_cfg:
-            if "temperature" in extra_generate_cfg:
-                kwargs["temperature"] = extra_generate_cfg["temperature"]
-            if "max_tokens" in extra_generate_cfg:
-                kwargs["max_tokens"] = extra_generate_cfg["max_tokens"]
+            supported = {
+                "temperature",
+                "max_tokens",
+                "top_p",
+                "stop",
+                "seed",
+                "presence_penalty",
+                "frequency_penalty",
+                "response_format",
+                "reasoning_effort",
+            }
+            kwargs.update(
+                {
+                    key: value
+                    for key, value in extra_generate_cfg.items()
+                    if key in supported
+                }
+            )
+            extra_body = dict(extra_generate_cfg.get("extra_body") or {})
+            if "chat_template_kwargs" in extra_generate_cfg:
+                extra_body["chat_template_kwargs"] = extra_generate_cfg[
+                    "chat_template_kwargs"
+                ]
+            if extra_body:
+                kwargs["extra_body"] = extra_body
 
         return kwargs
 

@@ -1,6 +1,6 @@
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from grpc_health.v1.health_pb2 import HealthCheckResponse
@@ -9,12 +9,136 @@ from marie.serve.discovery.base import ConnectionState
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("returned_error", [False, True])
+async def test_failed_job_metadata_omits_diagnostics_by_default(
+    monkeypatch, returned_error: bool
+) -> None:
+    monkeypatch.delenv("MARIE_SILENCE_EXCEPTIONS", raising=False)
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MagicMock()
+    handler._deployment = "annotator_llm"
+    handler.is_dry_run = MagicMock(return_value=False)
+    handler._sem_untrack = MagicMock(return_value=None)
+    handler._request_attributes = MagicMock(return_value={})
+    handler._schedule_deployment_ready_after_terminal = MagicMock()
+    handler._job_info_client = SimpleNamespace(put_status=AsyncMock())
+
+    try:
+        raise RuntimeError("request failed")
+    except RuntimeError as error:
+        await handler._record_failed_job(
+            "job-1",
+            [],
+            None if returned_error else error,
+            {},
+            return_data={
+                "error_details": {
+                    "type": "RuntimeError",
+                    "message": "request failed",
+                    "filename": "/internal/worker/task.py",
+                    "traceback": "internal traceback",
+                    "cause": {"message": "internal downstream details"},
+                }
+            },
+        )
+
+    handler._job_info_client.put_status.assert_awaited_once()
+    runtime_env = handler._job_info_client.put_status.call_args.kwargs[
+        "jobinfo_replace_kwargs"
+    ]["runtime_env"]
+    assert set(runtime_env["error"]) == {
+        "type",
+        "message",
+        "filename",
+        "name",
+        "line_no",
+    }
+    assert "/internal/" not in runtime_env["error"]["filename"]
+
+
+def test_worker_status_updates_include_executor_details() -> None:
+    handler = object.__new__(WorkerRequestHandler)
+    handler._node = "worker-1:5000"
+    handler._deployment = "annotator_llm"
+    handler._worker_id = "annotator_llm/rep-0@worker-1:5000"
+    handler._status_store = MagicMock()
+    handler._status_store.set_not_serving.return_value = True
+    handler._status_store.set_serving.return_value = True
+    details = {"feature": {"mode": "enabled"}}
+    handler._executor = SimpleNamespace(
+        deployment_status_details=MagicMock(return_value=details)
+    )
+    handler._claim_and_mark = MagicMock(
+        side_effect=lambda **kwargs: kwargs["final_apply"](7)
+    )
+
+    assert handler._claim_and_mark_ready() is True
+    handler._status_store.set_not_serving.assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        details=details,
+        epoch=7,
+    )
+
+    assert handler._claim_and_mark_serving() is True
+    handler._status_store.set_serving.assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        details=details,
+        epoch=7,
+    )
+    assert handler._executor.deployment_status_details.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("transition", "status_method"),
+    [
+        ("_claim_and_mark_ready", "set_not_serving"),
+        ("_claim_and_mark_serving", "set_serving"),
+    ],
+)
+def test_worker_status_transition_survives_executor_metadata_failure(
+    transition: str, status_method: str
+) -> None:
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MagicMock()
+    handler._node = "worker-1:5000"
+    handler._deployment = "annotator_llm"
+    handler._worker_id = "annotator_llm/rep-0@worker-1:5000"
+    handler._desired_store = MagicMock()
+    handler._desired_store.get.return_value = SimpleNamespace(
+        phase="SCHEDULED", epoch=1
+    )
+    handler._status_store = MagicMock()
+    handler._status_store.claim.return_value = True
+    getattr(handler._status_store, status_method).return_value = True
+    handler._status_epoch = None
+    handler._status_epoch_lock = threading.Lock()
+    handler._executor = SimpleNamespace(
+        deployment_status_details=MagicMock(side_effect=RuntimeError("metadata failed"))
+    )
+
+    assert getattr(handler, transition)() is True
+    getattr(handler._status_store, status_method).assert_called_once_with(
+        handler._node,
+        handler._deployment,
+        handler._worker_id,
+        details={},
+        epoch=1,
+    )
+
+
 def _handler(connection_state: ConnectionState) -> WorkerRequestHandler:
     handler = object.__new__(WorkerRequestHandler)
     handler.logger = MagicMock()
     handler._node = "worker-1:5000"
     handler._deployment = "mock_executor"
     handler._worker_id = "mock_executor/rep-0@worker-1:5000"
+    handler._status_epoch = 1
+    handler._status_epoch_lock = threading.Lock()
     handler._worker_state = HealthCheckResponse.ServingStatus.NOT_SERVING
     handler._lease_reacquire_lock = threading.Lock()
     handler._etcd_client = MagicMock()
@@ -22,6 +146,7 @@ def _handler(connection_state: ConnectionState) -> WorkerRequestHandler:
     handler._desired_store = MagicMock()
     handler._desired_store.get.return_value = SimpleNamespace(phase="SCHEDULED")
     handler._status_store = MagicMock()
+    handler._status_store.read.return_value = None
     handler._status_lease_cache = MagicMock()
     handler._claim_and_mark_ready = MagicMock(return_value=True)
     handler._claim_and_mark_serving = MagicMock(return_value=True)
@@ -34,6 +159,57 @@ def _handler(connection_state: ConnectionState) -> WorkerRequestHandler:
     handler._status_heartbeat_write_interval = 10.0
     handler._last_status_heartbeat_write = 0.0
     return handler
+
+
+def test_stale_heartbeat_does_not_reclaim_a_newer_epoch() -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._desired_store.get.return_value = SimpleNamespace(
+        phase="SCHEDULED", epoch=2
+    )
+    handler._status_store.read.return_value = SimpleNamespace(
+        owner=handler._worker_id, epoch=2
+    )
+    handler._status_store.heartbeat.return_value = False
+
+    assert handler._status_heartbeat_once() is False
+
+    assert handler._status_store.heartbeat.call_args.kwargs["epoch"] == 1
+    handler._claim_and_mark_ready.assert_not_called()
+    handler._claim_and_mark_serving.assert_not_called()
+    assert handler._status_epoch == 1
+
+
+def test_heartbeat_without_a_claim_recovers_before_writing() -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._status_epoch = None
+
+    assert handler._status_heartbeat_once() is True
+
+    handler._status_store.heartbeat.assert_not_called()
+    handler._claim_and_mark_ready.assert_called_once_with()
+
+
+@pytest.mark.parametrize("applied", [False, True])
+def test_status_transition_uses_the_captured_claim_epoch(applied: bool) -> None:
+    handler = _handler(ConnectionState.CONNECTED)
+    handler._desired_store.get.return_value = SimpleNamespace(
+        phase="SCHEDULED", epoch=2
+    )
+    handler._status_store.claim.return_value = True
+
+    def concurrent_transition() -> dict:
+        handler._status_epoch = 3
+        return {}
+
+    handler._executor = SimpleNamespace(
+        deployment_status_details=MagicMock(side_effect=concurrent_transition)
+    )
+    handler._status_store.set_serving.return_value = applied
+
+    assert WorkerRequestHandler._claim_and_mark_serving(handler) is applied
+
+    assert handler._status_store.set_serving.call_args.kwargs["epoch"] == 2
+    assert handler._status_epoch == 3
 
 
 def test_reconnect_invalidates_status_lease_before_reclaim() -> None:
@@ -132,6 +308,7 @@ def test_missing_status_is_reclaimed_after_connectivity_returns() -> None:
         handler._deployment,
         handler._worker_id,
         persist_timestamp=True,
+        epoch=1,
     )
     handler._claim_and_mark_ready.assert_called_once_with()
     handler._sem_renew_all_if_due.assert_called_once_with()
@@ -152,6 +329,7 @@ def test_status_heartbeat_skips_redundant_timestamp_write(monkeypatch) -> None:
         handler._deployment,
         handler._worker_id,
         persist_timestamp=False,
+        epoch=1,
     )
     assert handler._last_status_heartbeat_write == 100.0
     handler._sem_renew_all_if_due.assert_called_once_with()
@@ -172,6 +350,7 @@ def test_status_heartbeat_persists_after_write_interval(monkeypatch) -> None:
         handler._deployment,
         handler._worker_id,
         persist_timestamp=True,
+        epoch=1,
     )
     assert handler._last_status_heartbeat_write == 111.0
 

@@ -2,8 +2,8 @@
 
 This guide tests the Marie-AI backend and its bootstrap dependencies on a local Kubernetes cluster. It uses the official Marie runtime images:
 
-- Gateway: `marieai/marie-gateway:5.0.4-cpu`
-- Server/executor: `marieai/marie:5.0.4-cuda`
+- Gateway: `marieai/marie-gateway:5.1.0-cpu`
+- Server/executor: `marieai/marie:5.1.0-cuda`
 
 The Marie-AI chart is tested independently from Marie Studio / M3 Forge. For this smoke test, keep `gitea.enabled=false`; Gitea is a Studio dependency, not a Marie-AI backend requirement.
 
@@ -14,9 +14,9 @@ The local test is valid when:
 - PostgreSQL, MinIO, RabbitMQ, Valkey, etcd, and ClickHouse are running.
 - The PostgreSQL migration job applies the scheduler schema and lease functions.
 - `marie_scheduler.hydrate_frontier_dags()` exists in PostgreSQL.
-- The gateway starts from `marieai/marie-gateway:5.0.4-cpu`.
+- The gateway starts from `marieai/marie-gateway:5.1.0-cpu`.
 - The gateway `/status` endpoint returns HTTP 200.
-- The executor starts from `marieai/marie:5.0.4-cuda`.
+- The executor starts from `marieai/marie:5.1.0-cuda`.
 
 ## Quick Start
 
@@ -68,9 +68,9 @@ For local Docker or IDE runs, `/mnt/data/marie-ai/config/.env` can still be usef
 `deploy/bootstrap.sh` checks the executor image when it exists locally. Run this manually only when debugging image startup:
 
 ```bash
-docker image inspect marieai/marie-gateway:5.0.4-cpu
-docker image inspect marieai/marie:5.0.4-cuda
-docker run --rm --entrypoint python marieai/marie:5.0.4-cuda -c "import pkg_resources; print('pkg_resources ok')"
+docker image inspect marieai/marie-gateway:5.1.0-cpu
+docker image inspect marieai/marie:5.1.0-cuda
+docker run --rm --entrypoint python marieai/marie:5.1.0-cuda -c "import pkg_resources; print('pkg_resources ok')"
 ```
 
 If the last command fails with `ModuleNotFoundError: No module named 'pkg_resources'`, the executor image cannot start the current extraction executor. Rebuild/publish the image from the Dockerfile fix that pins `setuptools<81`, then rerun this test with the corrected tag. Do not work around this by installing packages inside running pods.
@@ -107,6 +107,15 @@ helm template marie deploy/helm/charts/marie \
   --set gitea.enabled=false \
   >/tmp/marie-rendered.yaml
 ```
+
+For an external LLM queue, set `global.llmQueue.url` or reference a Secret with
+`global.llmQueue.existingSecret` and `global.llmQueue.existingSecretUrlKey`.
+When the queue is enabled, the chart forwards the selected connection as both
+`LLM_QUEUE_URL` and the legacy-compatible `LLM_QUEUE_VALKEY_URL`. Existing
+values with a nonblank `global.valkey.host` continue to select that external
+Valkey connection. The bundled `<release>-valkey` fallback is available only
+when both `global.valkey.enabled=true` and the top-level
+`valkey.enabled=true` chart dependency are enabled.
 
 Check the rendered images:
 
@@ -166,14 +175,17 @@ If this is empty, the full scheduler schema did not apply. Check the migration j
 ```bash
 kubectl rollout status statefulset/marie-clickhouse -n marie --timeout=5m
 kubectl rollout status deployment/marie-server -n marie --timeout=5m
-kubectl rollout status deployment/marie-executor-cpu-local -n marie --timeout=5m
+kubectl rollout status deployment -n marie \
+  --selector 'app.kubernetes.io/instance=marie,marie.ai/pool=cpu-local' --timeout=5m
 kubectl get pods -n marie
 ```
 
 If the gateway or executor was already crashlooping before the migration completed, restart them after the migration passes:
 
 ```bash
-kubectl rollout restart deployment/marie-server deployment/marie-executor-cpu-local -n marie
+kubectl rollout restart deployment/marie-server -n marie
+kubectl rollout restart deployment -n marie \
+  --selector 'app.kubernetes.io/instance=marie,marie.ai/pool=cpu-local'
 ```
 
 ## Inspect With Headlamp Desktop
@@ -203,7 +215,7 @@ Open Headlamp, select the current local cluster, then inspect:
 
 - `marie` namespace pods and events
 - `marie-server` deployment logs
-- `marie-executor-cpu-local` deployment logs
+- executor logs selected by `app.kubernetes.io/instance=marie,marie.ai/pool=cpu-local`
 - `marie-postgresql-migrate` job logs
 - `marie-server` service ports `51000` and `52000`
 

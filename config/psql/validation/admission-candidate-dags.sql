@@ -8,6 +8,7 @@ EXPLAIN (
 )
 SELECT candidate.dag_id, candidate.serialized_dag
 FROM marie_scheduler.admission_candidate_dags(
+    NULL::text[], -- all queues; use ARRAY['extract']::text[] for restricted scope
     100,
     600,
     ARRAY(

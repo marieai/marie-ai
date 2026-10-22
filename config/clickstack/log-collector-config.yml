@@ -50,7 +50,8 @@ receivers:
         id: marie_log_parser
         parse_from: body
         regex: '^(?P<log_level>INFO|WARN|ERROR|DEBUG|CRITICAL|FATAL|WARNI[^\s]*)\s+(?P<log_timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3}):\s*:\s*(?P<component>\w+)\[\]@\s*(?P<thread_id>\d+)\s+(?P<message>.*)$'
-        on_error: send
+        # Non-marie containers never match; forward them without logging an error
+        on_error: send_quiet
 
       # ############### Extract Job Information ###############
       # Extract job_id (UUID format used by marie-ai)

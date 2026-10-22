@@ -5,7 +5,11 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Dict, Optional, Union
 
 from marie.logging_core.logger import MarieLogger
-from marie.serve.instrumentation import InstrumentationMixin
+from marie.serve.instrumentation import (
+    EXECUTOR_SERVICE_NAME,
+    GATEWAY_SERVICE_NAME,
+    InstrumentationMixin,
+)
 
 __all__ = ["BaseServer"]
 
@@ -15,6 +19,12 @@ if TYPE_CHECKING:
 
     from marie.serve.runtimes.gateway.request_handling import GatewayRequestHandler
     from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
+
+
+def _trace_service_name(req_handler_cls) -> str:
+    if req_handler_cls.__name__ == 'GatewayRequestHandler':
+        return GATEWAY_SERVICE_NAME
+    return EXECUTOR_SERVICE_NAME
 
 
 class BaseServer(InstrumentationMixin):
@@ -63,10 +73,11 @@ class BaseServer(InstrumentationMixin):
             metrics=self.runtime_args.metrics,
             metrics_exporter_host=self.runtime_args.metrics_exporter_host,
             metrics_exporter_port=self.runtime_args.metrics_exporter_port,
+            service_name=_trace_service_name(req_handler_cls or type(req_handler)),
         )
         self._request_handler: Union[
             "GatewayRequestHandler", "WorkerRequestHandler"
-        ] = (req_handler or self._get_request_handler())
+        ] = req_handler or self._get_request_handler()
         if hasattr(self._request_handler, "streamer"):
             self.streamer = self._request_handler.streamer  # backward compatibility
             self.executor = self._request_handler.executor  # backward compatibility
@@ -79,9 +90,15 @@ class BaseServer(InstrumentationMixin):
                 if hasattr(self.tracer_provider, "shutdown"):
                     self.tracer_provider.shutdown()
             if self.metrics and self.meter_provider:
+                from opentelemetry import metrics as metrics_api
+
                 if hasattr(self.meter_provider, "force_flush"):
                     self.meter_provider.force_flush()
-                if hasattr(self.meter_provider, "shutdown"):
+                # The global provider lives until process exit; sibling runtimes share it.
+                if (
+                    self.meter_provider is not metrics_api.get_meter_provider()
+                    and hasattr(self.meter_provider, "shutdown")
+                ):
                     self.meter_provider.shutdown()
         except Exception as ex:
             self.logger.warning(f"Exception during instrumentation teardown, {str(ex)}")

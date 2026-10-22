@@ -2495,6 +2495,7 @@ dependencies = [
     { name = "marie-kernel" },
     { name = "marie-mcp" },
     { name = "marie-mem0" },
+    { name = "marie-registry" },
     { name = "marie-wasm" },
     { name = "matplotlib" },
     { name = "mcp" },
@@ -2747,6 +2748,7 @@ requires-dist = [
     { name = "marie-kernel", editable = "packages/marie-kernel" },
     { name = "marie-mcp", editable = "packages/marie-mcp" },
     { name = "marie-mem0", editable = "packages/marie-mem0" },
+    { name = "marie-registry", editable = "packages/marie-registry" },
     { name = "marie-wasm", editable = "packages/marie-wasm" },
     { name = "matplotlib" },
     { name = "mcp", specifier = ">=1.6.0" },
@@ -2961,6 +2963,7 @@ dependencies = [
     { name = "json-repair" },
     { name = "json5" },
     { name = "marie-instrumentation" },
+    { name = "marie-registry" },
     { name = "openinference-semantic-conventions" },
     { name = "opentelemetry-api" },
     { name = "pillow" },
@@ -2970,12 +2973,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", marker = "extra == 'queue'", specifier = ">=4,<5" },
     { name = "diskcache", specifier = ">=5.6.0" },
+    { name = "httpcore", marker = "extra == 'queue'", specifier = ">=1.0.9,<1.1" },
+    { name = "httpx", marker = "extra == 'queue'", specifier = ">=0.28,<0.29" },
     { name = "json-repair", specifier = ">=0.55.0" },
     { name = "json5", specifier = ">=0.12.0" },
     { name = "marie-agent", marker = "extra == 'agent'", editable = "packages/marie-agent" },
     { name = "marie-agent", marker = "extra == 'dev'", editable = "packages/marie-agent" },
     { name = "marie-instrumentation", editable = "packages/marie-instrumentation" },
+    { name = "marie-registry", editable = "packages/marie-registry" },
+    { name = "marie-registry", extras = ["huggingface"], marker = "extra == 'transformers'", editable = "packages/marie-registry" },
     { name = "openai", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0.0" },
     { name = "openinference-semantic-conventions", specifier = ">=0.1.30" },
@@ -3122,6 +3130,24 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "marie-registry"
+version = "0.1.0"
+source = { editable = "packages/marie-registry" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "huggingface-hub", marker = "extra == 'huggingface'", specifier = ">=0.30.0" },
+    { name = "pydantic", specifier = ">=2.11.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "transformers", marker = "extra == 'huggingface'", specifier = ">=4.49.0" },
+]
+provides-extras = ["huggingface"]
 
 [[package]]
 name = "marie-wasm"

@@ -95,8 +95,8 @@ The script automatically sets these Docker build arguments:
 
 ## Output
 After successful builds you will have images like:
-- marieai/marie-gateway:5.0.4-cpu
-- marieai/marie:5.0.4-cuda
+- marieai/marie-gateway:5.1.0-cpu
+- marieai/marie:5.1.0-cuda
 
 ## Troubleshooting
 Common issues:

@@ -44,6 +44,15 @@ npm start
 
 ## Endpoints
 
+Programmatic AIMock uses Linux host networking and binds to loopback by default;
+only `docker-compose.mock-llm-programmatic.yml` is needed. The inference/admin
+ports are `4010`/`4011`, configurable through `AIMOCK_PORT`/`AIMOCK_ADMIN_PORT`.
+This supports the [local queued-dispatch stress suite](../../docs/docs/guides/llm-dispatcher-setup.md#use-direct-aimock-networking-for-the-local-stress-suite):
+published bridge ports can turn a stopped inference listener into an ambiguous
+read failure, which cannot qualify its pre-write refund check. Set `AIMOCK_HOST`
+explicitly for clients that need another host interface; isolated bridge clients
+must use a reachable host address rather than their own loopback.
+
 | Endpoint | Description |
 |----------|-------------|
 | `http://localhost:4010/v1` | OpenAI-compatible API |
@@ -334,15 +343,22 @@ The programmatic server supports explicit fault profiles for gateway and schedul
 
 - `normal` - deterministic successful responses
 - `timeout` - every request sleeps for `AIMOCK_TIMEOUT_MS`
-- `error` - every request throws an error
+- `error` - every request returns a retryable provider-unavailable error
+- `transient_error` - a bounded number of requests return provider-unavailable, then normal responses resume
+- `terminal_error` - every request returns a non-retryable provider rejection
+- `max_tokens` - every request returns a successful partial completion with `finish_reason: length`
+- `repetition` - returns repetitive length-limited output until recovery sampling is applied
+- `persistent_repetition` - returns repetitive length-limited output after recovery sampling
 - `invalid_json` - every request succeeds with an invalid structured response
-- `chaos` - randomized monkey-style mix of slow, timeout, error, and normal responses
+- `chaos` - randomized mix of slow, timeout, terminal-error, and normal responses
 
 You can set the startup profile with environment variables:
 
 ```bash
 export AIMOCK_FAULT_PROFILE=chaos
 export AIMOCK_TIMEOUT_MS=180000
+export AIMOCK_MAX_CONCURRENT_CALLS=4
+export AIMOCK_PROCESSING_DELAY_MS=100
 docker compose -f docker-compose.mock-llm-programmatic.yml up -d
 ```
 
@@ -354,17 +370,41 @@ curl http://localhost:4011/fault-profile
 curl -X POST http://localhost:4011/fault-profile \
   -H 'Content-Type: application/json' \
   -d '{"profile":"timeout"}'
+
+# Stop only the inference listener for five seconds. The admin listener remains
+# available and the inference listener restarts automatically.
+curl -X POST http://localhost:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"normal","outageMs":5000}'
+
+# Return three explicit 503 responses, then resume normal responses.
+curl -X POST http://localhost:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"transient_error","transientErrors":3}'
+
+# Return valid but truncated Chat Completions responses.
+curl -X POST http://localhost:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"max_tokens"}'
 ```
 
 Supported admin fields:
 
 - `profile`
 - `timeoutMs`
+- `transientErrors`
+- `outageMs` - stop the inference listener for 1 to 300000 milliseconds
 - `chaosErrorRate`
 - `chaosTimeoutRate`
 - `chaosSlowRate`
 - `chaosSlowMs`
+- `maxConcurrentCalls` - shared provider call limit; `0` means unlimited
+- `processingDelayMs` - deterministic delay added to every provider call
 - `resetCounters` - reset the request counters returned by the admin endpoint
+
+The admin response includes active, peak, and waiting call counts plus cumulative
+capacity wait time. The dispatch stress suite records these values to verify that
+direct and queued benchmarks used the same provider capacity.
 
 The admin response includes `requestCount` and `requestsByProfile`. Stress tests
 use these counters to detect unintended retries and duplicate inference calls.
@@ -421,7 +461,7 @@ from marie.engine.batch_processor import BatchProcessor
 # Host-network/local process example:
 #   api_base="http://127.0.0.1:4010/v1"
 # Docker bridge-network example:
-#   api_base="http://aimock-programmatic:4010/v1"
+#   api_base="http://aimock:4010/v1"  # fixture-based mock service
 processor = BatchProcessor(api_base="http://127.0.0.1:4010/v1", api_key="mock")
 
 # Deterministic responses for testing

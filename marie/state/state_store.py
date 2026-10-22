@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Callable, Dict, Iterator, Optional, Tuple
 
 from grpc_health.v1.health_pb2 import HealthCheckResponse
@@ -72,13 +72,13 @@ class DesiredDoc:
     # Intent/spec (gateway-only)
     phase: str  # e.g., "SCHEDULED"
     epoch: int  # fencing counter
-    params: Dict[str, Any]  # arbitrary scheduler params
-    updated_at: str
+    params: Dict[str, Any] = field(default_factory=dict)  # scheduler params
+    updated_at: str = ""
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "DesiredDoc":
         data = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
-        return cls(**data)
+        return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
 
 
 @dataclass
@@ -88,14 +88,16 @@ class StatusDoc:
     status_name: str  # same as string for readability (e.g., "SERVING")
     owner: str  # worker id
     epoch: int  # must match desired.epoch when claimed
-    updated_at: str
-    heartbeat_at: str
+    updated_at: str = ""
+    heartbeat_at: str = ""
     details: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "StatusDoc":
         data = json.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
-        return cls(**data)
+        if "status_name" not in data and "status_code" in data:
+            data["status_name"] = _status_name(data["status_code"])
+        return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
 
 
 def _iter_node_depl_pairs(etcd, suffix: str) -> Iterator[Tuple[str, str]]:
@@ -295,24 +297,16 @@ class DesiredStore(BaseStore):
         )
         payload = json.dumps(asdict(doc))
 
-        # Fast path: atomic create
-        if self.etcd.put_if_absent(k, payload):
-            return doc
-
-        # Lost the race: read and return the winner (don’t clobber)
-        raw = self._get_raw(k)
-        return DesiredDoc.from_json(raw) if raw else doc
-
-    def _update_phaseXXX(self, node: str, depl: str, phase: str) -> DesiredDoc:
-        existing = self.get(node, depl)
-        if not existing:
-            # If called without existing doc, create a new one with epoch=1
-            return self._create(node, depl, phase=phase, epoch=1, params={})
-        existing.phase = phase
-        existing.updated_at = _now_iso()
-        # NOTE: keep epoch unchanged here (important!)
-        self._put_json(self._desired_key(node, depl), asdict(existing))
-        return existing
+        for attempt in range(8):
+            if self.etcd.put_if_absent(k, payload):
+                return doc
+            raw = self._get_raw(k)
+            if raw is not None:
+                return DesiredDoc.from_json(raw)
+            # The winner was deleted before the read; retry the atomic create.
+            if attempt < 7:
+                time.sleep(0.01)
+        raise RuntimeError(f"DesiredStore._create failed repeatedly for {k}")
 
     def _update_phase(self, node: str, depl: str, phase: str) -> DesiredDoc:
         """
@@ -507,9 +501,11 @@ class StatusStore(BaseStore):
         worker_id: str,
         status: int | str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         """
-        CAS update: only the current owner can change status. Protect against concurrent owners by mod_revision CAS.
+        CAS update: only the claimed owner and epoch can change status.
         """
         k = self._status_key(node, depl)
         for _ in range(8):
@@ -517,7 +513,7 @@ class StatusStore(BaseStore):
             if val is None:
                 return False
             st = StatusDoc.from_json(val)
-            if st.owner != worker_id:
+            if st.owner != worker_id or st.epoch != epoch:
                 return False
             code = _status_code(status)
             st.status_code = code
@@ -541,9 +537,16 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
-            node, depl, worker_id, HealthCheckResponse.ServingStatus.SERVING, details
+            node,
+            depl,
+            worker_id,
+            HealthCheckResponse.ServingStatus.SERVING,
+            details,
+            epoch=epoch,
         )
 
     def set_not_serving(
@@ -552,6 +555,8 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
             node,
@@ -559,6 +564,7 @@ class StatusStore(BaseStore):
             worker_id,
             HealthCheckResponse.ServingStatus.NOT_SERVING,
             details,
+            epoch=epoch,
         )
 
     def set_unknown(
@@ -567,9 +573,16 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
-            node, depl, worker_id, HealthCheckResponse.ServingStatus.UNKNOWN, details
+            node,
+            depl,
+            worker_id,
+            HealthCheckResponse.ServingStatus.UNKNOWN,
+            details,
+            epoch=epoch,
         )
 
     def set_service_unknown(
@@ -578,6 +591,8 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         details: Optional[Dict[str, Any]] = None,
+        *,
+        epoch: int,
     ) -> bool:
         return self.set_status(
             node,
@@ -585,6 +600,7 @@ class StatusStore(BaseStore):
             worker_id,
             HealthCheckResponse.ServingStatus.SERVICE_UNKNOWN,
             details,
+            epoch=epoch,
         )
 
     def heartbeat(
@@ -593,10 +609,11 @@ class StatusStore(BaseStore):
         depl: str,
         worker_id: str,
         *,
+        epoch: int,
         persist_timestamp: bool = True,
     ) -> bool:
         """
-        Validate ownership and keep the status lease current.
+        Validate the claimed owner and epoch, then keep the status lease current.
 
         Persist heartbeat_at when requested or when the live lease differs from
         the lease attached to the status key. If the key vanished, surface
@@ -608,7 +625,7 @@ class StatusStore(BaseStore):
             if val is None:
                 return False
             st = StatusDoc.from_json(val)
-            if st.owner != worker_id:
+            if st.owner != worker_id or st.epoch != epoch:
                 return False
 
             lease_id = self._lease_id()

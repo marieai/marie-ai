@@ -5,7 +5,7 @@
 
 services:
   marie-gateway:
-    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-5.0.4-cpu}
+    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-5.1.0-cpu}
     restart: unless-stopped
     container_name: 'marieai-gateway'
     init: true
@@ -43,7 +43,8 @@ services:
       - LLM_QUEUE_ENABLED=${LLM_QUEUE_ENABLED:-true}
       - LLM_QUEUE_FABRIC_GROUP_ID=${LLM_QUEUE_FABRIC_GROUP_ID:-default}
       - LLM_QUEUE_GATEWAY_ID=${LLM_QUEUE_GATEWAY_ID:-default}
-      - LLM_QUEUE_VALKEY_URL=${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}
+      - LLM_QUEUE_URL=${LLM_QUEUE_URL:-${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}}
+      - LLM_QUEUE_VALKEY_URL=${LLM_QUEUE_URL:-${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}}
       - LLM_QUEUE_POOL_ID=${LLM_QUEUE_POOL_ID:-default}
       - LLM_QUEUE_PRODUCER_ID=${LLM_QUEUE_PRODUCER_ID:-}
       - LLM_QUEUE_PRODUCER_TTL_SECONDS=${LLM_QUEUE_PRODUCER_TTL_SECONDS:-30}
@@ -59,10 +60,10 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
 
     volumes:
-      - /mnt/data/marie-ai/config:/etc/marie/config:ro
-      - /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw
-      - /mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
-      - /mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config:/etc/marie/config:ro
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo:/etc/marie/model_zoo:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro
 
     logging:
       driver: local
@@ -79,7 +80,7 @@ services:
 
     labels:
       - "marie.service=gateway"
-      - "marie.version=${GATEWAY_IMAGE_TAG:-5.0.4-cpu}"
+      - "marie.version=${GATEWAY_IMAGE_TAG:-5.1.0-cpu}"
 
 networks:
   marie_default:

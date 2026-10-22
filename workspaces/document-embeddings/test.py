@@ -1,10 +1,18 @@
+import argparse
+import os
 from typing import List, Tuple
+
+parser = argparse.ArgumentParser(description="Compute embeddings for an image")
+parser.add_argument("image", type=os.path.expanduser, help="Image to embed")
+args = parser.parse_args()
+
 
 from PIL import Image
 from transformers import LayoutLMv3ForSequenceClassification, LayoutLMv3Processor
 from util import process_image
 
 from marie.boxes import BoxProcessorUlimDit
+from marie.constants import __model_path__
 from marie.document import TrOcrProcessor
 from marie.ocr.util import get_words_and_boxes
 from marie.utils.docs import convert_frames
@@ -14,12 +22,12 @@ from marie.utils.visualization import normalize_bbox
 def build_ocr_engine():
     text_layout = None
     box_processor = BoxProcessorUlimDit(
-        models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
+        models_dir=os.path.join(__model_path__, "unilm", "dit", "text_detection"),
         cuda=True,
     )
 
     icr_processor = TrOcrProcessor(
-        models_dir="/mnt/data/marie-ai/model_zoo/trocr", cuda=True
+        models_dir=os.path.join(__model_path__, "trocr"), cuda=True
     )
 
     return box_processor, icr_processor, text_layout
@@ -58,7 +66,7 @@ processor = LayoutLMv3Processor.from_pretrained(
 )
 
 # Load image and process
-image = Image.open("/home/greg/dev/flan-t5-text-classifier/sample-001.png")
+image = Image.open(args.image)
 if image.mode != "RGB":
     image = image.convert("RGB")
 

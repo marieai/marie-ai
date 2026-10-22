@@ -1,0 +1,10 @@
+<clickhouse>
+    <named_collections>
+        <telemetry_prices>
+            <host>localhost</host>
+            <port>9000</port>
+            <user from_env="CLICKHOUSE_USER" />
+            <password from_env="CLICKHOUSE_PASSWORD" />
+        </telemetry_prices>
+    </named_collections>
+</clickhouse>

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 import re
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any, Optional
 
-COMPLETION_QUEUE_CONTRACT_VERSION = "v2"
+COMPLETION_QUEUE_SCHEMA_VERSION = 1
 
 
 def normalize_guided_json(
@@ -32,6 +33,8 @@ class RequestContext:
     requested_pages=None means the request covers all available pages.
     """
 
+    job_id: str | None = None
+    work_unit_id: str | None = None
     ref_id: str | None = None
     ref_type: str | None = None
     page_number: int | None = None
@@ -39,6 +42,10 @@ class RequestContext:
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {}
+        if self.job_id is not None:
+            data["job_id"] = self.job_id
+        if self.work_unit_id is not None:
+            data["work_unit_id"] = self.work_unit_id
         if self.ref_id is not None:
             data["ref_id"] = self.ref_id
         if self.ref_type is not None:
@@ -63,6 +70,8 @@ class RequestContext:
             page_number = int(page_number)
 
         return cls(
+            job_id=data.get("job_id"),
+            work_unit_id=data.get("work_unit_id"),
             ref_id=data.get("ref_id"),
             ref_type=data.get("ref_type"),
             page_number=page_number,
@@ -89,6 +98,7 @@ class CompletionCallParams:
     extra_body: Optional[dict[str, Any]] = None
     extra_create_kwargs: dict[str, Any] = field(default_factory=dict)
     context: RequestContext | None = None
+    repetition_recovery: Optional[dict[str, Any]] = None
 
     def to_create_kwargs(self) -> dict[str, Any]:
         create_kwargs = {
@@ -146,6 +156,9 @@ def build_completion_call(
     effective.pop("context", None)
     response_format = effective.pop("response_format", None)
     extra_body = effective.pop("extra_body", None)
+    repetition_recovery = _validate_repetition_recovery(
+        effective.pop("repetition_recovery", None)
+    )
     if extra_body is not None and not isinstance(extra_body, dict):
         raise ValueError("completion_params.extra_body must be a dict when provided")
 
@@ -171,72 +184,112 @@ def build_completion_call(
         extra_body=extra_body_dict or None,
         extra_create_kwargs=effective,
         context=context,
+        repetition_recovery=repetition_recovery,
     )
+
+
+def apply_repetition_recovery(
+    call: CompletionCallParams,
+) -> CompletionCallParams | None:
+    recovery = _validate_repetition_recovery(call.repetition_recovery)
+    if recovery is None:
+        return None
+
+    extra_body = dict(call.extra_body or {})
+    extra_body.update(recovery.get("extra_body") or {})
+    return replace(
+        call,
+        temperature=recovery.get("temperature", call.temperature),
+        top_p=recovery.get("top_p", call.top_p),
+        frequency_penalty=recovery.get("frequency_penalty", call.frequency_penalty),
+        presence_penalty=recovery.get("presence_penalty", call.presence_penalty),
+        extra_body=extra_body or None,
+        repetition_recovery=None,
+    )
+
+
+def has_terminal_repetition(text: str) -> bool:
+    tokens = text.split()
+    for size in range(1, min(20, len(tokens) // 4) + 1):
+        required = max(4, math.ceil(8 / size))
+        if required * size > len(tokens):
+            continue
+        unit = tokens[-size:]
+        if tokens[-required * size :] == unit * required:
+            return True
+
+    stripped = text.rstrip()
+    for size in range(1, min(128, len(stripped) // 4) + 1):
+        required = max(4, math.ceil(24 / size))
+        if required * size > len(stripped):
+            continue
+        unit = stripped[-size:]
+        if unit and stripped.endswith(unit * required):
+            return True
+    return False
+
+
+def recover_complete_json(text: str) -> str | None:
+    candidate = text.lstrip()
+    try:
+        value, end = json.JSONDecoder().raw_decode(candidate)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, (dict, list)):
+        return None
+    remainder = candidate[end:].strip()
+    if remainder and not has_terminal_repetition(remainder):
+        return None
+    return candidate[:end]
+
+
+def _validate_repetition_recovery(
+    value: Any,
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("completion_params.repetition_recovery must be a dict")
+    allowed = {
+        "temperature",
+        "top_p",
+        "frequency_penalty",
+        "presence_penalty",
+        "extra_body",
+    }
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(
+            "Unsupported repetition recovery parameters: "
+            + ", ".join(sorted(str(key) for key in unknown))
+        )
+    normalized = dict(value)
+    bounds = {
+        "temperature": (0.0, 2.0),
+        "top_p": (0.0, 1.0),
+        "frequency_penalty": (-2.0, 2.0),
+        "presence_penalty": (-2.0, 2.0),
+    }
+    for name, (minimum, maximum) in bounds.items():
+        if name not in normalized:
+            continue
+        setting = normalized[name]
+        if (
+            isinstance(setting, bool)
+            or not isinstance(setting, (int, float))
+            or not math.isfinite(setting)
+            or not minimum <= setting <= maximum
+            or (name == "top_p" and setting == 0)
+        ):
+            raise ValueError(f"Invalid repetition recovery {name}")
+    extra_body = normalized.get("extra_body")
+    if extra_body is not None and not isinstance(extra_body, dict):
+        raise ValueError("repetition_recovery.extra_body must be a dict")
+    return normalized
 
 
 def build_dispatch_profile_key(call: CompletionCallParams) -> str:
     return call.model
-
-
-@dataclass
-class QueuedCompletionEnvelope:
-    request_id: str
-    producer_id: str
-    pool_id: str
-    submitted_at: float
-    call: CompletionCallParams
-    contract_version: str = COMPLETION_QUEUE_CONTRACT_VERSION
-    timeout_seconds: Optional[float] = None
-    traceparent: Optional[str] = None
-    tracestate: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
-    dispatch_profile_key: Optional[str] = None
-    estimated_cost_units: Optional[int] = None
-
-    @property
-    def model(self) -> str:
-        return self.call.model
-
-    @property
-    def batch_key(self) -> str:
-        return self.dispatch_profile_key or self.call.model
-
-    def to_json(self) -> str:
-        data = {item.name: getattr(self, item.name) for item in fields(self)}
-        data["call"] = self.call.to_dict()
-        return json.dumps(data, separators=(",", ":"), sort_keys=True)
-
-    @classmethod
-    def from_json(cls, payload: str) -> "QueuedCompletionEnvelope":
-        data = json.loads(payload)
-        _validate_contract_version(data, envelope_type="request")
-        data["call"] = CompletionCallParams.from_dict(data["call"])
-        return cls(**data)
-
-
-@dataclass
-class CompletionReplyEnvelope:
-    request_id: str
-    producer_id: str
-    pool_id: str
-    status: str
-    completed_at: float
-    contract_version: str = COMPLETION_QUEUE_CONTRACT_VERSION
-    completion: Optional[Any] = None
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
-    error_source: Optional[str] = None
-    dispatcher_id: Optional[str] = None
-    execution_backend_address: Optional[str] = None
-
-    def to_json(self) -> str:
-        return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
-
-    @classmethod
-    def from_json(cls, payload: str) -> "CompletionReplyEnvelope":
-        data = json.loads(payload)
-        _validate_contract_version(data, envelope_type="reply")
-        return cls(**data)
 
 
 def completion_payload_to_text(completion: Optional[Any]) -> Optional[str]:
@@ -366,10 +419,55 @@ def _read_value(payload: Any, key: str) -> Any:
     return getattr(payload, key, None)
 
 
-def _validate_contract_version(data: dict[str, Any], *, envelope_type: str) -> None:
-    actual = data.get("contract_version")
-    if actual != COMPLETION_QUEUE_CONTRACT_VERSION:
-        raise ValueError(
-            f"Unsupported {envelope_type} contract version: {actual!r}; "
-            f"expected {COMPLETION_QUEUE_CONTRACT_VERSION!r}"
-        )
+class UnsupportedQueueStreaming(ValueError):
+    """Terminal completion queues cannot transport streaming responses."""
+
+
+def require_terminal_completion(call: CompletionCallParams) -> None:
+    """Reject streaming after applying SDK keyword and extra-body overrides."""
+    kwargs = call.to_create_kwargs()
+    body = kwargs.get("extra_body")
+    if kwargs.get("stream") or (isinstance(body, dict) and body.get("stream")):
+        raise UnsupportedQueueStreaming("Streaming is unsupported by completion queues")
+
+
+@dataclass(frozen=True, slots=True)
+class QueuedCompletionEnvelope:
+    """One prepared ordered call, owned permanently by its original session.
+
+    expires_at_ms is an absolute queue-server timestamp, fixed at first admission.
+    """
+
+    fabric_group_id: str
+    producer_id: str
+    attempt_id: str
+    pool_id: str
+    endpoint_id: str
+    config_revision: str
+    logical_batch_id: str
+    logical_task_id: str
+    item_index: int
+    expires_at_ms: int
+    call: CompletionCallParams
+    estimated_cost_units: int = 1
+    schema_version: int = COMPLETION_QUEUE_SCHEMA_VERSION
+    traceparent: str | None = None
+    tracestate: str | None = None
+    capture_attempts: bool = False
+
+    def to_json(self) -> str:
+        data = asdict(self)
+        for key in ("traceparent", "tracestate"):
+            if data[key] is None:
+                data.pop(key)
+        return json.dumps(data, separators=(",", ":"), sort_keys=True, allow_nan=False)
+
+    @classmethod
+    def from_json(cls, payload: str) -> QueuedCompletionEnvelope:
+        data = json.loads(payload)
+        schema = data.get("schema_version")
+        if type(schema) is not int or schema != COMPLETION_QUEUE_SCHEMA_VERSION:
+            raise ValueError("Unsupported queued completion schema")
+        data["call"] = CompletionCallParams.from_dict(data["call"])
+        require_terminal_completion(data["call"])
+        return cls(**data)

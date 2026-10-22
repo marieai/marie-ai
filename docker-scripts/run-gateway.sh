@@ -11,9 +11,10 @@ fi
 # Set gateway-specific configuration
 NAME=${CONTAINER_NAME}
 CONFIG="config"
+DATA_DIR="${DATA_DIR:-${MARIE_DEFAULT_MOUNT:-/mnt/data/marie-ai}}"
 PORT=51000
 GRPC_PORT=52000
-CONFIG_DIR="/mnt/data/marie-ai/$CONFIG"
+CONFIG_DIR="$DATA_DIR/$CONFIG"
 
 # Check if container already exists
 CONTAINER_ID=$(docker inspect --format="{{.Id}}" ${NAME} 2> /dev/null)
@@ -70,21 +71,22 @@ else
     -e LLM_QUEUE_ENABLED="${LLM_QUEUE_ENABLED:-true}" \
     -e LLM_QUEUE_FABRIC_GROUP_ID="${LLM_QUEUE_FABRIC_GROUP_ID:-default}" \
     -e LLM_QUEUE_GATEWAY_ID="${LLM_QUEUE_GATEWAY_ID:-default}" \
-    -e LLM_QUEUE_VALKEY_URL="${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}" \
+    -e LLM_QUEUE_URL="${LLM_QUEUE_URL:-${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}}" \
+    -e LLM_QUEUE_VALKEY_URL="${LLM_QUEUE_URL:-${LLM_QUEUE_VALKEY_URL:-redis://localhost:6379/0}}" \
     -e OPENAI_API_BASE="${OPENAI_API_BASE:-http://192.222.48.192}" \
     -e OPENAI_API_KEY="${OPENAI_API_KEY:-EMPTY}" \
     --env-file ./service.env \
     --name $NAME \
-    -v $CONFIG_DIR:/etc/marie:rw \
-    -v /mnt/data/marie-ai/:/mnt/data/marie-ai:rw \
-    -v /mnt/data/marie-ai/model_zoo:/mnt/data/marie-ai/model_zoo:ro \
+    -v "$CONFIG_DIR:/etc/marie:rw" \
+    -v "$DATA_DIR:/mnt/data/marie-ai:rw" \
+    -v "$DATA_DIR/model_zoo:/mnt/data/marie-ai/model_zoo:ro" \
     -v /opt/logs/marie-ai:/opt/marie-ai/logs:rw \
-    -v /mnt/data/marie-ai/config/extra_py_modules:/mnt/data/marie-ai/config/extra_py_modules:ro \
+    -v "$DATA_DIR/config/extra_py_modules:/mnt/data/marie-ai/config/extra_py_modules:ro" \
     --network=host \
     -p $PORT:51000 \
     -p $GRPC_PORT:52000 \
     ${CONTAINER_REGISTRY}${CONTAINER_NAME}:${CONTAINER_VERSION} \
     gateway --uses /etc/marie/service/marie-gateway-4.0.0.yml --protocols HTTP GRPC --ports 51000 52000 --extra-search-paths /mnt/data/marie-ai/config/extra_py_modules --metrics --metrics-exporter-host localhost --metrics-exporter-port 4317 --tracing --traces-exporter-host localhost --traces-exporter-port 4317
-#docker run --rm  -it --entrypoint /bin/bash  marieai/marie-gateway:5.0.4-cpu
+#docker run --rm  -it --entrypoint /bin/bash  marieai/marie-gateway:5.1.0-cpu
 # docker exec -it  marie-gateway  bash
 fi

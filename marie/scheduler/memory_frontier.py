@@ -2,6 +2,7 @@ import asyncio
 import heapq
 import time
 from collections import defaultdict
+from copy import copy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, NamedTuple, Optional
 
@@ -167,7 +168,7 @@ class MemoryFrontier:
         v = self._ver[wi.id]
         self._ready_set.add(wi.id)
         if wi.id not in self._added_at:
-            self._added_at[wi.id] = self._now()  # was time.time()
+            self._added_at[wi.id] = self._now()
         self._seq += 1
         heapq.heappush(
             self._ready_heap,
@@ -706,7 +707,7 @@ class MemoryFrontier:
         """
         async with self._lock:
             taken: list[WorkInfo] = []
-            now = self._now()  # was time.time()
+            now = self._now()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
             for jid in ids:
                 if not self._still_ready(jid):
@@ -730,7 +731,7 @@ class MemoryFrontier:
         async with self._lock:
             if max_n <= 0 or not self._ready_heap:
                 return []
-            now = self._now()  # was time.time()
+            now = self._now()
             ttl = self.default_lease_ttl if lease_ttl is None else float(lease_ttl)
             selected: list[WorkInfo] = []
             skipped: list[ReadyEntry] = []
@@ -742,6 +743,14 @@ class MemoryFrontier:
                 if not self._entry_is_current(entry):
                     continue
                 if not self._still_ready(entry.jid):
+                    wi_deferred = self.jobs_by_id.get(entry.jid)
+                    if (
+                        wi_deferred is not None
+                        and self._is_schedulable_state(wi_deferred.state)
+                        and entry.jid in self._ready_set
+                        and self.unmet_count.get(entry.jid, 1) == 0
+                    ):
+                        skipped.append(entry)
                     continue
                 wi = self.jobs_by_id.get(entry.jid)
                 if wi is None or (filter_fn and not filter_fn(wi)):
@@ -758,7 +767,7 @@ class MemoryFrontier:
 
     async def reap_expired_soft_leases(self) -> int:
         async with self._lock:
-            now = self._now()  # was time.time()
+            now = self._now()
             reap = [jid for jid, until in self.leased_until.items() if until <= now]
             for jid in reap:
                 self.leased_until.pop(jid, None)
@@ -857,11 +866,26 @@ class MemoryFrontier:
             return ep.split("://", 1)[0]
         return ""
 
-    def summary(self, detail: bool = False, top_n: int = 5) -> dict[str, Any]:
-        """
-        Lightweight snapshot of the frontier for logs/metrics.
-        Returns a dict; safe to json-serialize.
-        """
+    async def summary(self, detail: bool = False, top_n: int = 5) -> dict[str, Any]:
+        """Snapshot the frontier and compute SLA pressure off the event loop."""
+        async with self._lock:
+            work_items: list[WorkInfo] = []
+            for index, work_item in enumerate(self.jobs_by_id.values(), start=1):
+                work_items.append(copy(work_item))
+                if index % _COOPERATIVE_BATCH_SIZE == 0:
+                    await asyncio.sleep(0)
+            out = self._summary_locked(detail=detail, top_n=top_n)
+
+        out["sla"] = await asyncio.to_thread(
+            summarize_sla_work_items,
+            work_items,
+            now=datetime.now(timezone.utc),
+            top_n=top_n if detail else 0,
+            interval_seconds=self.sla_priority_interval_seconds,
+        )
+        return out
+
+    def _summary_locked(self, detail: bool, top_n: int) -> dict[str, Any]:
         now = self._now()
 
         # Totals
@@ -924,12 +948,6 @@ class MemoryFrontier:
                 ),
             },
             "ready_age_seconds": _quantiles(ages),
-            "sla": summarize_sla_work_items(
-                self.jobs_by_id.values(),
-                now=datetime.now(timezone.utc),
-                top_n=top_n if detail else 0,
-                interval_seconds=self.sla_priority_interval_seconds,
-            ),
         }
 
         if detail and ready_total:

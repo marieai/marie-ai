@@ -5,6 +5,7 @@ import sys
 import traceback
 from typing import Any, Dict, Optional
 
+from marie.registry.model_registry import ModelRegistry
 from rich.traceback import install
 
 from marie.conf.helper import load_yaml
@@ -164,6 +165,8 @@ def __main__(
     if not env_file:
         env_file = os.path.join(__config_dir__, ".env")
     load_env_file(dotenv_path=env_file)
+
+    ModelRegistry.configure(config_dir=__config_dir__, model_root=__model_path__)
 
     context = {
         "gpu_device_count": gpu_device_count(),

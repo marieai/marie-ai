@@ -63,7 +63,9 @@ class ExtractPipeline(BasePipeline):
 
             pipeline_config = load_yaml(
                 os.path.join(
-                    __config_dir__, "tests-integration", "pipeline-integration.partial.yml"
+                    __config_dir__,
+                    "tests-integration",
+                    "pipeline-integration.partial.yml",
                 )
             )
             pipeline = ExtractPipeline(pipeline_config=pipeline_config["pipeline"])
@@ -409,7 +411,8 @@ class ExtractPipeline(BasePipeline):
             "char_count": sum(
                 len(line["text"])
                 for page in ocr_results
-                for line in (page.get("lines") or [])
+                if page.get("lines") is not None
+                for line in page["lines"]
                 if "text" in line
             ),
             "page_count": len(ocr_results),
@@ -527,7 +530,7 @@ class ExtractPipeline(BasePipeline):
         self.logger.info(f"runtime_conf args : {runtime_conf}")
 
         if runtime_conf is None:
-            self.logger.warning("runtime_conf is None, using default " "config")
+            self.logger.warning("runtime_conf is None, using default config")
             runtime_conf = {}
 
         try:

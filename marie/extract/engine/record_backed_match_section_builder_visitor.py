@@ -66,7 +66,7 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
             )
 
         envelope_key = match_section_source.get("envelope_key")
-        records_required = match_section_source.get("records_required", False)
+        records_required = match_section_source.get("records_required", True)
 
         records = load_extracted_records(
             output_dir=str(context.output_dir),
@@ -97,8 +97,8 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
         data_source: str,
     ) -> MatchSection:
         """Create a single CONTENT MatchSection from one extracted record."""
-        claim_uid = record.get("claim_uid", "unknown")
-        source = record.get("source", {})
+        record_uid = next((v for k, v in record.items() if k.endswith("_uid") and v), "unknown")
+        source = record.get("source") or {}
 
         # Build span from primary source
         spans = self._build_spans(record, source)
@@ -106,13 +106,13 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
         section = MatchSection()
         section.type = MatchSectionType.CONTENT
         section.owner_layer = layer
-        section.label = f"{layer.layer_name}::{claim_uid}"
+        section.label = f"{layer.layer_name}::{record_uid}"
         section.span = spans
         section.row_extraction_strategy = layer.row_extraction_strategy
 
         # Store provenance in tags
         section.tags["match_section_source_strategy"] = "record_backed"
-        section.tags["record_uid"] = claim_uid
+        section.tags["record_uid"] = record_uid
         section.tags["data_source"] = data_source
         section.tags["source_record_json"] = json.dumps(record)
 
@@ -133,10 +133,17 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
 
         aggregated = record.get("_aggregated_sources")
         if aggregated and isinstance(aggregated, list):
-            for agg_source in aggregated:
+            for source_index, agg_source in enumerate(aggregated):
                 span = _span_from_source(agg_source)
                 if span:
                     spans.append(span)
+                else:
+                    logger.warning(
+                        "Record '%s' had unusable source metadata in "
+                        "_aggregated_sources[%d]; skipping span",
+                        record.get("claim_uid", "?"),
+                        source_index,
+                    )
         else:
             span = _span_from_source(source)
             if span:
@@ -157,14 +164,17 @@ class RecordBackedMatchSectionBuilderVisitor(BaseProcessingVisitor):
 def _span_from_source(source: Dict[str, Any]) -> Optional[Span]:
     """Convert a source dict with ``page_index`` and ``ocr_line_range``
     into a ``Span``."""
-    if not source:
+    if not isinstance(source, dict) or not source:
         return None
 
     page = source.get("page_index", 0)
     ocr_range = source.get("ocr_line_range")
     if ocr_range and isinstance(ocr_range, (list, tuple)) and len(ocr_range) >= 2:
-        y = int(ocr_range[0])
-        h = max(int(ocr_range[1]) - y, 1)
+        try:
+            y = int(ocr_range[0])
+            h = max(int(ocr_range[1]) - y, 1)
+        except (TypeError, ValueError):
+            return None
         return Span(page=page, y=y, h=h)
 
     return None

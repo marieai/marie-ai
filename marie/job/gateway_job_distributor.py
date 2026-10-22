@@ -133,6 +133,7 @@ class GatewayJobDistributor(JobDistributor):
             "partition_key",
             "run_owner",
             "run_attempt_id",
+            "submission_trace_context",
         ):
             if key in job_info.metadata:
                 parameters[key] = job_info.metadata[key]

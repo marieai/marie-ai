@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-
 from marie.agent.tools.registry import resolve_tools
+
+from marie.executor.agent.tools.registry import resolve_executor_tools
 from marie.plugins.agent_tool import (
     PluginTool,
     PluginToolSpec,
@@ -87,8 +88,9 @@ def test_call_without_client_raises():
         tool.call(url="https://example.com")
 
 
-def test_resolve_tools_routes_dropped_dict_to_plugin_tool():
-    resolved = resolve_tools([DROPPED_TOOL])
+@pytest.mark.parametrize("resolver", [resolve_tools, resolve_executor_tools])
+def test_resolve_tools_routes_dropped_dict_to_plugin_tool(resolver):
+    resolved = resolver([DROPPED_TOOL])
     assert "jina_reader" in resolved
     assert isinstance(resolved["jina_reader"], PluginTool)
 

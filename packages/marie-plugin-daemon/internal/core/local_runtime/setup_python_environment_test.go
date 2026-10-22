@@ -1,6 +1,7 @@
 package local_runtime
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -35,6 +36,9 @@ func TestEnsureEnvironmentSyncsUvProject(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeUvProject(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("./not-present.whl\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	python, err := EnsureEnvironment(context.Background(), dir, "3.12", io.Discard)
 	if err != nil {
@@ -42,6 +46,73 @@ func TestEnsureEnvironmentSyncsUvProject(t *testing.T) {
 	}
 	if _, err := os.Stat(python); err != nil {
 		t.Fatalf("venv python missing: %v", err)
+	}
+}
+
+func TestEnsureEnvironmentUsesRequirementsWithUnlockedPyproject(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed")
+	}
+	dir := t.TempDir()
+	project := "[project]\nname = \"dify-export\"\nversion = \"0.0.0\"\ndependencies = [\"must-not-resolve-project-dependencies\"]\n"
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte(project), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wheelName := "preview_dependency-1.0.0-py3-none-any.whl"
+	var wheel bytes.Buffer
+	w := zip.NewWriter(&wheel)
+	for name, content := range map[string]string{
+		"preview_dependency.py":                       "VALUE = 'installed-from-requirements'\n",
+		"preview_dependency-1.0.0.dist-info/METADATA": "Metadata-Version: 2.1\nName: preview-dependency\nVersion: 1.0.0\n",
+		"preview_dependency-1.0.0.dist-info/WHEEL":    "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+		"preview_dependency-1.0.0.dist-info/RECORD":   "",
+	} {
+		entry, err := w.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(entry, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, wheelName), wheel.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("--no-index\n./"+wheelName+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	python, err := EnsureEnvironment(context.Background(), dir, "3.12", &logs)
+	if err != nil {
+		t.Fatalf("Dify-style environment setup failed: %v\n%s", err, logs.String())
+	}
+	output, err := exec.Command(python, "-c", "import preview_dependency; print(preview_dependency.VALUE)").CombinedOutput()
+	if err != nil || strings.TrimSpace(string(output)) != "installed-from-requirements" {
+		t.Fatalf("requirements dependency was not installed: %v\n%s", err, output)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "uv.lock")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("requirements installation must not generate a project lock: %v", err)
+	}
+}
+
+func TestEnsureEnvironmentDoesNotFallBackFromInvalidLock(t *testing.T) {
+	if _, err := exec.LookPath("uv"); err != nil {
+		t.Skip("uv not installed")
+	}
+	dir := t.TempDir()
+	writeUvProject(t, dir)
+	if err := os.WriteFile(filepath.Join(dir, "uv.lock"), []byte("invalid lock document"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("--no-index\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := EnsureEnvironment(context.Background(), dir, "3.12", io.Discard)
+	if !errors.Is(err, ErrEnvironmentSetup) {
+		t.Fatalf("invalid lock must fail instead of using requirements: %v", err)
 	}
 }
 

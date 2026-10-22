@@ -23,6 +23,12 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      repetition_recovery: &qwen_repetition_recovery
+        temperature: 0.7
+        top_p: 0.8
+        presence_penalty: 1.5
+        extra_body:
+          top_k: 20
       expect_output: json
       refine_passes: 1
       refine_prompt_path: ./tables-refine.j2
@@ -48,6 +54,7 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      repetition_recovery: *qwen_repetition_recovery
       expect_output: json
       mini_batch_size: 1
     parser: noop
@@ -72,6 +79,7 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      repetition_recovery: *qwen_repetition_recovery
       expect_output: json
       max_tokens: 8192
       refine_passes: 1
@@ -102,6 +110,7 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      repetition_recovery: *qwen_repetition_recovery
       expect_output: json
       mini_batch_size: 1
     parser_name: default

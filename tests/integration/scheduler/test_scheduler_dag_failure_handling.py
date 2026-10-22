@@ -19,9 +19,7 @@ from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import RecoveredRunLease, WorkInfo
 from marie.scheduler.psql import PostgreSQLJobScheduler
 from marie.scheduler.repository.job_repository import JobRepository
-from marie.scheduler.services.attempt_lifecycle_service import (
-    AttemptLifecycleService,
-)
+from marie.scheduler.services.attempt_lifecycle_service import AttemptLifecycleService
 from marie.scheduler.services.control_flow_execution_service import (
     ControlFlowExecutionService,
 )
@@ -53,7 +51,7 @@ class RecordingRepository:
         self.mark_active_calls: list[str] = []
         self.released_lease_calls: list[list[str]] = []
 
-    async def mark_dag_as_active(self, dag_id: str) -> bool:
+    async def mark_dag_as_active(self, dag_id: str, *, subscribed_queues) -> bool:
         self.mark_active_calls.append(dag_id)
         return self.mark_active_result
 
@@ -153,6 +151,7 @@ def build_scheduler(
     repository: RecordingRepository, frontier: RecordingFrontier
 ) -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = FakeLogger()
     scheduler.runtime = SchedulerRuntime(scheduler.logger)
     scheduler.running = True
@@ -208,6 +207,7 @@ def build_scheduler(
         resolution_retry_delay=scheduler._dag_resolution_retry_delay,
         resolution_retry_backoff=scheduler._dag_resolution_retry_backoff,
         resolution_retry_max_delay=scheduler._dag_resolution_retry_max_delay,
+        subscribed_queues=None,
     )
     scheduler.dag_service.hydrate_single_dag = hydrate_single_dag_from_db
     scheduler.control_flow_service = ControlFlowExecutionService(
@@ -222,6 +222,7 @@ def build_scheduler(
         gateway_instance_id=scheduler.gateway_instance_id,
         notify_callback=notify_event,
         runtime=scheduler.runtime,
+        subscribed_queues=None,
     )
     scheduler.attempt_lifecycle_service = AttemptLifecycleService(
         repository=repository,
@@ -1166,6 +1167,7 @@ async def test_scheduler_start_initializes_notifications_before_admission(
         return DummyTask(coro)
 
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.logger = FakeLogger()
     scheduler.repository = Repo()
     scheduler.known_queues = set()
@@ -1497,6 +1499,7 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(
     monkeypatch,
 ):
     service = object.__new__(ControlFlowExecutionService)
+    service.subscribed_queues = None
     service.logger = FakeLogger()
     service._runtime = SchedulerRuntime(service.logger)
     service.dag_service = SimpleNamespace(
@@ -1592,6 +1595,7 @@ async def test_process_control_flow_node_notifies_after_unblocking_children(
 @pytest.mark.asyncio
 async def test_wait_for_dispatch_wake_returns_early_on_notify():
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler._event_queue = asyncio.Queue()
     scheduler._debounced_notify = False
 

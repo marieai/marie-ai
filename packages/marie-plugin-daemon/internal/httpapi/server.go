@@ -107,22 +107,6 @@ func NewServer(version VersionInfo, options ...ServerOption) http.Handler {
 		writeJSON(w, http.StatusOK, result)
 	})
 
-	mux.HandleFunc("POST /v1/runtime/stub-invocations", func(w http.ResponseWriter, r *http.Request) {
-		var envelope map[string]any
-		if !decodeJSONBody(w, r, &envelope) {
-			return
-		}
-		if err := config.verifier.Verify(envelope); err != nil {
-			writeJSON(w, http.StatusUnauthorized, errorBody(auth.Code(err), err.Error()))
-			return
-		}
-		if err := policy.VerifyRuntimeEnvelope(envelope); err != nil {
-			writeJSON(w, http.StatusForbidden, errorBody(policy.Code(err), err.Error()))
-			return
-		}
-		writeJSON(w, http.StatusNotImplemented, errorBody("runtime_disabled", "runtime invocation is disabled in decode-only mode"))
-	})
-
 	mux.HandleFunc("POST /v1/plugins/install", func(w http.ResponseWriter, r *http.Request) {
 		envelope, tenant, ok := authorizeHeaderEnvelope(w, r, config)
 		if !ok {
@@ -154,13 +138,12 @@ func NewServer(version VersionInfo, options ...ServerOption) http.Handler {
 			return
 		}
 
-		install, err := config.manager.Install(tenant, archive)
+		install, err := config.pool.Install(r.Context(), tenant, archive)
 		if err != nil {
-			writeInstallError(w, err)
-			return
-		}
-		install, err = config.pool.Deploy(r.Context(), tenant, install.PackageRef)
-		if err != nil {
+			if errors.Is(err, plugin_manager.ErrUnsafeArchivePath) || errors.Is(err, plugin_manager.ErrInvalidName) || errors.Is(err, plugin_manager.ErrArchiveTooLarge) {
+				writeInstallError(w, err)
+				return
+			}
 			writeJSON(w, http.StatusInternalServerError, errorBody("deploy_failed", err.Error()))
 			return
 		}
@@ -194,11 +177,7 @@ func NewServer(version VersionInfo, options ...ServerOption) http.Handler {
 				"envelope packageRef does not match the requested plugin"))
 			return
 		}
-		if err := config.pool.Stop(tenant, packageRef); err != nil {
-			writeJSON(w, http.StatusInternalServerError, errorBody("stop_failed", err.Error()))
-			return
-		}
-		if err := config.manager.Remove(tenant, packageRef); err != nil {
+		if err := config.pool.Remove(tenant, packageRef); err != nil {
 			if errors.Is(err, plugin_manager.ErrInstallNotFound) {
 				writeJSON(w, http.StatusNotFound, errorBody("install_not_found", err.Error()))
 				return
@@ -223,12 +202,18 @@ func NewServer(version VersionInfo, options ...ServerOption) http.Handler {
 		}
 
 		packageRef := stringClaim(envelope["packageRef"])
-		if _, installed := config.manager.Get(tenant, packageRef); !installed {
+		digest := stringClaim(envelope["packageDigest"])
+		install, installed := config.manager.Get(tenant, packageRef)
+		if !installed {
 			writeJSON(w, http.StatusNotFound, errorBody("plugin_not_installed", "plugin is not installed: "+packageRef))
 			return
 		}
+		if digest != install.Digest {
+			writeJSON(w, http.StatusConflict, errorBody("package_digest_mismatch", "requested package digest does not match the installed version"))
+			return
+		}
 
-		frames, err := config.pool.Invoke(r.Context(), tenant, packageRef, envelope["payload"], envelopeTimeout(envelope))
+		frames, err := config.pool.Invoke(r.Context(), tenant, packageRef, digest, envelope["payload"], envelopeTimeout(envelope))
 		if errors.Is(err, io_tunnel.ErrNotRunning) {
 			// The plugin is installed but has no running instance (e.g. after a
 			// daemon restart). Lazy-deploy it from its existing working dir and
@@ -237,9 +222,13 @@ func NewServer(version VersionInfo, options ...ServerOption) http.Handler {
 				writeJSON(w, http.StatusInternalServerError, errorBody("deploy_failed", derr.Error()))
 				return
 			}
-			frames, err = config.pool.Invoke(r.Context(), tenant, packageRef, envelope["payload"], envelopeTimeout(envelope))
+			frames, err = config.pool.Invoke(r.Context(), tenant, packageRef, digest, envelope["payload"], envelopeTimeout(envelope))
 		}
 		if err != nil {
+			if errors.Is(err, io_tunnel.ErrDigestMismatch) {
+				writeJSON(w, http.StatusConflict, errorBody("package_digest_mismatch", "requested package digest does not match the running version"))
+				return
+			}
 			if errors.Is(err, io_tunnel.ErrNotRunning) {
 				writeJSON(w, http.StatusConflict, errorBody("instance_not_running", err.Error()))
 				return

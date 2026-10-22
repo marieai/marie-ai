@@ -178,6 +178,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         self._capability_generation: int | None = None
         self._document_extraction_gate_warned = False
         self.format_router = FormatRouter()
+        self._preflight_document_extraction()
 
     def close(self) -> None:
         self.embedded_plugins.close()
@@ -420,6 +421,40 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         self._capabilities_loaded = True
         self._capability_generation = getattr(
             self.embedded_plugins, "runtime_generation", generation
+        )
+
+    def _preflight_document_extraction(self) -> None:
+        """Start the plugin at boot so a misconfiguration is reported here
+        rather than on the first request. Failures are logged, never raised:
+        the executor still serves OCR-loadable documents."""
+        if not self._document_extraction_enabled:
+            return
+        package = self._document_extraction_package
+        degraded = "only OCR-loadable documents can be processed"
+        if package not in self.embedded_plugins.configured_packages:
+            self.logger.error(
+                f"document extraction is enabled but plugin {package!r} "
+                f"is not configured; {degraded}"
+            )
+            return
+        try:
+            self._load_document_extraction_capabilities()
+        except Exception as error:
+            self.logger.error(
+                f"document extraction plugin {package!r} failed to start "
+                f"({error}); {degraded}"
+            )
+            return
+        formats = sorted(self.format_router.plugin_formats)
+        if not formats:
+            self.logger.error(
+                f"document extraction plugin {package!r} reports no semantic "
+                f"formats; {degraded}"
+            )
+            return
+        self.logger.info(
+            f"document extraction ready: plugin {package!r} "
+            f"version {self.format_router.plugin_version}, formats {formats}"
         )
 
     def _warn_document_extraction_off(self, reason: str) -> None:
@@ -798,7 +833,7 @@ class TextExtractionExecutorMock(MarieExecutor):
             raise RuntimeError("Mock error for testing purposes")
 
         self.logger.info(f"Sleeping for {sec} seconds : {time.time()}")
-        await asyncio.sleep(sec),
+        (await asyncio.sleep(sec),)
 
         self.logger.info(f"Sleeping for {sec} seconds - done : {time.time()}")
         return {

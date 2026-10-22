@@ -27,6 +27,8 @@ from marie.query_planner.jsonpath_evaluator import (
 )
 from marie.scheduler.models import WorkInfo
 
+DEFAULT_CONDITION_TIMEOUT = 30
+
 
 class BranchEvaluationContext:
     """
@@ -53,7 +55,7 @@ class BranchEvaluationContext:
             "priority": work_info.priority,
             "data": work_info.data,
             "metadata": work_info.data.get("metadata", {}),
-            "execution_results": execution_results,
+            "execution_results": self.execution_results,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -162,10 +164,19 @@ class BranchEvaluator:
         if path.condition_function:
             func = self._load_function(path.condition_function)
             try:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None, func, context.context
+                result = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, func, context.context
+                    ),
+                    timeout=DEFAULT_CONDITION_TIMEOUT,
                 )
                 return bool(result)
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"Condition function timed out for path {path.path_id} "
+                    f"after {DEFAULT_CONDITION_TIMEOUT}s"
+                )
+                return False
             except Exception as e:
                 logger.error(f"Condition function failed for path {path.path_id}: {e}")
                 return False
@@ -223,7 +234,7 @@ class BranchEvaluator:
             return func
 
         except Exception as e:
-            raise ImportError(f"Failed to load function {function_path}: {e}")
+            raise ImportError(f"Failed to load function {function_path}: {e}") from e
 
     async def evaluate_switch(
         self, switch_def: SwitchQueryDefinition, context: BranchEvaluationContext
@@ -233,7 +244,10 @@ class BranchEvaluator:
             switch_def.switch_field, context.context
         )
 
-        if field_value in switch_def.cases:
-            return switch_def.cases[field_value]
+        try:
+            if field_value in switch_def.cases:
+                return switch_def.cases[field_value]
+        except TypeError:
+            logger.error(f"Unhashable switch field value: {type(field_value)}")
 
         return switch_def.default_case

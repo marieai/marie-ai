@@ -1,6 +1,7 @@
 """Configuration management for Marie MCP Server."""
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -19,7 +20,8 @@ class Config:
     AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
     AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
     AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-    S3_BUCKET = os.getenv("S3_BUCKET", "marie")
+    S3_BUCKET = os.getenv("S3_BUCKET", os.getenv("MARIE_S3_BUCKET", "marie"))
+    MARIE_FABRIC_GROUP_ID = os.getenv("MARIE_FABRIC_GROUP_ID")
 
     # Request Settings
     REQUEST_TIMEOUT = int(os.getenv("MARIE_REQUEST_TIMEOUT", "300"))  # 5 minutes
@@ -47,12 +49,18 @@ class Config:
         if not cls.AWS_ACCESS_KEY_ID or not cls.AWS_SECRET_ACCESS_KEY:
             print(
                 "WARNING: AWS credentials not set. S3 uploads will fail. "
-                "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your environment."
+                "Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in your environment.",
+                file=sys.stderr,
             )
+
+        if cls.REQUEST_TIMEOUT <= 0 or cls.MAX_FILE_SIZE_MB <= 0:
+            raise ValueError("Request timeout and maximum file size must be positive")
+        if cls.MAX_RETRIES < 1 or not 0 <= cls.RETRY_MIN_WAIT <= cls.RETRY_MAX_WAIT:
+            raise ValueError("Invalid retry configuration")
 
         # Create output directory
         cls.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        print(f"Output directory: {cls.OUTPUT_DIR}")
+        print(f"Output directory: {cls.OUTPUT_DIR}", file=sys.stderr)
 
     @classmethod
     def summary(cls) -> str:

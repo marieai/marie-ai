@@ -2,6 +2,7 @@ from typing import Any, Optional, Union
 
 import torch
 from docarray import DocList
+from marie.engine.llm_queue.config import llm_queue_enabled
 
 from marie.api.docs import AssetKeyDoc
 from marie.executor.extract.document_annotator_executor import (
@@ -30,8 +31,23 @@ class DocumentAnnotatorTableLLMExecutor(DocumentAnnotatorExecutor):
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
         ).logger
+        queue_enabled = llm_queue_enabled()
+        submission_mode = "queued-dispatch" if queue_enabled else "direct-batch"
+        self.logger.info(
+            f"LLM request submission mode: {submission_mode} "
+            f"(LLM_QUEUE_ENABLED={str(queue_enabled).lower()})"
+        )
 
         logger.info(f"Started executor : {self.__class__.__name__}")
+
+    def deployment_status_details(self) -> dict[str, Any]:
+        enabled = llm_queue_enabled()
+        return {
+            "llm_dispatch": {
+                "enabled": enabled,
+                "mode": "queued-dispatch" if enabled else "direct-batch",
+            }
+        }
 
     @requests(on="/annotator/table-llm")
     async def annotator_table_llm(

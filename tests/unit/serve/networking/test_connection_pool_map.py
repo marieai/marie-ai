@@ -4,7 +4,7 @@ from marie.serve.networking import _ConnectionPoolMap, _NetworkingHistograms
 
 
 @pytest.mark.asyncio
-async def test_head_addition_removal(logger, metrics, port_generator):
+async def test_head_addition_removal(logger, port_generator):
     head_port = port_generator()
     head_address = f'0.0.0.0:{head_port}'
     head_deployment = 'head'
@@ -12,7 +12,6 @@ async def test_head_addition_removal(logger, metrics, port_generator):
     connection_pool = _ConnectionPoolMap(
         runtime_name=head_deployment,
         logger=logger,
-        metrics=metrics,
         histograms=_NetworkingHistograms(),
     )
     connection_pool.add_head(
@@ -28,11 +27,10 @@ async def test_head_addition_removal(logger, metrics, port_generator):
 
 
 @pytest.mark.asyncio
-async def test_replica_addition_removal(logger, metrics, port_generator):
+async def test_replica_addition_removal(logger, port_generator):
     connection_pool = _ConnectionPoolMap(
         runtime_name='deployment',
         logger=logger,
-        metrics=metrics,
         histograms=_NetworkingHistograms(),
     )
 
@@ -65,11 +63,10 @@ async def test_replica_addition_removal(logger, metrics, port_generator):
     assert not connection_pool.get_replicas(deployment=replica_1_deployment, head=False)
 
 
-def test_independent_shards_and_replicas(logger, metrics, port_generator):
+def test_independent_shards_and_replicas(logger, port_generator):
     connection_pool = _ConnectionPoolMap(
         runtime_name='deployment',
         logger=logger,
-        metrics=metrics,
         histograms=_NetworkingHistograms(),
     )
     head_port = port_generator()
@@ -105,11 +102,10 @@ def test_independent_shards_and_replicas(logger, metrics, port_generator):
     assert len(connection_pool.get_replicas_all_shards(deployment=replica_1_deployment))
 
 
-def test_shards_and_replicas(logger, metrics, port_generator):
+def test_shards_and_replicas(logger, port_generator):
     connection_pool = _ConnectionPoolMap(
         runtime_name='deployment',
         logger=logger,
-        metrics=metrics,
         histograms=_NetworkingHistograms(),
     )
     head_port = port_generator()

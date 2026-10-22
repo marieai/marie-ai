@@ -105,7 +105,7 @@ with:
     run_lease_renewal_interval_seconds: 20
     max_pool_size: 5
     max_connections: 5
-    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench] # Queue names for the job scheduler to monitor
+    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench,kb_indexing] # Consumer subscriptions; omit to consume all queues
 
     # DAG Concurrency Management
     dag_manager:
@@ -251,7 +251,12 @@ with:
     clickhouse:
       host: localhost
       port: 9000
-      database: marie
+      database: telemetry
+
+  llm_queue:
+    fabric_group_id: default
+    llm_dispatch:
+      policy_source: database
 
   # Authentication and Authorization configuration
   auth:
@@ -260,8 +265,12 @@ with:
         api_key : mas_0aPJ9Q9nUO1Ac1vJTfffXEXs9FyGLf9BzfYgZ_RaHm707wmbfHJNPQ
         enabled : True
         roles : [admin, user]
+        scopes : [runtime-observability, runtime-routing-admin]
+        allowed_fabrics : [default]
 
       - name : service-B
         api_key : mau_t6qDi1BcL1NkLI8I6iM8z1va0nZP01UQ6LWecpbDz6mbxWgIIIZPfQ
         enabled : True
         roles : [admin, user]
+        scopes : [runtime-observability]
+        allowed_fabrics : [default]

@@ -4,6 +4,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import validate_queue_scope
 
 
 def try_set_maintenance_time(schema: str, maintenance_state_interval_seconds: int):
@@ -57,7 +58,8 @@ def insert_jobs(schema: str) -> str:
                 dependencies jsonb,
                 job_level integer,
                 soft_sla timestamptz,
-                hard_sla timestamptz
+                hard_sla timestamptz,
+                llm_routing_ready boolean
             )
         )
         INSERT INTO {schema}.job (
@@ -77,7 +79,8 @@ def insert_jobs(schema: str) -> str:
             dependencies,
             job_level,
             soft_sla,
-            hard_sla
+            hard_sla,
+            llm_routing_ready
         )
         SELECT
             job.id,
@@ -109,11 +112,80 @@ def insert_jobs(schema: str) -> str:
             COALESCE(job.dependencies, '[]'::jsonb),
             job.job_level,
             job.soft_sla,
-            job.hard_sla
+            job.hard_sla,
+            COALESCE(job.llm_routing_ready, true)
         FROM jobs job
         JOIN {schema}.queue queue ON job.name = queue.name
+        JOIN {schema}.dag parent ON parent.id = job.dag_id
+            AND parent.submission_name = job.name AND parent.submission_name <> ''
         ON CONFLICT DO NOTHING
         RETURNING id
+    """
+
+
+def insert_llm_routes(schema: str) -> str:
+    return f"""
+        WITH routes AS (
+            SELECT *
+            FROM jsonb_to_recordset(%s::jsonb) AS route (
+                work_unit_id uuid,
+                job_id uuid,
+                fabric_group_id text,
+                policy_generation bigint,
+                policy_digest text,
+                rule_digest text,
+                normalized_fact_digest text,
+                effective_page_count integer,
+                pool_id text,
+                logical_endpoint_group_id text,
+                endpoint_revision text,
+                estimator_version text,
+                routing_source text,
+                routing_actor text,
+                routing_reason text,
+                route_digest text,
+                payload jsonb
+            )
+        ), locked_policy AS MATERIALIZED (
+            SELECT config.fabric_group_id, config.active_policy_generation,
+                   generation.policy_digest
+            FROM {schema}.llm_queue_fabric_config config
+            JOIN {schema}.llm_queue_policy_generation generation
+              ON generation.fabric_group_id = config.fabric_group_id
+             AND generation.generation = config.active_policy_generation
+            WHERE config.fabric_group_id IN (SELECT fabric_group_id FROM routes)
+            ORDER BY config.fabric_group_id
+            FOR SHARE OF config
+        ), current_routes AS (
+            SELECT route.* FROM routes route
+            JOIN locked_policy config
+              ON config.fabric_group_id = route.fabric_group_id
+             AND config.active_policy_generation = route.policy_generation
+             AND config.policy_digest = route.policy_digest
+        ), inserted_routes AS (
+            INSERT INTO {schema}.llm_job_route (
+                work_unit_id, job_id, fabric_group_id, policy_generation,
+                policy_digest, rule_digest, normalized_fact_digest,
+                effective_page_count, pool_id, logical_endpoint_group_id,
+                endpoint_revision, estimator_version, routing_source,
+                routing_actor, routing_reason
+            )
+            SELECT
+                work_unit_id, job_id, fabric_group_id, policy_generation,
+                policy_digest, rule_digest, normalized_fact_digest,
+                effective_page_count, pool_id, logical_endpoint_group_id,
+                endpoint_revision, estimator_version, routing_source,
+                routing_actor, routing_reason
+            FROM current_routes
+            RETURNING work_unit_id
+        )
+        INSERT INTO {schema}.llm_routing_outbox (
+            work_unit_id, route_digest, payload
+        )
+        SELECT route.work_unit_id, route.route_digest, route.payload
+        FROM routes route
+        JOIN inserted_routes inserted USING (work_unit_id)
+        RETURNING work_unit_id
     """
 
 
@@ -246,18 +318,18 @@ def insert_job_search_documents(schema: str) -> str:
 
 def load_dag(schema: str, dag_id: str) -> str:
     return f"""
-        SELECT serialized_dag FROM {schema}.dag WHERE id = '{dag_id}'::uuid
+        SELECT serialized_dag FROM {schema}.dag WHERE id = {_literal(dag_id)}::uuid
     """
 
 
 def create_queue(schema: str, queue_name: str, options: Dict[str, str]) -> str:
     return f"""
-            SELECT {schema}.create_queue('{queue_name}', '{{"retry_limit":2}}'::json)
+            SELECT {schema}.create_queue({_literal(queue_name)}, '{{"retry_limit":2}}'::json)
            """
 
 
 def delete_queue(schema: str, queue_name: str) -> str:
-    return f"SELECT {schema}.delete_queue({queue_name})"
+    return f"SELECT {schema}.delete_queue({_literal(queue_name)})"
 
 
 def version_table_exists(schema: str) -> str:
@@ -266,7 +338,7 @@ def version_table_exists(schema: str) -> str:
 
 def insert_version(schema: str, version: str) -> str:
     query = (
-        f"INSERT INTO {schema}.version(version) VALUES ('{version}') "
+        f"INSERT INTO {schema}.version(version) VALUES ({_literal(str(version))}) "
         "ON CONFLICT DO NOTHING"
     )
     return query
@@ -287,7 +359,7 @@ def count_dag_states(schema: str):
 
 
 def cancel_jobs(schema: str, name: str, ids: list):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     nonterminal = "', '".join(
         [
             WorkState.CREATED.value,
@@ -306,7 +378,7 @@ def cancel_jobs(schema: str, name: str, ids: list):
           run_owner = NULL,
           run_attempt_id = NULL,
           run_lease_expires_at = NULL
-      WHERE name = '{name}'
+      WHERE name = {_literal(name)}
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND state::text IN ('{nonterminal}')
       RETURNING 1
@@ -327,7 +399,7 @@ def cancel_pending_jobs_for_dag(schema: str, dag_id: str, output: dict):
           run_owner = NULL,
           run_attempt_id = NULL,
           run_lease_expires_at = NULL
-      WHERE dag_id = '{dag_id}'::uuid
+      WHERE dag_id = {_literal(dag_id)}::uuid
         AND state IN ('{WorkState.CREATED.value}', '{WorkState.RETRY.value}')
       RETURNING id
     )
@@ -336,14 +408,14 @@ def cancel_pending_jobs_for_dag(schema: str, dag_id: str, output: dict):
 
 
 def resume_jobs(schema: str, name: str, ids: list):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
 
     return f"""
     WITH results AS (
       UPDATE {schema}.job
       SET completed_on = NULL,
           state = '{WorkState.CREATED.value}'
-      WHERE name = '{name}'
+      WHERE name = {_literal(name)}
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND state = '{WorkState.CANCELLED.value}'
       RETURNING 1
@@ -355,34 +427,58 @@ def resume_jobs(schema: str, name: str, ids: list):
 def mark_as_active_jobs(
     schema: str, name: str, ids: list, include_metadata: bool = False
 ):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
 
     return f"""
     WITH next AS (
         SELECT id
         FROM {schema}.job
-        WHERE name = '{name}' AND id IN (SELECT UNNEST({ids_string}::uuid[]))
-        --FOR UPDATE SKIP LOCKED -- We don't need this because we are using a single worker
+        WHERE name = {_literal(name)} AND id IN (SELECT UNNEST({ids_string}::uuid[]))
     )
     UPDATE {schema}.job j SET
         state = '{WorkState.ACTIVE.value}',
         started_on = now(),
         retry_count = CASE WHEN started_on IS NOT NULL THEN retry_count + 1 ELSE retry_count END
     FROM next
-    WHERE name = '{name}' AND j.id = next.id
+    WHERE name = {_literal(name)} AND j.id = next.id
     RETURNING j.{'*' if include_metadata else 'id,name, priority,state,retry_limit,start_after,expire_in,data,retry_delay,retry_backoff,keep_until'}
     """
 
 
-def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+def dag_queue_predicate(
+    schema: str, alias: str, subscribed_queues: frozenset[str] | None
+) -> str:
+    """Build the shared restricted-consumer predicate for a durable DAG."""
+    validate_queue_scope(subscribed_queues)
+    if subscribed_queues is None:
+        return "TRUE"
+    queues = ",".join(_literal(name) for name in sorted(subscribed_queues))
+    return f"""{alias}.submission_name = ANY(ARRAY[{queues}]::text[])
+        AND EXISTS (SELECT 1 FROM {schema}.job child WHERE child.dag_id = {alias}.id)
+        AND NOT EXISTS (
+            SELECT 1 FROM {schema}.job mismatch
+            WHERE mismatch.dag_id = {alias}.id
+              AND mismatch.name IS DISTINCT FROM {alias}.submission_name
+        )"""
+
+
+def mark_as_active_dags(
+    schema: str,
+    ids: list,
+    include_metadata: bool = False,
+    *,
+    subscribed_queues: frozenset[str] | None,
+) -> str:
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
+    scope = dag_queue_predicate(schema, "dag", subscribed_queues)
 
     return f"""
     WITH next AS (
-        SELECT id
-        FROM {schema}.dag
+        SELECT dag.id
+        FROM {schema}.dag dag
         WHERE id IN (SELECT UNNEST({ids_string}::uuid[]))
           AND state IN ('{WorkState.CREATED.value}', '{WorkState.ACTIVE.value}')
+          AND ({scope})
         FOR UPDATE
     )
     UPDATE {schema}.dag j SET
@@ -398,7 +494,7 @@ def mark_as_active_dags(schema: str, ids: list, include_metadata: bool = False):
 def _complete_jobs_query(
     schema: str, name: str, ids: list, output: dict, state_condition: str
 ):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     return f"""
     WITH results AS (
       UPDATE {schema}.job
@@ -410,7 +506,7 @@ def _complete_jobs_query(
           lease_expires_at     = NULL,
           run_owner            = NULL,
           run_lease_expires_at = NULL  
-      WHERE name = '{name}'
+      WHERE name = {_literal(name)}
         AND id IN (SELECT UNNEST({ids_string}::uuid[]))
         AND {state_condition}
       RETURNING 1
@@ -446,9 +542,9 @@ def complete_jobs_by_id(schema: str, name: str, ids: list, output: dict):
 
 
 def fail_jobs_by_id(schema: str, name: str, ids: list, output: dict):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     where = (
-        f"name = '{name}' "
+        f"name = {_literal(name)} "
         f"AND id IN (SELECT UNNEST({ids_string}::uuid[])) "
         "AND state::text IN ('created', 'retry', 'active')"
     )
@@ -463,9 +559,9 @@ def fail_jobs_by_attempt(
     run_owner: str,
     run_attempt_id: str,
 ):
-    ids_string = "ARRAY[" + ",".join(f"'{str(_id)}'" for _id in ids) + "]"
+    ids_string = "ARRAY[" + ",".join(_literal(str(_id)) for _id in ids) + "]"
     where = (
-        f"name = '{name}' "
+        f"name = {_literal(name)} "
         f"AND id IN (SELECT UNNEST({ids_string}::uuid[])) "
         f"AND state = '{WorkState.ACTIVE.value}' "
         f"AND run_owner = {_literal(run_owner)} "
@@ -495,7 +591,7 @@ def fail_jobs(schema: str, where: str, output: dict):
           END,
         start_after = CASE
           WHEN retry_count = retry_limit THEN start_after
-          WHEN NOT retry_backoff THEN now() + retry_delay * interval '1'
+          WHEN NOT retry_backoff THEN now() + retry_delay * interval '1 second'
           ELSE {schema}.exponential_backoff(retry_delay, retry_count)
           END,
         output = {_jsonb_literal(output)},

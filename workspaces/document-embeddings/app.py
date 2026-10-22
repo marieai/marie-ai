@@ -22,6 +22,7 @@ from marie.components.document_taxonomy.util import (
     group_taxonomies_by_label,
     merge_annotations,
 )
+from marie.constants import __model_path__
 from marie.document import TrOcrProcessor
 from marie.utils.docs import docs_from_image, frames_from_file
 from marie.utils.visualization import normalize_bbox
@@ -88,12 +89,12 @@ def build_processorXXXX(model_type, model_name_or_path) -> BaseDocumentTaxonomy:
 def build_ocr_engine():
     text_layout = None
     box_processor = BoxProcessorUlimDit(
-        models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
+        models_dir=os.path.join(__model_path__, "unilm", "dit", "text_detection"),
         cuda=use_cuda,
     )
 
     icr_processor = TrOcrProcessor(
-        models_dir="/mnt/data/marie-ai/model_zoo/trocr", cuda=use_cuda
+        models_dir=os.path.join(__model_path__, "trocr"), cuda=use_cuda
     )
 
     return box_processor, icr_processor, text_layout

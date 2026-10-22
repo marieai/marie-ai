@@ -1,313 +1,200 @@
-"""Lightweight HTTP client for Marie Gateway (job-centric API)."""
+"""Lightweight HTTP client for the Marie Gateway job API."""
 
-import json
-from typing import Any, Dict, Optional
+from typing import Any
+from urllib.parse import quote
+from uuid import UUID
 
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from ..config import Config
 
 
 class MarieClientError(Exception):
-    """Raised when Marie client operations fail."""
+    """Raised when a gateway operation fails."""
 
-    pass
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _transient_read_error(error: BaseException) -> bool:
+    return isinstance(error, httpx.TransportError) or (
+        isinstance(error, httpx.HTTPStatusError)
+        and error.response.status_code in {429, 500, 502, 503, 504}
+    )
 
 
 class MarieClient:
-    """
-    Lightweight HTTP client for Marie Gateway.
-
-    This client uses the job-centric API where all document processing
-    goes through job submission via /api/v1/invoke endpoint.
-    """
+    """Authenticated asynchronous gateway client."""
 
     def __init__(
         self,
-        base_url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        timeout: Optional[float] = None,
-    ):
-        """
-        Initialize Marie client.
-
-        Args:
-            base_url: Marie gateway URL (defaults to Config.MARIE_BASE_URL)
-            api_key: API key for authentication (defaults to Config.MARIE_API_KEY)
-            timeout: Request timeout in seconds (defaults to Config.REQUEST_TIMEOUT)
-        """
-        self.base_url = (base_url or Config.MARIE_BASE_URL).rstrip("/")
+        base_url: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = None,
+    ) -> None:
+        self.base_url = (base_url or Config.MARIE_BASE_URL).rstrip('/')
         self.api_key = api_key or Config.MARIE_API_KEY
-        self.timeout = timeout or Config.REQUEST_TIMEOUT
-
+        self.timeout = Config.REQUEST_TIMEOUT if timeout is None else timeout
         if not self.api_key:
-            raise MarieClientError("API key is required")
+            raise MarieClientError('API key is required')
+        self._client = httpx.AsyncClient(
+            timeout=self.timeout,
+            headers={'Authorization': f'Bearer {self.api_key}'},
+        )
 
-        self._client = httpx.AsyncClient(timeout=self.timeout)
+    @staticmethod
+    def _decode(response: httpx.Response) -> dict[str, Any]:
+        response.raise_for_status()
+        try:
+            result = response.json()
+        except ValueError as error:
+            raise MarieClientError('Gateway returned invalid JSON') from error
+        if not isinstance(result, dict):
+            raise MarieClientError('Gateway response must be a JSON object')
+        parameters = result.get('parameters')
+        for body in (result, parameters):
+            if isinstance(body, dict) and (
+                str(body.get('status', '')).lower() in {'error', 'failed'}
+                or body.get('error')
+                or body.get('exception')
+            ):
+                message = (
+                    body.get('message')
+                    or body.get('msg')
+                    or body.get('error')
+                    or 'Gateway operation failed'
+                )
+                raise MarieClientError(str(message))
+        return result
 
-    @retry(
-        stop=stop_after_attempt(Config.MAX_RETRIES),
-        wait=wait_exponential(min=Config.RETRY_MIN_WAIT, max=Config.RETRY_MAX_WAIT),
-    )
     async def submit_job(
-        self, queue_name: str, metadata: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        Submit a job via /api/v1/invoke endpoint.
-
-        This is the PRIMARY method for all document processing.
-
-        Args:
-            queue_name: Queue name ('extract', 'gen5_extract', etc.)
-            metadata: Job metadata (uri, ref_id, planner, etc.)
-
-        Returns:
-            Response with job_id
-
-        Raises:
-            MarieClientError: If submission fails
-        """
+        self, queue_name: str, metadata: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Submit once; a transport failure can leave acceptance unknown."""
         payload = {
-            "invoke_action": {
-                "action_type": "command",
-                "api_key": self.api_key,
-                "command": "job",
-                "action": "submit",
-                "name": queue_name,
-                "metadata": metadata,
+            'parameters': {
+                'invoke_action': {
+                    'action_type': 'command',
+                    'api_key': self.api_key,
+                    'command': 'job',
+                    'action': 'submit',
+                    'name': queue_name,
+                    'metadata': metadata,
+                }
             }
         }
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
         try:
             response = await self._client.post(
-                f"{self.base_url}/api/v1/invoke", json=payload, headers=headers
+                f'{self.base_url}/api/v1/invoke', json=payload
             )
-            response.raise_for_status()
-
-            # Response format: {"header": {}, "parameters": {"job_id": "..."}, "data": None}
-            result = response.json()
-            parameters = result.get("parameters", {})
-
-            if "job_id" not in parameters:
-                raise MarieClientError(f"No job_id in response: {json.dumps(result)}")
-
-            return parameters
-
-        except httpx.HTTPStatusError as e:
+            result = self._decode(response)
+        except httpx.HTTPStatusError as error:
             raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
-        except Exception as e:
-            raise MarieClientError(f"Job submission failed: {str(e)}") from e
+                f'HTTP {error.response.status_code}: submission failed; reconcile job state before resubmitting'
+            ) from error
+        except httpx.RequestError as error:
+            raise MarieClientError(
+                'Submission outcome unknown after a request failure; reconcile job state before resubmitting'
+            ) from error
+        parameters = result.get('parameters')
+        if (
+            not isinstance(parameters, dict)
+            or not isinstance(parameters.get('job_id'), str)
+            or not parameters['job_id']
+        ):
+            raise MarieClientError(
+                'No job_id in gateway response; reconcile job state before resubmitting'
+            )
+        return parameters
 
     @retry(
+        retry=retry_if_exception(_transient_read_error),
         stop=stop_after_attempt(Config.MAX_RETRIES),
         wait=wait_exponential(min=Config.RETRY_MIN_WAIT, max=Config.RETRY_MAX_WAIT),
+        reraise=True,
     )
-    async def get_job_status(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get job status from /api/jobs/{job_id}.
+    async def _read(self, path: str, params: dict[str, str] | None) -> dict[str, Any]:
+        response = await self._client.get(f'{self.base_url}{path}', params=params)
+        return self._decode(response)
 
-        Args:
-            job_id: Job ID to query
-
-        Returns:
-            Job status information
-
-        Raises:
-            MarieClientError: If request fails
-        """
+    async def _get(
+        self, path: str, params: dict[str, str] | None = None
+    ) -> dict[str, Any]:
         try:
-            response = await self._client.get(f"{self.base_url}/api/jobs/{job_id}")
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
+            return await self._read(path, params)
+        except httpx.HTTPStatusError as error:
             raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
+                f'HTTP {error.response.status_code}: gateway request failed',
+                status_code=error.response.status_code,
+            ) from error
+        except httpx.RequestError as error:
+            raise MarieClientError(
+                f'Gateway request failed: {type(error).__name__}'
+            ) from error
 
-    @retry(
-        stop=stop_after_attempt(Config.MAX_RETRIES),
-        wait=wait_exponential(min=Config.RETRY_MIN_WAIT, max=Config.RETRY_MAX_WAIT),
-    )
-    async def list_jobs(self, state: Optional[str] = None) -> Dict[str, Any]:
-        """
-        List jobs from /api/jobs or /api/jobs/{state}.
-
-        Args:
-            state: Optional state filter (e.g., 'active', 'completed', 'failed')
-
-        Returns:
-            List of jobs
-
-        Raises:
-            MarieClientError: If request fails
-        """
+    async def get_job_status(self, job_id: str) -> dict[str, Any]:
+        """Track a submitted DAG UUID, or a child job UUID when no DAG exists."""
         try:
-            url = f"{self.base_url}/api/jobs"
-            if state:
-                url = f"{url}/{state}"
-
-            response = await self._client.get(url)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
-
-    async def stop_job(self, job_id: str) -> Dict[str, Any]:
-        """
-        Stop job via /api/jobs/{job_id}/stop.
-
-        Args:
-            job_id: Job ID to stop
-
-        Returns:
-            Response confirmation
-
-        Raises:
-            MarieClientError: If request fails
-        """
+            job_id = str(UUID(job_id))
+        except (ValueError, TypeError, AttributeError) as error:
+            raise MarieClientError('job_id must be a UUID') from error
         try:
-            response = await self._client.get(f"{self.base_url}/api/jobs/{job_id}/stop")
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
+            return await self._get(f'/api/operations/dags/{job_id}')
+        except MarieClientError as error:
+            if error.status_code != 404:
+                raise
+        return await self._get(f'/api/operations/jobs/{job_id}')
+
+    async def list_jobs(self, state: str | None = None) -> dict[str, Any]:
+        """List jobs, optionally filtered by scheduler state."""
+        path = '/api/jobs'
+        if state:
+            path += '/' + quote(state, safe='')
+        return await self._get(path)
+
+    async def stop_job(self, job_id: str) -> dict[str, Any]:
+        """Reject unsupported gateway cancellation."""
+        raise MarieClientError('Job cancellation is not supported by the gateway')
+
+    async def delete_job(self, job_id: str) -> dict[str, Any]:
+        """Reject unsupported gateway deletion."""
+        raise MarieClientError('Job deletion is not supported by the gateway')
+
+    async def get_deployments(self) -> dict[str, Any]:
+        """Get deployment information."""
+        return await self._get('/api/deployments')
+
+    async def get_capacity(self) -> dict[str, Any]:
+        """Get processing capacity information."""
+        return await self._get('/api/capacity')
+
+    async def get_debug_info(
+        self, fabric_group_id: str | None = None
+    ) -> dict[str, Any]:
+        """Get diagnostics for an authorized fabric group."""
+        fabric_group_id = fabric_group_id or Config.MARIE_FABRIC_GROUP_ID
+        if (
+            not fabric_group_id
+            or not fabric_group_id.strip()
+            or len(fabric_group_id) > 128
+        ):
             raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
+                'A fabric_group_id of 1 to 128 characters is required for debug information'
+            )
+        return await self._get('/api/debug', {'fabric_group_id': fabric_group_id})
 
-    async def delete_job(self, job_id: str) -> Dict[str, Any]:
-        """
-        Delete job via DELETE /api/jobs/{job_id}.
-
-        Args:
-            job_id: Job ID to delete
-
-        Returns:
-            Response confirmation
-
-        Raises:
-            MarieClientError: If request fails
-        """
-        try:
-            response = await self._client.delete(f"{self.base_url}/api/jobs/{job_id}")
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
-
-    async def get_deployments(self) -> Dict[str, Any]:
-        """
-        Get deployments from /api/deployments.
-
-        Returns:
-            Deployment information
-
-        Raises:
-            MarieClientError: If request fails
-        """
-        try:
-            response = await self._client.get(f"{self.base_url}/api/deployments")
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
-
-    async def get_capacity(self) -> Dict[str, Any]:
-        """
-        Get capacity from /api/capacity.
-
-        Returns:
-            Capacity and slot information
-
-        Raises:
-            MarieClientError: If request fails
-        """
-        try:
-            response = await self._client.get(f"{self.base_url}/api/capacity")
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
-
-    async def get_debug_info(self) -> Dict[str, Any]:
-        """
-        Get scheduler debug info from /api/debug.
-
-        Returns:
-            Debug information
-
-        Raises:
-            MarieClientError: If request fails
-        """
-        try:
-            response = await self._client.get(f"{self.base_url}/api/debug")
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
-
-    async def health_check(self) -> Dict[str, Any]:
-        """
-        Perform health check via /check endpoint.
-
-        Returns:
-            Health status
-
-        Raises:
-            MarieClientError: If request fails
-        """
-        try:
-            response = await self._client.get(f"{self.base_url}/check?text=health")
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise MarieClientError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            ) from e
-        except httpx.RequestError as e:
-            raise MarieClientError(f"Request failed: {str(e)}") from e
+    async def health_check(self) -> dict[str, Any]:
+        """Check gateway health."""
+        return await self._get('/check', {'text': 'health'})
 
     async def close(self) -> None:
-        """Close the HTTP client."""
+        """Close the HTTP client in its owning event loop."""
         await self._client.aclose()
 
-    async def __aenter__(self):
-        """Async context manager entry."""
+    async def __aenter__(self) -> 'MarieClient':
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit."""
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         await self.close()

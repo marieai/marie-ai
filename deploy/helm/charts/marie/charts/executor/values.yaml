@@ -9,7 +9,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "5.0.4-cuda"
+      tag: "5.1.0-cuda"
       digest: ""
     debugQueryPlanner: "FALSE"
   grpc:
@@ -32,6 +32,9 @@ global:
       existingSecretPasswordKey: password
   llmQueue:
     enabled: false
+    url: ""
+    existingSecret: ""
+    existingSecretUrlKey: url
     poolId: default
     fabricGroupId: default
     gatewayId: default
@@ -58,6 +61,8 @@ gpuMonitor:
   enabled: true
 
 # Define executor pools (can have multiple CPU and GPU pools)
+# A scheduled plugin pool may specify pluginRuntime.serviceName/signingSecret and
+# an explicit configFile packaged in its image. See README for ownership/setup.
 pools:
   # CPU executor pool for general workloads
   - name: cpu-general

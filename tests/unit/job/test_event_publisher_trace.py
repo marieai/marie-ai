@@ -1,12 +1,68 @@
 import asyncio
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 from marie.job.common import JobStatus
-from marie.job.event_publisher import EventPublisher
+from marie.job.event_publisher import EventPublisher, logger
 from marie.job.job_manager import JobManager
+
+
+def test_publisher_construction_before_asyncio_run() -> None:
+    publisher = EventPublisher(max_queue_size=1, worker_count=1)
+    received: list[str] = []
+
+    async def subscriber(_event_type: str, message: str) -> None:
+        received.append(message)
+
+    async def run() -> None:
+        publisher.subscribe("event", subscriber)
+        try:
+            assert publisher._worker_tasks == []
+            await publisher.publish("event", "message")
+            await asyncio.wait_for(publisher.join(), timeout=1)
+            assert len(publisher._worker_tasks) == 1
+            assert received == ["message"]
+        finally:
+            await publisher.stop()
+
+    asyncio.run(run())
+
+
+async def test_unused_publisher_can_stop_without_starting_workers() -> None:
+    publisher = EventPublisher()
+    try:
+        assert publisher._worker_tasks == []
+    finally:
+        await publisher.stop()
+    assert publisher._worker_tasks == []
+
+
+async def test_unsubscribe_preserves_other_subscribers_and_is_repeatable() -> None:
+    publisher = EventPublisher()
+
+    async def subscriber(_event_type: str, _message: dict) -> None:
+        pass
+
+    async def other_subscriber(_event_type: str, _message: dict) -> None:
+        pass
+
+    try:
+        publisher.unsubscribe("missing", subscriber)
+        publisher.subscribe("event", subscriber)
+        publisher.unsubscribe("event", other_subscriber)
+        assert publisher._subscribers["event"] == [subscriber]
+        publisher.subscribe("event", other_subscriber)
+        publisher.unsubscribe("event", subscriber)
+        publisher.unsubscribe("event", subscriber)
+        assert publisher._subscribers["event"] == [other_subscriber]
+        publisher.unsubscribe("event", other_subscriber)
+        publisher.unsubscribe("event", other_subscriber)
+        assert "event" not in publisher._subscribers
+    finally:
+        await publisher.stop()
 
 
 async def test_job_status_event_trace_covers_enqueue_dispatch_and_completion(
@@ -292,3 +348,34 @@ async def test_nonblocking_publish_drops_when_worker_queue_is_full(
     assert len(dropped) == 1
     assert dropped[0]["reason"] == "queue_full"
     assert dropped[0]["queue_capacity"] == 1
+
+
+@pytest.mark.parametrize("message", [{"job_id": "job-1"}, {}, {"job_id": ""}])
+async def test_queue_drop_warning_is_rate_limited_and_independent_of_tracing(
+    caplog, monkeypatch, message: dict
+) -> None:
+    now = [10.0]
+    monkeypatch.setattr("marie.job.event_publisher.time.perf_counter", lambda: now[0])
+    monkeypatch.setattr(
+        "marie.job.event_publisher.scheduler_trace", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(logger.logger, "propagate", True)
+    publisher = EventPublisher(max_queue_size=1, worker_count=1, warn_qsize_threshold=0)
+    try:
+        with caplog.at_level(logging.WARNING, logger=logger.logger.name):
+            await publisher.publish("event", message)
+            for _ in range(10):
+                await publisher.publish("event", message)
+            warnings = [r for r in caplog.records if "queue full" in r.getMessage()]
+            assert len(warnings) == 1
+            assert "event" in warnings[0].getMessage()
+            assert "dropped_total=1" in warnings[0].getMessage()
+            assert "worker=0" in warnings[0].getMessage()
+
+            now[0] += 5.0
+            await publisher.publish("event", message)
+            warnings = [r for r in caplog.records if "queue full" in r.getMessage()]
+            assert len(warnings) == 2
+            assert "dropped_total=11" in warnings[1].getMessage()
+    finally:
+        await publisher.stop()

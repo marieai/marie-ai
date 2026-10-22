@@ -55,10 +55,8 @@ spec:
               value: {{ .Values.config.defaultDatabase | quote }}
             - name: CLICKHOUSE_USER
               value: {{ .Values.config.defaultUser | quote }}
-            {{- if .Values.config.defaultPassword }}
             - name: CLICKHOUSE_PASSWORD
               value: {{ .Values.config.defaultPassword | quote }}
-            {{- end }}
             - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
               value: {{ .Values.config.accessManagement | ternary "1" "0" | quote }}
           startupProbe:
@@ -97,6 +95,10 @@ spec:
             - name: config
               mountPath: /etc/clickhouse-server/config.d/custom.xml
               subPath: custom.xml
+              readOnly: true
+            - name: config
+              mountPath: /etc/clickhouse-server/config.d/telemetry-dictionary.xml
+              subPath: telemetry-dictionary.xml
               readOnly: true
             - name: config
               mountPath: /etc/clickhouse-server/users.d/custom.xml

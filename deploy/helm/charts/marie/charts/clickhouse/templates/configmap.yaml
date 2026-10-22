@@ -45,6 +45,9 @@ data:
         </prometheus>
     </clickhouse>
 
+  telemetry-dictionary.xml: |
+{{ .Files.Get "files/telemetry-dictionary.xml" | indent 4 }}
+
   users.xml: |
     <?xml version="1.0"?>
     <clickhouse>

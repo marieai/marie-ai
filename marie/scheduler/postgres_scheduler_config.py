@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any
 
 from marie.excepts import BadConfigSource
@@ -65,7 +66,7 @@ _ALLOWED_DAG_MANAGER_KEYS = frozenset(
 class PostgreSQLSchedulerConfig:
     """Validated runtime settings for the PostgreSQL scheduler."""
 
-    queue_names: frozenset[str]
+    queue_names: frozenset[str] | None
     job_event_worker_count: int
     job_event_queue_size: int
     dispatch_confirmation_max_in_flight: int
@@ -104,17 +105,17 @@ class PostgreSQLSchedulerConfig:
                 'Unknown scheduler configuration keys: ' + ', '.join(unknown_keys)
             )
 
-        if 'queue_names' not in config:
-            raise BadConfigSource('Missing required config: queue_names')
-
-        queue_names = config.get('queue_names')
-        if not isinstance(queue_names, (list, tuple, set, frozenset)):
-            raise BadConfigSource('queue_names must be a non-empty collection')
-        if not all(isinstance(name, str) and name for name in queue_names):
-            raise BadConfigSource('queue_names must contain non-empty strings')
-        normalized_queues = frozenset(queue_names)
-        if not normalized_queues:
-            raise BadConfigSource('Queue names are required for JobScheduler')
+        normalized_queues = None
+        if 'queue_names' in config:
+            queue_names = config['queue_names']
+            if (
+                not isinstance(queue_names, (list, tuple, set, frozenset))
+                or not queue_names
+            ):
+                raise BadConfigSource('queue_names must be a non-empty collection')
+            if not all(isinstance(name, str) and name for name in queue_names):
+                raise BadConfigSource('queue_names must contain non-empty strings')
+            normalized_queues = frozenset(queue_names)
 
         dag_config = config.get('dag_manager', {})
         if not isinstance(dag_config, Mapping):
@@ -210,11 +211,37 @@ class PostgreSQLSchedulerConfig:
             raise BadConfigSource(
                 'dag_manager.max_concurrent_dags must be greater than zero'
             )
+        if self.dag_resolution_retry_limit <= 0:
+            raise BadConfigSource(
+                'dag_manager.dag_resolution_retry_limit must be greater than zero'
+            )
+        if (
+            not isfinite(self.dag_resolution_retry_delay)
+            or not isfinite(self.dag_resolution_retry_max_delay)
+            or self.dag_resolution_retry_delay < 0
+            or self.dag_resolution_retry_max_delay < self.dag_resolution_retry_delay
+        ):
+            raise BadConfigSource(
+                'dag_manager.dag_resolution_retry_delay and dag_resolution_retry_max_delay '
+                'must be finite and non-negative with max_delay >= delay'
+            )
+        if self.maintenance_interval <= 0:
+            raise BadConfigSource('maintenance_interval must be greater than zero')
+        if self.dag_cache_size <= 0:
+            raise BadConfigSource(
+                'dag_manager.dag_cache_size must be greater than zero'
+            )
+        if self.sla_warning_top_n < 0:
+            raise BadConfigSource('sla_warning_top_n must be non-negative')
         if self.priority_refresh_interval <= 0:
             raise BadConfigSource('priority_refresh_interval must be greater than zero')
         if self.priority_refresh_interval_seconds <= 0:
             raise BadConfigSource(
                 'priority_refresh_interval_seconds must be greater than zero'
+            )
+        if self.priority_refresh_hydrate_limit <= 0:
+            raise BadConfigSource(
+                'priority_refresh_hydrate_limit must be greater than zero'
             )
         if self.frontier_batch_size <= 0:
             raise BadConfigSource(

@@ -2,72 +2,54 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from marie.registry.model_catalog import load_model_catalog
+
 if TYPE_CHECKING:
     from marie.engine.base import EngineLM
 
 # Supported LLM providers
 # Note: Claude is accessed via 'openai' provider with LiteLLM base_url
 SUPPORTED_PROVIDERS = ["vllm", "openai"]
-# FIXME : MOVE THIS TOO A CONFIG
-# TODO add  Gemma 3 (Based on v4.49.0)
-# https://github.com/huggingface/transformers/releases/tag/v4.49.0-Gemma-3
-MODEL_NAME_MAP = {
-    "qwen2_5_vl_3b": "Qwen/Qwen2.5-VL-3B-Instruct",
-    "qwen2_5_vl_7b": "Qwen/Qwen2.5-VL-7B-Instruct",
-    "qwen2_5_vl_7b_awq": "Qwen/Qwen2.5-VL-7B-Instruct-AWQ",
-    "qwen3_vl_4b": "Qwen/Qwen3-VL-4B-Instruct",
-    "qwen3_vl_4b_merged_lora": "qwen3_vl_4b_merged_lora",
-    "qwen2_5_7b": "Qwen/Qwen2.5-7B-Instruct",
-    "qwen2_5_3b": "Qwen/Qwen2.5-3B-Instruct",
-    "qwen2_5_14b": "Qwen/Qwen2.5-14B-Instruct",
-    "meta_llama_11b": "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "phi3_5_vl": "microsoft/Phi-3.5-vision-instruct",
-    "pixtral_12b": "mistralai/Pixtral-12B-2409",
-    "mistral_7b": "mistralai/Mistral-7B-Instruct-v0.2",
-    "opt_125m": "facebook/opt-125m",
-    "phi4": "microsoft/phi-4",
-    "llava_mistral_7b": "llava-hf/llava-v1.6-mistral-7b-hf",
-    "deepseek_r1_qwen_14b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-}
-
-# Create a reverse lookup dictionary
-REVERSE_MODEL_NAME_MAP = {v: k for k, v in MODEL_NAME_MAP.items()}
-
-# the multimodal models list
-__MULTIMODAL_MODELS__ = [
-    MODEL_NAME_MAP["qwen2_5_vl_3b"],
-    MODEL_NAME_MAP["qwen2_5_vl_7b"],
-    MODEL_NAME_MAP["qwen2_5_vl_7b_awq"],
-    MODEL_NAME_MAP["qwen3_vl_4b"],
-    MODEL_NAME_MAP["qwen3_vl_4b_merged_lora"],
-    MODEL_NAME_MAP["meta_llama_11b"],
-    MODEL_NAME_MAP["phi3_5_vl"],
-    MODEL_NAME_MAP["pixtral_12b"],
-    MODEL_NAME_MAP["llava_mistral_7b"],
+__all__ = [
+    "EngineLM",
+    "SUPPORTED_PROVIDERS",
+    "MODEL_NAME_MAP",
+    "REVERSE_MODEL_NAME_MAP",
+    "__MULTIMODAL_MODELS__",
+    "check_if_multimodal",
+    "validate_multimodal_engine",
+    "get_engine",
 ]
 
 
-def __getattr__(name: str) -> type[EngineLM]:
+def __getattr__(name: str) -> type[EngineLM] | dict[str, str] | list[str]:
     if name == "EngineLM":
         from marie.engine.base import EngineLM
 
         return EngineLM
+    if name in {"MODEL_NAME_MAP", "REVERSE_MODEL_NAME_MAP", "__MULTIMODAL_MODELS__"}:
+        catalog = load_model_catalog()
+        if name == "MODEL_NAME_MAP":
+            return catalog.name_map
+        if name == "REVERSE_MODEL_NAME_MAP":
+            return catalog.reverse_name_map
+        return catalog.multimodal_models
     raise AttributeError(name)
 
 
-def check_if_multimodal(engine_name: str):
-    mapped_name = MODEL_NAME_MAP.get(engine_name)
-    return engine_name in __MULTIMODAL_MODELS__ or mapped_name in __MULTIMODAL_MODELS__
+def check_if_multimodal(engine_name: str) -> bool:
+    return load_model_catalog().is_multimodal(engine_name)
 
 
-def validate_multimodal_engine(engine):
+def validate_multimodal_engine(engine: EngineLM) -> None:
     if not check_if_multimodal(engine.model_string):
         raise ValueError(
-            f"The engine provided is not multimodal. Please provide a multimodal engine, one of the following: {__MULTIMODAL_MODELS__}"
+            f"The engine '{engine.model_string}' is not multimodal. "
+            "Configure a model with image support in the external model catalog."
         )
 
 
-def get_engine(engine_name: str, provider: str = 'vllm', **kwargs) -> EngineLM:
+def get_engine(engine_name: str, provider: str = "vllm", **kwargs) -> EngineLM:
     """
     Get the engine based on the engine name and provider.
 
@@ -108,17 +90,7 @@ def get_engine(engine_name: str, provider: str = 'vllm', **kwargs) -> EngineLM:
     if provider == "vllm":
         from .vllm_engine import VLLMEngine
 
-        return VLLMEngine(
-            system_prompt="You are a helpful assistant for processing documents.",
-            model_name=engine_name,
-            is_multimodal=check_if_multimodal(engine_name),
-            cache=False,
-            processor_kwargs={  # All parameters will be passed dynamically to the processor
-                'min_pixels': 1 * 28 * 28,
-                'max_pixels': 1280 * 28 * 28,  # 800, 1000, 1280
-            },
-            **kwargs,
-        )
+        return VLLMEngine(model_name=engine_name, **kwargs)
     elif provider == "openai":
         from .openai_engine import OpenAIEngine
 

@@ -2,12 +2,9 @@ import queue
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Callable, Optional
 
 from marie.logging_core.logger import MarieLogger
-
-SENTINEL = object()
 
 
 class JobCallbackExecutor:
@@ -17,7 +14,7 @@ class JobCallbackExecutor:
         callback_timeout: float = 5.0,
         max_workers: int = 8,
         warn_qsize_threshold: int = 256,
-    ):
+    ) -> None:
         self.logger = MarieLogger(self.__class__.__name__)
         # Bounded queue for backpressure (default to 1024 if None/0)
         qsize = max_queue_size if (max_queue_size and max_queue_size > 0) else 1024
@@ -28,6 +25,8 @@ class JobCallbackExecutor:
         )
 
         self._shutdown_event = threading.Event()
+        self._submission_lock = threading.Lock()
+        self._active_submitters = 0
         self._callback_timeout = callback_timeout
         self._warn_qsize_threshold = warn_qsize_threshold
 
@@ -38,10 +37,14 @@ class JobCallbackExecutor:
 
     def submit(
         self, fn: Callable, *args, block: bool = False, timeout: Optional[float] = None
-    ):
-        if self._shutdown_event.is_set():
-            self.logger.warning("Callback executor has been shut down. Ignoring task.")
-            return
+    ) -> None:
+        with self._submission_lock:
+            if self._shutdown_event.is_set():
+                self.logger.warning(
+                    "Callback executor has been shut down. Ignoring task."
+                )
+                return
+            self._active_submitters += 1
         try:
             if block:
                 self._queue.put((fn, args), timeout=timeout)
@@ -56,13 +59,14 @@ class JobCallbackExecutor:
                 "Callback executor queue is full (cap=%d). Task dropped.",
                 self._queue.maxsize,
             )
+        finally:
+            with self._submission_lock:
+                self._active_submitters -= 1
 
-    def shutdown(self, wait: bool = True, timeout: Optional[float] = None):
-        self._shutdown_event.set()
-        try:
-            self._queue.put_nowait(SENTINEL)
-        except queue.Full:
-            pass
+    def shutdown(self, wait: bool = True, timeout: Optional[float] = None) -> None:
+        """Drain accepted callbacks; timeout bounds the dispatcher join only."""
+        with self._submission_lock:
+            self._shutdown_event.set()
 
         if wait:
             self._thread.join(timeout=timeout)
@@ -70,17 +74,24 @@ class JobCallbackExecutor:
                 self.logger.warning(
                     "Callback dispatcher did not terminate within timeout."
                 )
+                return
+            self._executor.shutdown(wait=True)
 
-        self._executor.shutdown(wait=wait)
-
-    def _run(self):
+    def _run(self) -> None:
         self.logger.info("JobCallbackExecutor dispatcher started.")
         while True:
-            item = self._queue.get()
-            if item is SENTINEL:
-                self._queue.task_done()
-                self.logger.info("JobCallbackExecutor dispatcher stopping.")
-                break
+            try:
+                item = self._queue.get(timeout=0.1)
+            except queue.Empty:
+                with self._submission_lock:
+                    # An admitted submitter may still be about to enqueue its callback.
+                    if (
+                        self._shutdown_event.is_set()
+                        and self._active_submitters == 0
+                        and self._queue.empty()
+                    ):
+                        break
+                continue
 
             fn, args = item
             start_time = time.monotonic()
@@ -110,6 +121,7 @@ class JobCallbackExecutor:
             finally:
                 self._queue.task_done()
 
+        self._executor.shutdown(wait=False)
         self.logger.info("JobCallbackExecutor dispatcher terminated.")
 
 

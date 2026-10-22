@@ -84,20 +84,47 @@ async def test_desired_state_executor_handles_dispatch_sized_fanout() -> None:
     store = TrackingStore()
     executor = DesiredStateExecutor(store, max_workers=16, max_pending=128)
     try:
-        results = await asyncio.gather(
-            *(
-                executor.schedule_new_epoch(
-                    f"node-{index}", "executor", {"job_id": f"job-{index}"}
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    executor.schedule_new_epoch(
+                        f"node-{index}", "executor", {"job_id": f"job-{index}"}
+                    )
+                    for index in range(257)
                 )
-                for index in range(70)
-            )
+            ),
+            timeout=5,
         )
     finally:
         executor.shutdown()
 
-    assert len(results) == 70
-    assert store.calls == 70
+    assert len(results) == 257
+    assert store.calls == 257
     assert store.max_active == 16
+
+
+async def test_submission_failure_returns_capacity(monkeypatch) -> None:
+    store = TrackingStore(delay=0)
+    executor = DesiredStateExecutor(store, max_workers=1, max_pending=1)
+    loop = asyncio.get_running_loop()
+
+    def fail_submission(*args, **kwargs) -> None:
+        raise RuntimeError("submission failed")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(loop, "run_in_executor", fail_submission)
+            with pytest.raises(RuntimeError, match="submission failed"):
+                await executor.schedule_new_epoch("node-1", "executor", {})
+
+        result = await asyncio.wait_for(
+            executor.schedule_new_epoch("node-2", "executor", {"job_id": "job-2"}),
+            timeout=1,
+        )
+        assert result.params == {"job_id": "job-2"}
+        assert store.calls == 1
+    finally:
+        executor.shutdown()
 
 
 @pytest.mark.asyncio

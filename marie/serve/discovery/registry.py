@@ -3,6 +3,9 @@ import time
 import traceback
 from typing import Union
 
+import grpc
+from etcd3.exceptions import Etcd3Exception
+
 from marie.logging_core.predefined import default_logger as logger
 from marie.serve.discovery.address import JsonAddress, PlainAddress
 from marie.serve.discovery.base import ConnectionState, ServiceRegistry
@@ -30,6 +33,8 @@ _KNOWN_CONNECTION_ERRORS = (
     "channel closed",  # grpc integrated_call phrasing during our own reconnect
     "closed channel",  # grpc segregated_call phrasing of the same condition
 )
+_LEASE_REVOKE_DEADLINE_SECONDS = 5.0
+_LEASE_REVOKE_CALL_TIMEOUT_SECONDS = 1.0
 
 
 class EtcdConnectionError(Exception):
@@ -429,17 +434,19 @@ class EtcdServiceRegistry(ServiceRegistry):
         re-puts every service key with the original addr_cls/metadata.
         """
         with self._lock:
+            if self._shutdown_event.is_set():
+                return
             self._leases.pop(svc_addr, None)
             reg_info = self._registration_info.get(svc_addr, {})
-        fallback_ttl = service_ttl or self._default_service_ttl
-        self.register(
-            list(registered),
-            svc_addr,
-            fallback_ttl,
-            addr_cls=reg_info.get('addr_cls'),
-            metadata=reg_info.get('metadata'),
-            force=True,
-        )
+            fallback_ttl = service_ttl or self._default_service_ttl
+            self.register(
+                list(registered),
+                svc_addr,
+                fallback_ttl,
+                addr_cls=reg_info.get('addr_cls'),
+                metadata=reg_info.get('metadata'),
+                force=True,
+            )
 
     def unregister(self, service_names, service_addr, addr_cls=None):
         """Unregister services with the same address."""
@@ -571,7 +578,10 @@ class EtcdServiceRegistry(ServiceRegistry):
         self._heartbeat_thread.start()
 
     def shutdown(self) -> None:
-        self._shutdown_event.set()
+        with self._lock:
+            if self._shutdown_event.is_set():
+                return
+            self._shutdown_event.set()
 
         for state, handler in (
             (ConnectionState.CONNECTED, self._on_etcd_connected),
@@ -586,6 +596,36 @@ class EtcdServiceRegistry(ServiceRegistry):
             self._heartbeat_thread.join(timeout=self._heartbeat_time + 1)
             if self._heartbeat_thread.is_alive():
                 logger.warning("Heartbeat thread did not stop gracefully")
+
+        with self._lock:
+            leases = tuple(self._leases.items())
+            self._leases.clear()
+            self._services.clear()
+            self._registration_info.clear()
+
+        revoke_deadline = time.monotonic() + _LEASE_REVOKE_DEADLINE_SECONDS
+        revoked = set()
+        for service_addr, lease in leases:
+            if lease.id in revoked:
+                continue
+            remaining = revoke_deadline - time.monotonic()
+            if remaining <= 0:
+                logger.warning(
+                    "Lease revocation deadline reached; remaining registrations "
+                    "will expire by TTL"
+                )
+                break
+            revoked.add(lease.id)
+            try:
+                run_with_timeout(
+                    lease.revoke,
+                    timeout=min(_LEASE_REVOKE_CALL_TIMEOUT_SECONDS, remaining),
+                    operation_name=f"lease_revoke_{lease.id}",
+                )
+            except OperationTimeoutError as exc:
+                logger.warning(f"Failed to revoke lease for {service_addr}: {exc}")
+            except (Etcd3Exception, grpc.RpcError, ConnectionError, ValueError) as exc:
+                logger.warning(f"Failed to revoke lease for {service_addr}: {exc}")
 
         if self._owns_etcd_client:
             close_etcd_client(self._etcd_client)

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -146,11 +147,14 @@ func signEnvelope(envelope map[string]any, secret []byte) string {
 }
 
 func mustCanonicalEnvelope(envelope map[string]any) []byte {
-	payload, err := json.Marshal(canonicalValue(envelope, true))
-	if err != nil {
+	var payload bytes.Buffer
+	encoder := json.NewEncoder(&payload)
+	// Match JSON.stringify and the Python signer for URLs and document text.
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(canonicalValue(envelope, true)); err != nil {
 		panic(err)
 	}
-	return payload
+	return bytes.TrimSuffix(payload.Bytes(), []byte("\n"))
 }
 
 func canonicalValue(value any, omitSignature bool) any {

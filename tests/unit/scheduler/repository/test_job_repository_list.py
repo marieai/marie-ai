@@ -140,6 +140,7 @@ async def test_list_jobs_rejects_nonpositive_fetch_size() -> None:
 @pytest.mark.asyncio
 async def test_scheduler_list_jobs_delegates_to_repository() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.repository = SimpleNamespace(
         list_jobs=AsyncMock(
             return_value=[SimpleNamespace(id="job-1"), SimpleNamespace(id="job-2")]
@@ -157,6 +158,7 @@ async def test_scheduler_list_jobs_delegates_to_repository() -> None:
 @pytest.mark.asyncio
 async def test_scheduler_list_jobs_rejects_invalid_state() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.repository = SimpleNamespace(list_jobs=AsyncMock())
 
     with pytest.raises(ValueError, match="Invalid state.*unknown"):

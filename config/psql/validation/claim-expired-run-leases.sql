@@ -9,7 +9,7 @@ EXPLAIN (
     SUMMARY
 )
 SELECT *
-FROM marie_scheduler.claim_expired_run_leases(1000);
+FROM marie_scheduler.claim_expired_run_leases(NULL::text[], 1000);
 
 ROLLBACK;
 

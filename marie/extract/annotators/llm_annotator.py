@@ -1,10 +1,11 @@
 import glob
+import importlib
 import json
 import os
 import os.path
 import shutil
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import yaml
 from marie.engine import EngineLM
@@ -51,13 +52,6 @@ def sanitize_path(path: str) -> Optional[str]:
     return os.path.basename(path) if path else None
 
 
-def _non_empty_str(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    value = value.strip()
-    return value or None
-
-
 def _requested_pages_tuple(value: Any) -> tuple[int, ...] | None:
     if value is None:
         return None
@@ -70,6 +64,8 @@ def _requested_pages_tuple(value: Any) -> tuple[int, ...] | None:
 
 class LLMAnnotator(DocumentAnnotator):
     """LLM Annotator with optional multi-pass refinement."""
+
+    requires_frames = False
 
     def __init__(
         self,
@@ -119,6 +115,7 @@ class LLMAnnotator(DocumentAnnotator):
         self.expect_output = self.model_config.get("expect_output", None)
         self.temperature = self.model_config.get("temperature", 0.0)
         self.extra_body = self.model_config.get("extra_body", None)
+        self.repetition_recovery = self.model_config.get("repetition_recovery")
         self.min_pixels = self.model_config.get("min_pixels", 512 * 28 * 28)
         self.max_pixels = self.model_config.get("max_pixels", 2048 * 28 * 28)
         self.mini_batch_size = self.model_config.get("mini_batch_size", 16)
@@ -138,6 +135,10 @@ class LLMAnnotator(DocumentAnnotator):
             self.completion_params["max_tokens"] = self.max_tokens
         if self.extra_body is not None:
             self.completion_params["extra_body"] = self.extra_body
+        if self.repetition_recovery is not None:
+            self.completion_params["repetition_recovery"] = dict(
+                self.repetition_recovery
+            )
 
         self.mm_processor_kwargs = {
             "min_pixels": self.min_pixels,
@@ -211,9 +212,6 @@ class LLMAnnotator(DocumentAnnotator):
         self.job_id = kwargs.get("job_id")
         self.dag_id = kwargs.get("dag_id")
         self.node_task_id = kwargs.get("node_task_id")
-        self.llm_pool_id = _non_empty_str(kwargs.get("pool_id")) or _non_empty_str(
-            self.model_config.get("pool_id")
-        )
         self.ref_id = kwargs.get("ref_id")
         self.ref_type = kwargs.get("ref_type")
         self.requested_pages = kwargs.get("requested_pages")
@@ -244,6 +242,22 @@ class LLMAnnotator(DocumentAnnotator):
         self.output_transform: Optional[str] = annotator_conf.get(
             "output_transform", None
         )
+        self.response_handler_path: Optional[str] = annotator_conf.get(
+            "response_handler"
+        )
+        self.response_handler: Optional[Callable[..., Dict[str, Any]]] = None
+        if self.response_handler_path:
+            if self.output_transform:
+                raise ValueError(
+                    "response_handler cannot be combined with output_transform"
+                )
+            if self.refine_passes > 0:
+                raise ValueError("response_handler cannot be combined with refinement")
+            if self.expect_output != "json":
+                raise ValueError("response_handler requires JSON output")
+            self.response_handler = self._load_response_handler(
+                self.response_handler_path
+            )
 
         # Load refinement prompt if configured
         self.refine_prompt_template: Optional[PromptTemplate] = None
@@ -285,6 +299,17 @@ class LLMAnnotator(DocumentAnnotator):
             )
         else:
             self.context_manager = None
+
+    @staticmethod
+    def _load_response_handler(path: str) -> Callable[..., Dict[str, Any]]:
+        try:
+            module_name, function_name = path.rsplit(".", 1)
+            handler = getattr(importlib.import_module(module_name), function_name)
+        except (ImportError, AttributeError, ValueError) as exc:
+            raise ValueError(f"Could not resolve response_handler '{path}'") from exc
+        if not callable(handler):
+            raise ValueError(f"response_handler '{path}' is not callable")
+        return handler
 
     def _resolve_prompt_path(
         self, safe_prompt_path: Optional[str], prompt_dir: Optional[str]
@@ -399,6 +424,13 @@ class LLMAnnotator(DocumentAnnotator):
                 pass
             raise
 
+    def _prepare_response_handler_run(self) -> None:
+        if os.listdir(self.output_dir):
+            raise ValueError(
+                "response_handler requires a fresh output directory; "
+                f"existing artifacts found in '{self.output_dir}'"
+            )
+
     def _maybe_purge_output(self) -> None:
         """Selectively purge output if this annotator is in the purge list,
         or globally purge if MARIE_PURGE_OUTPUT is set.
@@ -482,16 +514,18 @@ class LLMAnnotator(DocumentAnnotator):
             meta["dag_id"] = self.dag_id
         if self.node_task_id:
             meta["node_task_id"] = self.node_task_id
-        if self.llm_pool_id:
-            meta["pool_id"] = self.llm_pool_id
         return meta
 
     def _build_model_request_context(self) -> RequestContext | None:
         """Build source provenance for model requests from annotator runtime fields."""
         requested_pages = _requested_pages_tuple(self.requested_pages)
-        if not self.ref_id or not self.ref_type:
+        has_route_identity = bool(self.dag_id and self.node_task_id)
+        has_source_identity = bool(self.ref_id and self.ref_type)
+        if not has_route_identity and not has_source_identity:
             return None
         return RequestContext(
+            job_id=self.dag_id,
+            work_unit_id=self.node_task_id,
             ref_id=self.ref_id,
             ref_type=self.ref_type,
             requested_pages=requested_pages,
@@ -974,6 +1008,7 @@ class LLMAnnotator(DocumentAnnotator):
         Upstream task data is available via self.run_context if provided.
         Example: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         """
+        del frames
         self.logger.info(f"Annotating document with {self.name}...")
 
         with start_as_current_span(
@@ -981,9 +1016,14 @@ class LLMAnnotator(DocumentAnnotator):
         ) as span:
             self._set_annotator_span_attrs(span)
 
-            self._maybe_purge_output()
+            if self.response_handler is not None:
+                self._prepare_response_handler_run()
+            else:
+                self._maybe_purge_output()
 
-            if self._has_completed_results(self.output_dir):
+            if self.response_handler is None and self._has_completed_results(
+                self.output_dir
+            ):
                 self.logger.info(
                     f"Output directory '{self.output_dir}' contains completed results. "
                     "Skipping annotation..."
@@ -1008,6 +1048,9 @@ class LLMAnnotator(DocumentAnnotator):
                     metadata=self._build_span_metadata(),
                     request_context=self._build_model_request_context(),
                     system_prompt=self.system_prompt_text,
+                    response_handler=self.response_handler,
+                    run_context=self.run_context,
+                    annotator_conf=self.annotator_conf,
                 )
 
             if self.output_transform:
@@ -1023,6 +1066,7 @@ class LLMAnnotator(DocumentAnnotator):
         Upstream task data is available via self.run_context if provided.
         Example: self.run_context.get("ANNOTATOR_RESULTS", from_task="tables")
         """
+        del frames
         self.logger.info(f"Annotating document with {self.name}...")
 
         with start_as_current_span(
@@ -1030,12 +1074,17 @@ class LLMAnnotator(DocumentAnnotator):
         ) as span:
             self._set_annotator_span_attrs(span)
 
+            if self.response_handler is not None:
+                self._prepare_response_handler_run()
+            else:
+                self._maybe_purge_output()
+
             if self.context_manager:
                 self._write_context_debug(document, self.context_manager)
 
-            self._maybe_purge_output()
-
-            if self._has_completed_results(self.output_dir):
+            if self.response_handler is None and self._has_completed_results(
+                self.output_dir
+            ):
                 self.logger.info(
                     f"Output directory '{self.output_dir}' contains completed results. "
                     "Skipping annotation..."
@@ -1060,6 +1109,9 @@ class LLMAnnotator(DocumentAnnotator):
                     metadata=self._build_span_metadata(),
                     request_context=self._build_model_request_context(),
                     system_prompt=self.system_prompt_text,
+                    response_handler=self.response_handler,
+                    run_context=self.run_context,
+                    annotator_conf=self.annotator_conf,
                 )
 
             if self.output_transform:

@@ -108,8 +108,7 @@ def test_monitoring_queries_expose_dag_submission_projection() -> None:
 def test_submission_lifecycle_query_uses_indexable_scope_arrays() -> None:
     project_root = Path(__file__).parents[3]
     lifecycle_sql = (
-        project_root
-        / "config/psql/schema/monitoring/submission_lifecycle_analysis.sql"
+        project_root / "config/psql/schema/monitoring/submission_lifecycle_analysis.sql"
     ).read_text()
     normalized = " ".join(lifecycle_sql.lower().split())
 
@@ -128,8 +127,7 @@ def test_submission_lifecycle_query_uses_indexable_scope_arrays() -> None:
 def test_submission_lifecycle_lookup_indexes_are_managed() -> None:
     project_root = Path(__file__).parents[3]
     index_sql = (
-        project_root
-        / "config/psql/schema/083_submission_lifecycle_lookup_indexes.sql"
+        project_root / "config/psql/schema/083_submission_lifecycle_lookup_indexes.sql"
     ).read_text()
     normalized = " ".join(index_sql.lower().split())
 
@@ -146,4 +144,4 @@ def test_submission_lifecycle_lookup_indexes_are_managed() -> None:
     repository_source = (
         project_root / "marie/scheduler/repository/async_job_repository.py"
     ).read_text()
-    assert "SCHEDULER_SCHEMA_VERSION = 87" in repository_source
+    assert "SCHEDULER_SCHEMA_VERSION = 96" in repository_source

@@ -29,12 +29,10 @@ Both tools:
 2. Submit job with metadata
 3. Return job_id for tracking
 
-### 4. Complete Job Lifecycle Support
+### 4. Job Submission and Inspection
 - `submit_job` - Submit processing jobs
 - `get_job_status` - Check job progress
 - `list_jobs` - List jobs by state
-- `stop_job` - Cancel running jobs
-- `delete_job` - Remove jobs
 - `get_job_results` - Download results from S3
 
 ### 5. System Monitoring
@@ -53,7 +51,7 @@ marie-mcp-server/
 │   ├── config.py                    # Configuration management
 │   ├── clients/
 │   │   ├── __init__.py
-│   │   └── marie.client.py          # HTTP client (no marie dependency)
+│   │   └── marie_client.py          # HTTP client (no marie dependency)
 │   ├── tools/
 │   │   ├── __init__.py
 │   │   ├── document_processing.py   # OCR & data extraction
@@ -118,6 +116,7 @@ MARIE_REQUEST_TIMEOUT=300
 MARIE_MAX_FILE_SIZE_MB=50
 MARIE_MAX_RETRIES=3
 MARIE_OUTPUT_DIR=~/.marie-mcp/outputs
+MARIE_FABRIC_GROUP_ID=your-fabric-group
 ```
 
 ## Installation
@@ -196,19 +195,9 @@ marie_server = MCPServerStdio(command="uvx", args=["marie-mcp"], env={...})
 - **Parameters**: state (optional)
 - **Returns**: Array of job objects
 
-#### stop_job
-- **Purpose**: Cancel running job
-- **Parameters**: job_id
-- **Returns**: Confirmation
-
-#### delete_job
-- **Purpose**: Delete job from system
-- **Parameters**: job_id
-- **Returns**: Confirmation
-
 #### get_job_results
 - **Purpose**: Download job results from S3
-- **Parameters**: ref_id, ref_type, output_path
+- **Parameters**: ref_id, ref_type, output_path (within MARIE_OUTPUT_DIR)
 - **Returns**: Downloaded file path
 
 ### System Monitoring Tools
@@ -222,7 +211,8 @@ marie_server = MCPServerStdio(command="uvx", args=["marie-mcp"], env={...})
 - **Returns**: Slot capacity info
 
 #### get_debug_info
-- **Purpose**: Get scheduler diagnostics
+- **Parameters**: fabric_group_id (optional; defaults to MARIE_FABRIC_GROUP_ID)
+- **Purpose**: Get authorized fabric runtime diagnostics
 - **Returns**: Debug information
 
 #### health_check
@@ -234,19 +224,19 @@ marie_server = MCPServerStdio(command="uvx", args=["marie-mcp"], env={...})
 1. **Submit Job**:
    ```
    extract_document_ocr(file_path="invoice.pdf", ref_id="inv_001", ref_type="invoice")
-   → Returns: {"job_id": "job_123"}
+   → Returns: {"job_id": "019ce927-9621-7000-8000-000000000001"}
    ```
 
 2. **Check Status**:
    ```
-   get_job_status(job_id="job_123")
-   → Returns: {"state": "running", "progress": 50}
+   get_job_status(job_id="019ce927-9621-7000-8000-000000000001")
+   → Returns: {"status": "OK", "result": {"state": "running", ...}}
    ```
 
 3. **List Jobs**:
    ```
    list_jobs(state="completed")
-   → Returns: [{"job_id": "job_123", "state": "completed", ...}]
+   → Returns: [{"job_id": "019ce927-9621-7000-8000-000000000001", "state": "completed", ...}]
    ```
 
 4. **Get Results**:
@@ -290,3 +280,26 @@ MIT License - See LICENSE file
 - GitHub Issues: https://github.com/marieai/marie-mcp-server/issues
 - Email: support@marieai.co
 - Documentation: https://docs.marieai.co/mcp-server
+
+## Reliability and gateway contracts
+
+The server advertises nine tools. `stop_job` and `delete_job` are unavailable because
+those gateway routes currently return acknowledgments without changing jobs. Direct
+client calls reject these operations rather than reporting success.
+
+Submission uses the `/api/v1/invoke` `parameters.invoke_action` envelope and is never
+retried automatically. A timeout or lost response can leave acceptance unknown;
+reconcile existing jobs before resubmitting. Read requests retry transient transport
+errors and HTTP 429/500/502/503/504 only. HTTP and application errors become MCP tool
+errors (`isError=true`). Configuration and diagnostic output goes to stderr.
+
+Submission returns a DAG UUID. Job status queries `/api/operations/dags/{job_id}`
+first, then `/api/operations/jobs/{job_id}` only on a 404 for child job identifiers. S3 asset paths match the
+backend convention: `s3://bucket/normalized_type/lowercase_stem/original_filename`.
+Set `S3_BUCKET` to the backend bucket; it falls back to `MARIE_S3_BUCKET`, then `marie`.
+S3 transfers run in worker threads. Result downloads must stay within
+`MARIE_OUTPUT_DIR`; relative paths start there. Completed downloads replace the
+specified output file atomically.
+
+The HTTP client is created and closed within the MCP server lifespan. Both extraction
+tools retain the current API-key-as-project-id contract; changing that contract is deferred.

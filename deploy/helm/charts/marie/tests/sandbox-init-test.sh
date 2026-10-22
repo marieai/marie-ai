@@ -231,13 +231,15 @@ assert_contains "server: ETCD_ENDPOINTS set" \
 assert_contains "server: etcd host = ${RELEASE}-etcd" \
     "${RELEASE}-etcd" "${server_deploy}"
 
-# ---- T18: Server Deployment wires Valkey LLM queue -------------------------
+# ---- T18: Disabled queue does not receive a connection ----------------------
 echo ""
-echo "=== T18: Server Deployment wires Valkey (LLM queue) ==="
-assert_contains "server: LLM_QUEUE_VALKEY_URL set" \
+echo "=== T18: Disabled LLM queue has no connection ==="
+assert_contains "server: LLM_QUEUE_ENABLED=false" \
+    'value: "false"' "${server_deploy}"
+assert_not_contains "server: canonical queue URL omitted while disabled" \
+    "LLM_QUEUE_URL" "${server_deploy}"
+assert_not_contains "server: legacy queue URL omitted while disabled" \
     "LLM_QUEUE_VALKEY_URL" "${server_deploy}"
-assert_contains "server: Valkey URL points to ${RELEASE}-valkey" \
-    "${RELEASE}-valkey" "${server_deploy}"
 
 # ---- T19: wave ordering: full render contains both wave annotations --------
 echo ""

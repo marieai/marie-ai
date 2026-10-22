@@ -8,6 +8,7 @@ def test_batch_generate_logs_traceback(caplog) -> None:
     engine = object.__new__(VLLMEngine)
     engine.is_multimodal = False
     engine.system_prompt = "system"
+    engine.generation_defaults = {"max_tokens": 16}
     engine.logger = logging.getLogger("VLLMEngine")
     engine.llm = Mock()
     engine.llm.generate.side_effect = RuntimeError("engine core failed")

@@ -9,6 +9,7 @@ from marie.scheduler.psql import PostgreSQLJobScheduler
 @pytest.mark.asyncio
 async def test_get_job_returns_active_projection_without_database_read() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     work_item = SimpleNamespace(id='job-1')
     scheduler._job_cache = {work_item.id: work_item}
     scheduler.repository = SimpleNamespace(get_job_by_id=AsyncMock())
@@ -20,6 +21,7 @@ async def test_get_job_returns_active_projection_without_database_read() -> None
 @pytest.mark.asyncio
 async def test_get_job_adds_database_result_to_active_projection() -> None:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     work_item = SimpleNamespace(id='job-1')
     scheduler._job_cache = {}
     scheduler.repository = SimpleNamespace(

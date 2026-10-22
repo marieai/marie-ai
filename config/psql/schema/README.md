@@ -31,7 +31,7 @@ schema/
 ├── dev/                            # Development/test files (NOT auto-loaded)
 │   ├── cleanup.sql
 │   └── ...
-└── monitoring/                     # Monitoring views (NOT auto-loaded)
+└── monitoring/                     # throughput_analysis.sql is explicitly loaded
     └── ...
 ```
 
@@ -105,10 +105,17 @@ Marie-AI is not aware of `marie_studio` tables. This allows Marie-AI to run inde
 
 ## Deployment Ownership
 
-`config/psql` is the canonical SQL source. Helm charts must not carry
-copied schema SQL; Kubernetes deployments should point `MARIE_PSQL_DIR`
-and `MARIE_SCHEMA_DIR` at the packaged image paths, or at an explicitly
-managed external runtime mount.
+`config/psql` is the canonical SQL source for the application revision. Packaged
+copies, including Helm files and external runtime mounts, must match the
+effective SQL files from that same revision. Point `MARIE_PSQL_DIR` and
+`MARIE_SCHEMA_DIR` at the packaged image paths or an explicitly managed external
+runtime mount. An explicit `MARIE_SCHEMA_DIR` overrides the schema path derived
+from `MARIE_PSQL_DIR`.
+
+Updating the source checkout does not update `/mnt/data/marie-ai/config/psql` or
+database objects. Follow [Scheduler database backups and upgrades](../../../docs/docs/getting-started/deployment/scheduler-database-upgrades.md)
+to compare these locations, export backups through Docker, and rehearse upgrades
+while preserving existing data.
 
 `config/psql/schema` is the only active scheduler schema tree. Do not create
 parallel `schema-v*` or environment-specific schema directories.
@@ -125,6 +132,10 @@ file. Schema version 76 gives each logical function its own final artifact:
 - `lease/015_activate_from_lease.sql` for the overload family
 - `lease/016_hydrate_frontier_jobs.sql`
 - `lease/017_admission_candidate_dags.sql`
+
+Schema version 96 supersedes admission with `lease/018_queue_scoped_admission.sql`
+and expired-run claims with `lease/019_queue_scoped_run_recovery.sql`; these
+forward files retire the corresponding unscoped overloads.
 
 Tests and reviews should use those files as the current contracts. The earlier
 definitions remain only because existing deployments may already have applied
@@ -148,13 +159,17 @@ unset until the fleet inventory supplies the convergence date.
 
 ## Testing Changes
 
-```bash
-# Drop and recreate schema (development only!)
-psql -c "DROP SCHEMA marie_scheduler CASCADE; CREATE SCHEMA marie_scheduler;"
+Scheduler schema version 96 introduces required queue scope arguments for
+admission and expired-run claims. See [queue consumption and coordinated
+rollout](../../../docs/scheduler/queue-consumer-isolation.md) before upgrading or
+rolling back. The new forward lease definitions retire their unscoped overloads;
+existing lease and attempt-activation interfaces remain unchanged.
 
-# Run Marie-AI to apply schema
-marie server --start --uses config/service/marie.yml
-```
+Test fresh installation against an empty disposable database. For databases with
+existing jobs or history, verify a full backup and rehearse the upgrade on an
+isolated restored copy. Do not drop the scheduler schema or delete its version
+marker to repair a missing function. The [database upgrade guide](../../../docs/docs/getting-started/deployment/scheduler-database-upgrades.md)
+explains why a current marker can coexist with stale function definitions.
 
 ## Placeholder Substitution
 

@@ -1,0 +1,150 @@
+Extract Bank Statements data from the supplied document page.
+Return one valid JSON object matching the supplied output schema.
+Use only evidence visible in the document. Use null when a value is absent.
+
+Fields:
+- start_date: start date of bank statement period
+- start_date: beginning date of bank statement period
+- end_date: end date of bank statement period. do not return the date of the next statement period
+- end_date: ending date of bank statement period
+- customer_name: customer name
+- customer_address: customer address. omit customer or company name from address. do not return the address of the bank
+- beginning_balance: beginning balance
+- beginning_balance: beginning balance as listed in the account summary
+- ending_balance: ending balance of statement
+- transactions: Extract transactions
+- checks: Extract checks
+
+Output schema:
+{
+  "additionalProperties": false,
+  "properties": {
+    "beginning_balance": {
+      "description": "beginning balance",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "checks": {
+      "description": "Thoroughly extract every unique \"Check\" listed in the bank statement. Only extract checks. Do not include fees or other charges",
+      "items": {
+        "properties": {
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "check_number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type_of_check": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "check_number",
+          "amount",
+          "type_of_check"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "customer_address": {
+      "description": "customer address. omit customer or company name from address. do not return the address of the bank",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "customer_name": {
+      "description": "customer name",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "end_date": {
+      "description": "end date of bank statement period. do not return the date of the next statement period",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "ending_balance": {
+      "description": "ending balance of statement",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "start_date": {
+      "description": "start date of bank statement period",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transactions": {
+      "description": "Thoroughly extract every transaction from the document. Transactions include all deposits, credits, withdrawals, and debits. Be sure not to miss any transactions. Do not include checks.",
+      "items": {
+        "properties": {
+          "amount": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type_of_transaction": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "description",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "type": "object"
+}
+
+Prepared page text:
+PAGE_TEXT

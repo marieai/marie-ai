@@ -12,7 +12,12 @@ import pytest
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository import JobRepository
+from marie.scheduler.repository.async_job_repository import _routing_digest
 from marie.scheduler.state import WorkState
+from marie.serve.runtimes.gateway.marie.dispatch_policy import (
+    build_policy_generation_snapshot,
+)
+from tests.unit.serve.runtimes.gateway.test_dispatch_policy import persisted
 
 
 class FakeTransaction:
@@ -108,6 +113,124 @@ def build_repository(connection: FakeConnection) -> JobRepository:
     return JobRepository({}, pool=FakePool(connection))
 
 
+@pytest.mark.asyncio
+async def test_active_admission_policy_loads_logical_endpoint_group_binding():
+    data = persisted()
+    dispatch = data['metadata']['llm_dispatch']
+    dispatch.pop('endpoints')
+    dispatch['endpoint_groups'] = [
+        {
+            'group_id': 'document-llm',
+            'revision': 'r1',
+            'replicas': [
+                {
+                    'replica_id': 'replica-a',
+                    'base_url': 'https://inference.example/v1',
+                    'execution_limit': 4,
+                }
+            ],
+        }
+    ]
+    lane = data['lanes'][0]['metadata']['llm_dispatch']
+    lane['endpoint_group_id'] = 'document-llm'
+    lane.pop('endpoint_id')
+    snapshot, _ = build_policy_generation_snapshot('default', 1, data)
+    digest = _routing_digest(snapshot)
+    repository = build_repository(FakeConnection(fetchrow=[(1, digest, snapshot)]))
+
+    policy = await repository.load_active_admission_policy('default')
+
+    assert policy.endpoint_binding('default').endpoint_group_id == 'document-llm'
+    assert policy.endpoint_binding('default').revision == 'r1'
+
+
+@pytest.mark.asyncio
+async def test_llm_routing_diagnostics_are_bounded_and_report_drain_references():
+    connection = FakeConnection(
+        fetchrow=[(4, 'a' * 64), (2, 9, 1)],
+        fetch=[
+            [
+                ('document-small', 7, 4, 1, 2, 2),
+                ('document-large', 3, 1, 1, 2, 2),
+            ],
+            [
+                (
+                    'job-1',
+                    'work-1',
+                    4,
+                    'a' * 64,
+                    'b' * 64,
+                    4,
+                    'document-small',
+                    'primary',
+                    'r1',
+                    'page-count-v1',
+                    'automatic',
+                    None,
+                    None,
+                    'projected',
+                ),
+                (
+                    'job-2',
+                    'work-2',
+                    4,
+                    'a' * 64,
+                    'c' * 64,
+                    20,
+                    'document-large',
+                    'primary',
+                    'r1',
+                    'page-count-v1',
+                    'operator-override',
+                    'routing-admin',
+                    'qualification',
+                    'pending',
+                ),
+            ],
+        ],
+    )
+    repository = build_repository(connection)
+
+    result = await repository.read_llm_routing_diagnostics('default', limit=1)
+
+    assert result['policy'] == {
+        'desired_generation': 4,
+        'desired_digest': 'a' * 64,
+    }
+    assert result['routing']['projection_pending_count'] == 2
+    assert result['routing']['matched'] == {
+        'automatic': 9,
+        'operator_override': 1,
+    }
+    assert result['pools'] == [
+        {
+            'pool_id': 'document-small',
+            'accepted': 7,
+            'completed': 4,
+            'projection_pending': 1,
+            'drain_references': 2,
+        }
+    ]
+    assert result['pool_count'] == 2
+    assert result['pools_truncated'] is True
+    assert result['recent_routes'][0]['rule_digest'] == 'b' * 64
+    assert result['recent_routes_truncated'] is True
+
+
+@pytest.mark.asyncio
+async def test_llm_routing_reference_failure_is_not_reported_as_zero():
+    repository = build_repository(FakeConnection(error=RuntimeError('database down')))
+
+    with pytest.raises(RuntimeError, match='database down'):
+        await repository.routing_resource_references(
+            fabric_group_id='default',
+            resource_type='pool',
+            resource_id='document-small',
+            revision=None,
+            limit=25,
+        )
+
+
 def build_dag_job(dag_id: str, index: int) -> WorkInfo:
     now = datetime.now(timezone.utc)
     return WorkInfo(
@@ -116,7 +239,7 @@ def build_dag_job(dag_id: str, index: int) -> WorkInfo:
         name="extract",
         priority=index,
         data={
-            "metadata": {
+            'metadata': {
                 "on": "extract://processor",
                 "planner": "test-planner",
                 "ref_id": f"document-{index}",
@@ -190,11 +313,16 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('87')" in schema_query
+    assert "VALUES ('96')" in schema_query
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput("
         in schema_query
     )
+    system_throughput = schema_query.split(
+        "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput(", 1
+    )[1].split("$function$;", 1)[0]
+    assert "), bounds AS NOT MATERIALIZED (" in system_throughput
+    assert "j.state::text" not in system_throughput
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_planner_throughput("
         in schema_query
@@ -244,6 +372,168 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
     assert "'refresh_job_durations'" in schema_query
     assert "'refresh_dag_durations'" in schema_query
     assert "cron.schedule(" not in schema_query
+
+
+@pytest.mark.asyncio
+async def test_create_tables_bounds_each_operational_event_source() -> None:
+    connection = FakeConnection(fetchval=[True, True])
+    repository = build_repository(connection)
+
+    await repository.create_tables()
+
+    event_sql = next(
+        query
+        for method, query, _args in connection.calls
+        if method == "execute"
+        and "CREATE OR REPLACE FUNCTION marie_scheduler.list_operational_events("
+        in query
+    )
+    normalized = " ".join(event_sql.split())
+    filters = []
+    for source in ("job", "dag", "activated", "terminal", "recovery"):
+        page_query = normalized.split(f"SELECT * FROM {source}_events ", 1)[1]
+        page_filter, page_order = page_query.split(
+            "ORDER BY occurred_at DESC, event_id DESC ", 1
+        )
+        filters.append(page_filter)
+        assert page_order.startswith("LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1")
+    assert len(set(filters)) == 1
+    assert "(p_severity IS NULL OR severity = p_severity)" in filters[0]
+    assert "(p_component IS NULL OR component = p_component)" in filters[0]
+    assert "p_search IS NULL OR event_id ILIKE '%' || p_search || '%'" in filters[0]
+    assert (
+        "p_before_at IS NULL OR (occurred_at, event_id) < "
+        "( p_before_at, COALESCE(p_before_id, repeat('~', 128)) )"
+    ) in filters[0]
+    assert normalized.count("AS NOT MATERIALIZED (") == 5
+    assert normalized.count("LIMIT LEAST(GREATEST(p_limit, 1), 100) + 1") == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schema", ["marie_scheduler", "scheduler_test"])
+async def test_create_tables_installs_single_pass_task_throughput(schema: str) -> None:
+    connection = FakeConnection(fetchval=[True, True])
+    repository = build_repository(connection)
+
+    await repository.create_tables(schema)
+
+    schema_query = "\n".join(
+        query for method, query, _args in connection.calls if method == "execute"
+    )
+    task_throughput = schema_query.split(
+        f"CREATE OR REPLACE FUNCTION {schema}.monitor_task_throughput(", 1
+    )[1].split("$function$;", 1)[0]
+    assert "LANGUAGE plpgsql\nSTABLE\nPARALLEL SAFE" in task_throughput
+    assert "p_lookback_hours integer DEFAULT 24" in task_throughput
+    assert "p_planner_name text DEFAULT NULL" in task_throughput
+    assert "), bounds AS NOT MATERIALIZED (" in task_throughput
+    assert "RETURN QUERY EXECUTE $query$" in task_throughput
+    assert "$query$ USING p_lookback_hours, p_planner_name;" in task_throughput
+    assert "GREATEST(COALESCE($1, 24), 1)" in task_throughput
+    assert "NULLIF(BTRIM($2), '') AS planner_name" in task_throughput
+    assert "SET enable_parallel_append" not in task_throughput
+    assert "SET work_mem" not in task_throughput
+    assert task_throughput.count(f"FROM {schema}.job j") == 1
+    assert "j.state AS terminal_state" in task_throughput
+    assert "j.state::text" not in task_throughput
+    assert "UNION ALL" not in task_throughput
+    assert "GROUP BY GROUPING SETS (" in task_throughput
+    assert (
+        "WHEN GROUPING(t.bucket_start_utc) = 1 THEN 'window_total'" in task_throughput
+    )
+    assert "ELSE 'hour'" in task_throughput
+    assert "GROUPING(t.bucket_start_utc) AS bucket_group" in task_throughput
+    assert task_throughput.count("PERCENTILE_CONT(0.95) WITHIN GROUP") == 1
+    assert "AND t.execution_seconds IS NOT NULL" in task_throughput
+    assert "ROUND(AVG(t.execution_seconds) FILTER (" in task_throughput
+    for state in ('completed', "failed", "expired", "cancelled", "skipped"):
+        assert f"WHERE t.terminal_state = '{state}'" in task_throughput
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("schema", ["marie_scheduler", "scheduler_test"])
+async def test_create_tables_installs_operational_attempt_event_indexes(
+    schema: str,
+) -> None:
+    connection = FakeConnection(fetchval=[True, True])
+    repository = build_repository(connection)
+
+    await repository.create_tables(schema)
+
+    schema_query = " ".join(
+        " ".join(query.split())
+        for method, query, _args in connection.calls
+        if method == "execute"
+    )
+    for event in ("terminal", "recovery"):
+        definition = (
+            f"CREATE INDEX IF NOT EXISTS job_attempt_operational_{event}_idx "
+            f"ON {schema}.job_attempt ({event}_at DESC, run_attempt_id DESC) "
+            f"WHERE {event}_at IS NOT NULL;"
+        )
+        assert schema_query.count(definition) == 1
+
+    assert (
+        f"CREATE INDEX IF NOT EXISTS job_attempt_operational_facets_idx "
+        f"ON {schema}.job_attempt (gateway_instance_id, executor);"
+    ) in schema_query
+    assert (
+        schema_query.count(
+            "CREATE INDEX IF NOT EXISTS job_attempt_operational_attention_idx"
+        )
+        == 1
+    )
+
+
+def test_unpartitioned_reconciliation_includes_operational_event_indexes() -> None:
+    schema_dir = Path(__file__).resolve().parents[4] / "config/psql/schema"
+    index_definitions = (
+        (schema_dir / "076_operational_observability_indexes.sql")
+        .read_text()
+        .format(schema="marie_scheduler")
+    )
+    reconciliation = (
+        schema_dir / "maitenance/apply_unpartitioned_scheduler_definitions.sql"
+    ).read_text()
+
+    assert index_definitions in reconciliation
+
+
+def test_operational_attempt_paging_limits_ids_before_hydration() -> None:
+    schema_dir = Path(__file__).resolve().parents[4] / "config/psql/schema"
+    query = (schema_dir / "077_list_operational_attempts.sql").read_text()
+    paging = query.split("), page_budget AS (", 1)[1].split("), other_page AS (", 1)[0]
+
+    assert "GREATEST($2, 0)::BIGINT" in paging
+    assert "GREATEST($2, 0) < (SELECT total_count FROM metadata)" in paging
+    assert "SELECT *\n    FROM filtered" not in paging
+    for page in ("rejected", "owner", "recovered", "long_running", "stale"):
+        assert f"), {page}_page AS MATERIALIZED (" in paging
+        assert f"(SELECT COUNT(*) FROM {page}_page)" in paging
+    assert "(age_seconds > $9) IS NOT TRUE" in paging
+    assert "(last_update_age_seconds > $10) IS NOT TRUE" in paging
+    assert "WHERE $8 IS DISTINCT FROM 'attention'" in query
+    assert "FROM page_ids\n    JOIN filtered USING (run_attempt_id)" in query
+    assert "LANGUAGE plpgsql\nSTABLE\nPARALLEL SAFE" in query
+    assert "RETURN QUERY EXECUTE $query$" in query
+    assert (
+        "$query$ USING\n"
+        "        p_limit, p_offset, p_states, p_attention, p_gateway,\n"
+        "        p_executor, p_search, p_sort, p_active_too_long_seconds, p_stale_update_seconds;"
+    ) in query
+
+
+def test_operational_attention_index_uses_only_static_categories() -> None:
+    schema_dir = Path(__file__).resolve().parents[4] / "config/psql/schema"
+    indexes = (schema_dir / "076_operational_observability_indexes.sql").read_text()
+    attention = indexes.split(
+        "CREATE INDEX IF NOT EXISTS job_attempt_operational_attention_idx", 1
+    )[1].split(";", 1)[0]
+
+    assert "NOW()" not in attention
+    assert "EXTRACT" not in attention
+    assert "WHEN terminal_at IS NULL AND recovery_at IS NULL THEN 3" in attention
+    assert "updated_on DESC,\n        run_attempt_id DESC" in attention
 
 
 @pytest.mark.asyncio
@@ -330,13 +620,13 @@ async def test_delete_job_uses_async_connection() -> None:
 async def test_create_job_uses_shared_batch_statement() -> None:
     dag_id = "00000000-0000-0000-0000-000000000099"
     job = build_dag_job(dag_id, 1)
-    connection = FakeConnection()
+    connection = FakeConnection(fetchrow=[(job.id,)])
     repository = build_repository(connection)
 
     assert await repository.create_job(job) is True
 
     method, query, params = connection.calls[0]
-    assert method == "execute"
+    assert method == "fetchrow"
     assert "jsonb_to_recordset(%s::jsonb)" in query
     assert params[0].obj == [job.model_dump(mode="json")]
 
@@ -346,7 +636,7 @@ async def test_bulk_cancel_groups_jobs_by_queue_in_one_transaction() -> None:
     first = "00000000-0000-0000-0000-000000000001"
     second = "00000000-0000-0000-0000-000000000002"
     connection = FakeConnection(
-        fetch=[[('extract', [first]), ('parse', [second])]],
+        fetch=[[("extract", [first]), ('parse', [second])]],
         fetchval=[1, 1],
     )
     repository = build_repository(connection)
@@ -369,13 +659,17 @@ async def test_create_dag_with_jobs_uses_bounded_batch_statements(
 ) -> None:
     dag_id = "00000000-0000-0000-0000-000000000099"
     jobs = [build_dag_job(dag_id, index + 1) for index in range(node_count)]
-    jobs[0].data["metadata"].update(
+    jobs[0].data['metadata'].update(
         {
             "project_id": "project-1",
             "ref_type": "document",
         }
     )
     jobs[0].policy = "REJECT_DUPLICATE"
+    jobs[0].data['submission_trace_context'] = {
+        'traceparent': '00-00000000000000000000000000000001-0000000000000002-01',
+        'tracestate': 'vendor=value',
+    }
     connection = FakeConnection(fetchrow=[(dag_id,)])
     repository = build_repository(connection)
 
@@ -395,6 +689,11 @@ async def test_create_dag_with_jobs_uses_bounded_batch_statements(
     assert connection.transactions[0].error is None
 
     _, dag_query, dag_params = connection.calls[0]
+    persisted_jobs = connection.calls[1][2][0].obj
+    assert persisted_jobs[0]['data']['submission_trace_context'] == {
+        'traceparent': '00-00000000000000000000000000000001-0000000000000002-01',
+        'tracestate': 'vendor=value',
+    }
     assert "%s::uuid" in dag_query
     assert "priority" in dag_query
     assert "submission_name" in dag_query
@@ -522,7 +821,7 @@ async def test_terminal_database_operations_trace_component_timings(
         scheduler_lease_owner="scheduler-1",
         gateway_instance_id="gateway-1",
         terminal_status="SUCCEEDED",
-        terminal_work_state="completed",
+        terminal_work_state='completed',
         source="job_event",
         accepted=True,
     )
@@ -598,7 +897,7 @@ async def test_terminal_transition_updates_job_and_attempt_in_one_statement(
     event = trace.call_args.kwargs
     assert event["operation"] == "job_terminal_transition"
     assert event["terminal_status"] == terminal_status
-    assert event["accepted"] is True
+    assert event['accepted'] is True
     assert event["final_state"] == final_state
     assert event["autocommit"] is True
     assert event["commit_ms"] is None
@@ -642,7 +941,7 @@ async def test_load_hydratable_jobs_uses_database_function_contract() -> None:
     connection = FakeConnection(fetch=[[]])
     repository = build_repository(connection)
 
-    assert await repository.load_hydratable_jobs([dag_id]) == []
+    assert await repository.load_hydratable_jobs([dag_id], subscribed_queues=None) == []
 
     _, query, params = connection.calls[0]
     assert "FROM marie_scheduler.hydrate_frontier_jobs(%s::uuid[])" in query
@@ -662,6 +961,7 @@ async def test_discover_admission_candidates_uses_database_function_contract() -
             limit=25,
             sla_interval_seconds=900,
             excluded_dag_ids=[excluded],
+            subscribed_queues=None,
         )
         == []
     )
@@ -674,7 +974,7 @@ async def test_discover_admission_candidates_uses_database_function_contract() -
     assert "priority" not in query
     assert "soft_sla" not in query
     assert "hard_sla" not in query
-    assert params == (25, 900, [excluded])
+    assert params == (None, 25, 900, [excluded])
 
 
 @pytest.mark.asyncio
@@ -683,7 +983,10 @@ async def test_load_dag_and_jobs_uses_database_function_contract() -> None:
     connection = FakeConnection(fetchrow=[None])
     repository = build_repository(connection)
 
-    assert await repository.load_dag_and_jobs(dag_id) == (None, [])
+    assert await repository.load_dag_and_jobs(dag_id, subscribed_queues=None) == (
+        None,
+        [],
+    )
 
     _, query, params = connection.calls[0]
     assert "FROM marie_scheduler.hydrate_frontier_dags()" in query
@@ -700,7 +1003,7 @@ async def test_dag_activation_diagnostic_includes_root_failure() -> None:
     connection = FakeConnection(
         fetchrow=[("failed", now, now, 4, 2, 0)],
         fetch=[
-            [("completed", 1), ("created", 2), ("failed", 1)],
+            [('completed', 1), ("created", 2), ("failed", 1)],
             [
                 (
                     job_id,
@@ -743,7 +1046,7 @@ async def test_dag_activation_diagnostic_includes_root_failure() -> None:
 
     assert diagnostic["reason"] == "dag_state_not_activatable"
     assert diagnostic["job_states"] == {
-        "completed": 1,
+        'completed': 1,
         "created": 2,
         "failed": 1,
     }
@@ -921,6 +1224,9 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             True,
             True,
             True,
+            True,
+            True,
+            True,
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id "
@@ -941,50 +1247,48 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
     _, function_query, function_params = connection.calls[4]
     assert "to_regprocedure" in function_query
     assert function_params == (
-        "marie_scheduler.admission_candidate_dags(integer,integer,uuid[])",
+        "marie_scheduler.admission_candidate_dags(text[],integer,integer,uuid[])",
     )
 
-    throughput_functions = [
-        call[2][0] for call in connection.calls[5:8]
-    ]
+    throughput_functions = [call[2][0] for call in connection.calls[8:11]]
     assert throughput_functions == [
         "marie_scheduler.monitor_system_throughput(integer,text)",
         "marie_scheduler.monitor_planner_throughput(integer,text)",
         "marie_scheduler.monitor_task_throughput(integer,text)",
     ]
 
-    _, operational_query, operational_params = connection.calls[8]
+    _, operational_query, operational_params = connection.calls[11]
     assert "to_regprocedure" in operational_query
     assert operational_params == (
         "marie_scheduler.get_operational_dag(uuid,integer,integer,integer)",
     )
 
-    _, jobs_query, jobs_params = connection.calls[9]
+    _, jobs_query, jobs_params = connection.calls[12]
     assert "to_regprocedure" in jobs_query
     assert jobs_params == (
         "marie_scheduler.list_operational_jobs(integer,integer,text[],text,"
         "text,text,text,uuid,integer,integer,integer)",
     )
 
-    assert connection.calls[10][2] == (
+    assert connection.calls[13][2] == (
         "marie_scheduler.list_operational_attempts(integer,integer,text[],text,"
         "text,text,text,text,integer,integer)",
     )
-    assert connection.calls[11][2] == (
+    assert connection.calls[14][2] == (
         "marie_scheduler.list_operational_events(integer,timestamptz,text,integer,"
         "text,text,text)",
     )
-    assert connection.calls[12][2] == (
+    assert connection.calls[15][2] == (
         "marie_scheduler.get_operational_flow(integer,text,integer)",
     )
-    assert connection.calls[13][2] == (
+    assert connection.calls[16][2] == (
         "marie_scheduler.get_operational_database_health()",
     )
-    assert connection.calls[14][2] == (
+    assert connection.calls[17][2] == (
         "marie_scheduler.list_operational_execution_history(uuid,uuid,integer,integer)",
     )
 
-    _, activation_query, _ = connection.calls[15]
+    _, activation_query, _ = connection.calls[18]
     assert "p.pronargs = 5" in activation_query
     assert all(
         "scheduler_attempt_invariant_checks" not in query
@@ -1185,7 +1489,9 @@ async def test_recover_expired_run_leases_applies_python_policy(monkeypatch) -> 
     )
     repository = build_repository(connection)
 
-    recovered = await repository.recover_expired_run_leases(limit=10)
+    recovered = await repository.recover_expired_run_leases(
+        subscribed_queues=None, limit=10
+    )
 
     assert len(recovered) == 1
     assert recovered[0].id == job_id

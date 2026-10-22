@@ -63,7 +63,7 @@ class SchedulerRuntime:
         ]
         shutdown_tasks = background_tasks + service_tasks
         if shutdown_tasks:
-            _, pending = await asyncio.wait(
+            done, pending = await asyncio.wait(
                 shutdown_tasks,
                 timeout=max(0.0, timeout),
             )
@@ -75,15 +75,21 @@ class SchedulerRuntime:
                 )
                 for task in pending:
                     task.cancel()
+                    task.add_done_callback(self._log_shutdown_failure)
 
-            results = await asyncio.gather(*shutdown_tasks, return_exceptions=True)
-            for task, result in zip(shutdown_tasks, results):
-                if isinstance(result, Exception):
-                    self._logger.error(
-                        'Task %s failed during scheduler shutdown: %s',
-                        task.get_name(),
-                        result,
-                    )
+            for task in done:
+                self._log_shutdown_failure(task)
 
         self._tasks.clear()
         self._event_tasks.clear()
+
+    def _log_shutdown_failure(self, task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            self._logger.error(
+                'Task %s failed during scheduler shutdown: %s',
+                task.get_name(),
+                error,
+            )

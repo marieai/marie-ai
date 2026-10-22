@@ -1,4 +1,6 @@
 import asyncio
+import gc
+import weakref
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -8,6 +10,75 @@ from marie.job.common import JobInfo, JobStatus
 from marie.job.job_supervisor import JobSupervisor
 from marie.proto import jina_pb2
 from marie.types_core.request.data import DataRequest
+
+
+@pytest.mark.parametrize("terminal_status", [JobStatus.RUNNING, JobStatus.SUCCEEDED])
+async def test_finalizer_is_retained_until_terminal_delivery_finishes(
+    terminal_status: JobStatus,
+) -> None:
+    started = asyncio.Event()
+    finished = asyncio.Event()
+    references: dict[str, weakref.ReferenceType] = {}
+    operations: list[tuple] = []
+
+    async def terminal_operation(*args, **kwargs) -> None:
+        pending = asyncio.get_running_loop().create_future()
+        references["future"] = weakref.ref(pending)
+        references["task"] = weakref.ref(asyncio.current_task())
+        operations.append(args)
+        started.set()
+        await pending
+
+    send_task = asyncio.get_running_loop().create_future()
+    send_task.set_result(
+        SimpleNamespace(status=SimpleNamespace(code=jina_pb2.StatusProto.SUCCESS))
+    )
+    supervisor = JobSupervisor(
+        job_id="test-job-id",
+        job_info_client=SimpleNamespace(
+            get_info=AsyncMock(
+                return_value=SimpleNamespace(
+                    status=terminal_status,
+                    run_owner="owner-1",
+                    run_attempt_id="attempt-1",
+                )
+            ),
+            get_status=AsyncMock(return_value=JobStatus.SUCCEEDED),
+            put_status=terminal_operation,
+        ),
+        job_distributor=SimpleNamespace(send_nowait=AsyncMock(return_value=send_task)),
+        event_publisher=SimpleNamespace(publish=terminal_operation),
+        etcd_client=Mock(),
+        desired_state_executor=SimpleNamespace(schedule_new_epoch=AsyncMock()),
+        confirmation_event=asyncio.Event(),
+    )
+    try:
+        await supervisor._submit_job_in_background(
+            JobInfo(
+                status=JobStatus.PENDING,
+                entrypoint="mock_executor_a:///document/extract",
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert len(supervisor._active_tasks) == 1
+        gc.collect()
+        assert references["task"]() is not None
+        assert not references["task"]().done()
+        references["task"]().add_done_callback(lambda _task: finished.set())
+        references["future"]().set_result(None)
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        assert supervisor._active_tasks == set()
+        if terminal_status == JobStatus.RUNNING:
+            assert operations == [("test-job-id", JobStatus.SUCCEEDED)]
+        else:
+            assert len(operations) == 1
+            assert operations[0][0] == JobStatus.SUCCEEDED
+            assert operations[0][1]["job_id"] == "test-job-id"
+    finally:
+        task = references.get("task", lambda: None)()
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def make_supervisor(confirmation_event: asyncio.Event) -> JobSupervisor:

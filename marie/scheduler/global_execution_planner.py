@@ -84,8 +84,13 @@ class GlobalPriorityExecutionPlanner:
                 if (wi.data and isinstance(wi.data, dict))
                 else {}
             )
+            if not isinstance(meta, dict):
+                meta = {}
             est = meta.get("estimated_runtime")
-            est_rt = float(est) if est is not None else inf
+            try:
+                est_rt = float(est) if est is not None else inf
+            except (TypeError, ValueError):
+                est_rt = inf
 
             annotated.append(
                 (

@@ -27,6 +27,9 @@ def _page(text: str) -> dict:
         'meta': {
             'page': 0,
             'imageSize': {'width': width, 'height': 32},
+            'lines': [0],
+            'lines_bboxes': [[8, 8, len(text) * 8, 20]],
+            'format': 'xywh',
         },
     }
 
@@ -47,3 +50,16 @@ def test_semantic_document_prompt_text_preserves_markdown_lines() -> None:
 
     assert lines[0][0]['text'] == markdown_row
 
+
+def test_legacy_list_extraction_uses_spatial_prompt_text() -> None:
+    text = 'Marie LLM dispatch fixture page 1'
+    document = SimpleNamespace(
+        source_metadata={
+            'extraction': [],
+            'ocr': [_page(text)],
+        }
+    )
+
+    lines = _prompt_lines_by_page(document)
+
+    assert lines[0][0]['text'] == text

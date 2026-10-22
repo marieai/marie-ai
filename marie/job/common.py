@@ -17,6 +17,17 @@ JOB_STATUS_KEY = f"{INTERNAL_NAMESPACE_PREFIX}/job_status"
 ActorHandle = Any
 
 
+class DuplicateJobSubmissionError(ValueError):
+    """Raised when a non-retry submission reuses an existing job ID."""
+
+    def __init__(self, submission_id: str) -> None:
+        self.submission_id = submission_id
+        super().__init__(
+            f"Job with submission_id {submission_id} already exists. "
+            "Please use a different submission_id."
+        )
+
+
 class JobStatus(str, Enum):
     """An enumeration for describing the status of a job."""
 

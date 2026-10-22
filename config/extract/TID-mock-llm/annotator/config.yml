@@ -14,6 +14,12 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      repetition_recovery:
+        temperature: 0.7
+        top_p: 0.8
+        presence_penalty: 1.5
+        extra_body:
+          top_k: 20
       expect_output: json
       mini_batch_size: 1
     parser_name: default

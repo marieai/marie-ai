@@ -11,9 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
-
-	"github.com/marieai/marie-ai/packages/marie-plugin-daemon/internal/marie/auth"
 )
 
 func TestHealthAndDecode(t *testing.T) {
@@ -42,54 +39,34 @@ func TestHealthAndDecode(t *testing.T) {
 	}
 }
 
-func TestRuntimeInvocationRejectsUnsignedEnvelope(t *testing.T) {
-	server := NewServer(VersionInfo{Version: "test", Commit: "abc", Mode: "decode_only"})
+func TestLegacyStubInvocationRouteIsRemoved(t *testing.T) {
+	server := newRuntimeServer(t)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/runtime/stub-invocations", bytes.NewReader([]byte(`{}`))))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for removed stub route, got %d", response.Code)
+	}
+}
+
+func TestDispatchInvocationRejectsUnsignedEnvelope(t *testing.T) {
+	server := newRuntimeServer(t)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/dispatch/invoke", bytes.NewReader([]byte(`{}`))))
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", response.Code)
 	}
 }
 
-func TestRuntimeInvocationUnsupportedAfterEnvelopeVerification(t *testing.T) {
-	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
-	verifier := auth.NewEnvelopeVerifier([]auth.SigningKey{{KeyID: "marie-api-test", Secret: "test-runtime-secret"}}, func() time.Time {
-		return now
-	})
-	server := NewServer(VersionInfo{Version: "test", Commit: "abc", Mode: "decode_only"}, WithEnvelopeVerifier(verifier))
-	envelope := signedEnvelope("nonce-1", now.Add(5*time.Minute))
-	body, err := json.Marshal(envelope)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	response := httptest.NewRecorder()
-	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/runtime/stub-invocations", bytes.NewReader(body)))
-	if response.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", response.Code)
-	}
-}
-
-func TestRuntimeInvocationRejectsPolicyDeniedEnvelope(t *testing.T) {
-	now := time.Date(2026, 6, 2, 12, 0, 0, 0, time.UTC)
-	verifier := auth.NewEnvelopeVerifier([]auth.SigningKey{{KeyID: "marie-api-test", Secret: "test-runtime-secret"}}, func() time.Time {
-		return now
-	})
-	server := NewServer(VersionInfo{Version: "test", Commit: "abc", Mode: "decode_only"}, WithEnvelopeVerifier(verifier))
-	envelope := signedEnvelope("nonce-policy", now.Add(5*time.Minute))
-	envelope["packageTrustLevel"] = "blocked"
-	envelope["signature"] = map[string]any{
-		"keyId":     "marie-api-test",
-		"algorithm": "hmac-sha256",
-		"value":     signEnvelope(envelope, "test-runtime-secret"),
-	}
+func TestDispatchInvocationRejectsPolicyDeniedEnvelope(t *testing.T) {
+	server := newRuntimeServer(t)
+	envelope := runtimeEnvelope(t, map[string]any{"packageTrustLevel": "blocked"})
 
 	body, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/runtime/stub-invocations", bytes.NewReader(body)))
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/v1/dispatch/invoke", bytes.NewReader(body)))
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", response.Code, response.Body.String())
 	}
@@ -108,36 +85,6 @@ providers:
   - ref: provider/minimal
     type: tool_provider
 `
-
-func signedEnvelope(nonce string, expiresAt time.Time) map[string]any {
-	envelope := map[string]any{
-		"requestId":            "request-1",
-		"traceId":              "trace-1",
-		"organizationId":       "11111111-1111-1111-1111-111111111111",
-		"workspaceId":          "22222222-2222-2222-2222-222222222222",
-		"userId":               "44444444-4444-4444-4444-444444444444",
-		"installId":            "33333333-3333-3333-3333-333333333333",
-		"packageId":            "77777777-7777-7777-7777-777777777777",
-		"packageRef":           "ext.langgenius.search",
-		"packageDigest":        "sha256:package",
-		"packageTrustLevel":    "community",
-		"providerId":           "55555555-5555-5555-5555-555555555555",
-		"actionId":             "tools/search",
-		"actionType":           "stub",
-		"credentialBindingIds": []any{},
-		"input":                map[string]any{"query": "invoices"},
-		"runtimePolicy":        map[string]any{"timeoutMs": float64(30000), "maxConcurrent": float64(1), "maxMemoryBytes": float64(536870912), "networkPolicy": "none"},
-		"expiresAt":            expiresAt.Format(time.RFC3339),
-		"nonce":                nonce,
-		"mode":                 "stub",
-	}
-	envelope["signature"] = map[string]any{
-		"keyId":     "marie-api-test",
-		"algorithm": "hmac-sha256",
-		"value":     signEnvelope(envelope, "test-runtime-secret"),
-	}
-	return envelope
-}
 
 func signEnvelope(envelope map[string]any, secret string) string {
 	payload := map[string]any{}

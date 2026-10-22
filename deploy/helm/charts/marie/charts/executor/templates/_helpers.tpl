@@ -9,10 +9,13 @@ Executor base name
 Executor fullname for a pool
 */}}
 {{- define "executor.poolFullname" -}}
-{{- $pool := index . 0 }}
-{{- $release := index . 1 }}
-{{- printf "%s-executor-%s" $release $pool.name | trunc 63 | trimSuffix "-" }}
+{{- $identity := toJson (list "marie.executor-workload" .root.Release.Namespace .root.Release.Name .pool.name) -}}
+{{- printf "ex-%s" (sha256sum $identity | trunc 24) -}}
 {{- end }}
+
+{{- define "executor.headlessServiceName" -}}
+{{- include "executor.poolFullname" . -}}-headless
+{{- end -}}
 
 {{/*
 Executor labels
@@ -32,7 +35,7 @@ Executor selector labels for a pool
 {{- $release := index . 1 }}
 app.kubernetes.io/name: executor
 app.kubernetes.io/instance: {{ $release }}
-marie.ai/pool: {{ $pool.name }}
+marie.ai/pool: {{ $pool.name | quote }}
 {{- end }}
 
 {{/*
@@ -84,3 +87,20 @@ Executor service account name
 {{- default "default" .Values.global.serviceAccount.name }}
 {{- end }}
 {{- end }}
+{{/* Explicit runtime binding; addresses and Secrets stay in this installation. */}}
+{{- define "executor.pluginRuntimeEnv" -}}
+{{- with .pool.pluginRuntime -}}
+- name: MARIE_PLUGIN_DAEMON_URL
+  value: {{ printf "http://%s.%s.svc:8099" .serviceName $.root.Release.Namespace | quote }}
+- name: MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: {{ .signingSecret | quote }}
+      key: key-id
+- name: MARIE_PLUGIN_DAEMON_SIGNING_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ .signingSecret | quote }}
+      key: secret
+{{- end -}}
+{{- end -}}

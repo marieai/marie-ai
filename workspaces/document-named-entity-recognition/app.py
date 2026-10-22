@@ -1,4 +1,5 @@
 import json
+import os
 
 import cv2
 import numpy as np
@@ -13,6 +14,7 @@ from marie.boxes import BoxProcessorUlimDit
 from marie.components.document_indexer.transformers_seq2seq import (
     TransformersSeq2SeqDocumentIndexer,
 )
+from marie.constants import __model_path__
 from marie.document import TrOcrProcessor
 from marie.ocr.util import get_words_and_boxes
 from marie.utils.docs import docs_from_image
@@ -36,11 +38,11 @@ if "text_prompt" not in st.session_state:
 @st.cache_resource
 def build_ocr_engine():
     box_processor = BoxProcessorUlimDit(
-        models_dir="/mnt/data/marie-ai/model_zoo/unilm/dit/text_detection",
+        models_dir=os.path.join(__model_path__, "unilm", "dit", "text_detection"),
         cuda=use_cuda,
     )
     icr_processor = TrOcrProcessor(
-        models_dir="/mnt/data/marie-ai/model_zoo/trocr", cuda=use_cuda
+        models_dir=os.path.join(__model_path__, "trocr"), cuda=use_cuda
     )
     return box_processor, icr_processor
 

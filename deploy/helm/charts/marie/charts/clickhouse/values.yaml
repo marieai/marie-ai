@@ -7,8 +7,8 @@ replicas: 1
 
 image:
   repository: clickhouse/clickhouse-server
-  tag: "latest"
-  digest: ""
+  tag: "25.12.1.649"
+  digest: "sha256:7234d193fbeb3a375f21f0bb99040396f68bb2e82cada4f4947d7fcf9638bbf3"
   pullPolicy: IfNotPresent
 
 # Service configuration
@@ -22,12 +22,26 @@ service:
   mysqlPort: 9004
   annotations: {}
 
+# Observability schema (database "telemetry": logs, traces, metrics, and the views and
+# columns marie-studio queries). Applied by a Job after install and upgrade.
+schema:
+  enabled: true
+  backoffLimit: 6
+  # Maximum total Job lifetime, including readiness waits and retries.
+  activeDeadlineSeconds: 300
+
+queryExplorer:
+  enabled: false
+  readerSecret:
+    name: ""
+    key: password
+
 # ClickHouse configuration
 config:
   # Default database to create
-  defaultDatabase: marie
+  defaultDatabase: telemetry
   # Default user
-  defaultUser: default
+  defaultUser: marie
   # Default password (empty for local dev, set in production)
   defaultPassword: ""
   # Enable SQL-driven access management

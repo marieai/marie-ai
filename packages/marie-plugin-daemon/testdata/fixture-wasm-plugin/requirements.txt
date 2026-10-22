@@ -1,1 +1,2 @@
-marie-wasm @ file:///home/gbugaj/dev/marieai/marie-ai/packages/marie-wasm
+# wasmFixtureZip resolves this dependency to the owning checkout before archiving.
+marie-wasm

@@ -5,6 +5,8 @@ from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional, TypeAlias, Union
 
+from nameparser import HumanName
+
 from marie.constants import __model_path__
 from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.predefined import default_logger as logger
@@ -78,8 +80,8 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
     # Use first-name and last-name lookups to normalize 2-token names into
     # "LAST,FIRST" format for nameparser.  Handles both comma and space-separated
     # input.  When the second token is a known last name we assume natural
-    # FIRST LAST order and do NOT swap — this prevents "ARIN JONES" from being
-    # misread as "LAST=ARIN, FIRST=JONES" just because JONES also appears in
+    # FIRST LAST order and do NOT swap — this prevents a FIRST LAST name from
+    # being misread as LAST FIRST just because its last name also appears in
     # the first-names census.
     if ',' in full_name:
         parts = [p.strip() for p in full_name.split(',', 1)]
@@ -88,7 +90,7 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
             t1_is_first = _is_known_first_name(parts[1])
             t1_is_last = _is_known_last_name(parts[1])
             if t0_is_first and not t1_is_first and not t1_is_last:
-                # "JOHN,CASHE" → FIRST,LAST — swap to "CASHE,JOHN"
+                # "FIRST,LAST" — swap to "LAST,FIRST"
                 full_name = f"{parts[1]},{parts[0]}"
     else:
         tokens = full_name.split()
@@ -97,31 +99,36 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
             t1_is_first = _is_known_first_name(tokens[1])
             t1_is_last = _is_known_last_name(tokens[1])
             if t1_is_first and not t0_is_first and not t1_is_last:
-                # "CASHE JOHN" → LAST FIRST — reorder as "CASHE,JOHN"
+                # "LAST FIRST" — reorder as "LAST,FIRST"
                 full_name = f"{tokens[0]},{tokens[1]}"
         elif len(tokens) == 3:
             t0_is_first = _is_known_first_name(tokens[0])
             t1_is_first = _is_known_first_name(tokens[1])
             t0_is_last = _is_known_last_name(tokens[0])
             t2_is_last = _is_known_last_name(tokens[2])
-            if t1_is_first and not t0_is_first:
-                # "SCHULLER KRISTEN N" → LAST FIRST MIDDLE — reorder as "SCHULLER,KRISTEN N"
+            # "FIRST M LAST" - a lone initial followed by a full token is a
+            # middle initial, even though some initials ("J", "R",
+            # "S") appear in the first-names census — keep natural order.
+            t1_is_middle_initial = (
+                len(tokens[1].rstrip(".")) == 1 and len(tokens[2].rstrip(".")) > 1
+            )
+            if t1_is_middle_initial:
+                pass
+            elif t1_is_first and not t0_is_first:
+                # "LAST FIRST MIDDLE" - reorder as "LAST,FIRST MIDDLE"
                 full_name = f"{tokens[0]},{tokens[1]} {tokens[2]}"
             elif t1_is_first and t0_is_first and t0_is_last and not t2_is_last:
-                # "JONES DALLAS G" → both tokens[0] and tokens[1] are first names,
+                # both tokens[0] and tokens[1] are first names,
                 # but tokens[0] is also a last name and tokens[2] is NOT a last name
-                # → LAST FIRST MIDDLE
+                # - LAST FIRST MIDDLE
                 full_name = f"{tokens[0]},{tokens[1]} {tokens[2]}"
 
-    from nameparser import HumanName
-
     name = HumanName(full_name, string_format=string_format)
-
     first, middle, last = name.first, name.middle, name.last
 
     # nameparser may misclassify a last name as a suffix (e.g., "CAP" as Captain).
     # If the suffix is a known last name and the parsed last is NOT, shift:
-    # last → middle, suffix → last.
+    # last -> middle, suffix -> last.
     suffix_token = name.suffix.rstrip(".")
     if (
         suffix_token
@@ -133,7 +140,7 @@ def convert_name_format(value: str, field_def: Dict[str, Any]) -> dict[str, None
 
     # Fix compound first names: if the middle contains known first name(s)
     # followed by a middle initial (single char), move them into first.
-    # E.g., "EL NORA S. POLACEK" → first="EL NORA", middle="S.", last="POLACEK"
+    # E.g., "F1 F2 M. LAST" -> first="F1 F2", middle="M.", last="LAST"
     middle_parts = middle.split()
     if len(middle_parts) >= 2 and len(middle_parts[-1].rstrip(".")) == 1:
         prefix_parts = middle_parts[:-1]

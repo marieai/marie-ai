@@ -2,7 +2,10 @@ import asyncio
 import inspect
 from typing import Callable, Dict, List, TypeVar, Union
 
+from marie.logging_core.logger import MarieLogger
+
 T = TypeVar("T")
+logger = MarieLogger(__name__)
 
 
 class EventPublisher:
@@ -46,12 +49,11 @@ class EventPublisher:
 
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._subscribers: Dict[str, List[Callable[[str, T], None]]] = {}
         self._queue: asyncio.Queue = asyncio.Queue()
         self._dispatcher_task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
-        self.start()
 
     def subscribe(
         self, event_type: Union[str, List[str]], subscriber: Callable[[str, T], None]
@@ -67,25 +69,33 @@ class EventPublisher:
         for et in event_type:
             self._subscribers.setdefault(et, []).append(subscriber)
 
-    def unsubscribe(self, event_type: str, subscriber: Callable[[str, T], None]):
-        """
-        Unsubscribe a subscriber from a specific event type.
-        """
-        if event_type in self._subscribers:
-            self._subscribers[event_type].remove(subscriber)
-            if not self._subscribers[event_type]:
-                del self._subscribers[event_type]
+    def unsubscribe(
+        self, event_type: str, subscriber: Callable[[str, T], None]
+    ) -> None:
+        """Remove a subscriber if registered for the event type."""
+        subscribers = self._subscribers.get(event_type)
+        if not subscribers or subscriber not in subscribers:
+            return
+        subscribers.remove(subscriber)
+        if not subscribers:
+            del self._subscribers[event_type]
 
-    async def publish(self, event_type: str, message: T):
+    async def publish(self, event_type: str, message: T) -> None:
         """
         Enqueue a message for dispatching (non-blocking).
 
         :param event_type: The type of event being published.
         :param message: The message payload to deliver.
         """
+        if (
+            self._stopped.is_set()
+            or self._dispatcher_task is None
+            or self._dispatcher_task.done()
+        ):
+            raise RuntimeError("EventPublisher is not running")
         await self._queue.put((event_type, message))
 
-    async def _dispatcher(self):
+    async def _dispatcher(self) -> None:
         """
         Dispatcher consumes events in strict FIFO order
         and processes subscribers synchronously to guarantee ordering.
@@ -103,21 +113,30 @@ class EventPublisher:
                                 await asyncio.get_running_loop().run_in_executor(
                                     None, subscriber, event_type, message
                                 )
-                        except Exception as e:
-                            print(f"Subscriber error: {e}")
+                        except Exception:
+                            logger.exception(
+                                "Subscriber %r failed for event %r",
+                                subscriber,
+                                event_type,
+                            )
             except asyncio.CancelledError:
                 break
 
-    def start(self):
+    def start(self) -> None:
         """
         Start the dispatcher loop (must be called inside an event loop).
         """
-        if self._dispatcher_task is None:
-            self._dispatcher_task = asyncio.create_task(self._dispatcher())
+        if self._dispatcher_task is not None:
+            if self._stopped.is_set():
+                raise RuntimeError("EventPublisher is stopping")
+            return
+        loop = asyncio.get_running_loop()
+        self._stopped.clear()
+        self._dispatcher_task = loop.create_task(self._dispatcher())
 
-    async def stop(self):
+    async def stop(self) -> None:
         """
-        Stop the dispatcher gracefully.
+        Cancel the current delivery, retaining queued events for the next start.
         """
         self._stopped.set()
         if self._dispatcher_task:

@@ -9,9 +9,8 @@ from marie.serve.networking.replica_list import _ReplicaList
 
 
 @pytest.fixture()
-def replica_list(logger, metrics):
+def replica_list(logger):
     return _ReplicaList(
-        metrics=metrics,
         histograms=_NetworkingHistograms(),
         logger=logger,
         runtime_name='test',
@@ -42,7 +41,7 @@ async def test_remove_connection(replica_list):
 @pytest.mark.asyncio
 async def test_reset_connection(replica_list):
     replica_list.add_connection('executor0', 'executor-0')
-    connection_stub = await replica_list.get_next_connection('executor0')
+    connection_stub = await replica_list.get_next_connection()
     await replica_list.reset_connection('executor0', 'executor-0')
     new_connection_stub = await replica_list.get_next_connection()
     assert len(replica_list.get_all_connections()) == 1

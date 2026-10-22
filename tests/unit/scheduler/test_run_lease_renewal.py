@@ -11,6 +11,7 @@ def build_scheduler(
     work_item: SimpleNamespace, job_info: SimpleNamespace
 ) -> PostgreSQLJobScheduler:
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.list_jobs = AsyncMock(return_value={work_item.id: work_item})
     scheduler.job_manager = SimpleNamespace(
         job_info_client=lambda: SimpleNamespace(
@@ -170,6 +171,7 @@ async def test_one_storage_error_does_not_block_other_renewals() -> None:
         side_effect=[RuntimeError("storage unavailable"), healthy_info]
     )
     scheduler = object.__new__(PostgreSQLJobScheduler)
+    scheduler.subscribed_queues = None
     scheduler.list_jobs = AsyncMock(
         return_value={failed.id: failed, healthy.id: healthy}
     )

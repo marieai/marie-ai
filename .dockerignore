@@ -20,3 +20,4 @@
 !wheels/**
 !patches/**
 !packages/**
+/docs/docs/guides/llm-dispatcher-setup.md

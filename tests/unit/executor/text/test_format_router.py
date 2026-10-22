@@ -273,3 +273,63 @@ def test_extract_frame_parse_failure_raises(monkeypatch):
     with pytest.raises(ValueError, match="malformed document"):
         ex.extract(_docs("s3://bucket/doc.png"), _params())
     assert pipeline.executed is False
+
+
+def test_preflight_loads_capabilities_at_startup(caplog):
+    plugins = _StubPlugins(formats=("docx", "pdf"))
+    ex = _bare_executor(plugins=plugins)
+
+    with caplog.at_level(logging.INFO, logger="test-extract"):
+        ex._preflight_document_extraction()
+
+    assert plugins.capability_requests == [PACKAGE]
+    assert ex.format_router.plugin_formats == frozenset({"docx", "pdf"})
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_preflight_reports_unconfigured_plugin_without_raising(caplog):
+    plugins = _StubPlugins(packages=())
+    ex = _bare_executor(plugins=plugins)
+
+    with caplog.at_level(logging.ERROR, logger="test-extract"):
+        ex._preflight_document_extraction()
+
+    assert plugins.capability_requests == []
+    assert "is not configured" in caplog.text
+
+
+def test_preflight_reports_plugin_failure_without_raising(caplog):
+    plugins = _StubPlugins()
+
+    def fail(package):
+        raise RuntimeError("plugin install failed: missing archive")
+
+    plugins.capabilities = fail
+    ex = _bare_executor(plugins=plugins)
+
+    with caplog.at_level(logging.ERROR, logger="test-extract"):
+        ex._preflight_document_extraction()
+
+    assert "missing archive" in caplog.text
+    assert ex._capabilities_loaded is False
+
+
+def test_preflight_reports_plugin_without_semantic_formats(caplog):
+    plugins = _StubPlugins(formats=())
+    ex = _bare_executor(plugins=plugins)
+
+    with caplog.at_level(logging.ERROR, logger="test-extract"):
+        ex._preflight_document_extraction()
+
+    assert "no semantic formats" in caplog.text
+
+
+def test_preflight_skips_plugin_when_disabled(caplog):
+    plugins = _StubPlugins()
+    ex = _bare_executor(plugins=plugins, enabled=False)
+
+    with caplog.at_level(logging.ERROR, logger="test-extract"):
+        ex._preflight_document_extraction()
+
+    assert plugins.capability_requests == []
+    assert caplog.text == ""

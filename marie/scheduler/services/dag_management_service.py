@@ -12,7 +12,11 @@ from marie.scheduler.memory_frontier import MemoryFrontier
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.state import WorkState
-from marie.scheduler.util import executor_name, is_control_flow_entrypoint
+from marie.scheduler.util import (
+    executor_name,
+    is_control_flow_entrypoint,
+    validate_queue_scope,
+)
 from marie.utils.scheduler_trace import scheduler_trace
 
 ADMISSION_OVERSCAN = 4
@@ -46,6 +50,8 @@ class DAGManagementService:
         resolution_retry_max_delay: float = 30.0,
         admission_batch_size: int = 100,
         sla_priority_interval_seconds: int = 15 * 60,
+        *,
+        subscribed_queues: frozenset[str] | None,
     ):
         """
         Initialize the DAG management service.
@@ -57,8 +63,11 @@ class DAGManagementService:
         """
         self.logger = MarieLogger(DAGManagementService.__name__)
         self.repository = repository
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self.frontier = frontier
         self.active_dags = active_dags
+        self._admitted_dags: dict[str, QueryPlan] = {}
         self._notify_callback = notify_callback
         self.max_active_dags = max_active_dags
         self._admission_lock = admission_lock or asyncio.Lock()
@@ -77,6 +86,7 @@ class DAGManagementService:
         self._admission_task: Optional[asyncio.Task] = None
         self._admission_running = False
         self._admission_source = "startup"
+        self._capacity_deferred_dag_ids: dict[str, None] = {}
 
         # Sync task
         self._sync_task: Optional[asyncio.Task] = None
@@ -167,6 +177,8 @@ class DAGManagementService:
 
     async def request_admission(self, source: str) -> bool:
         """Wake the single durable admission worker."""
+        if source in {"deployment_update", "executor_capacity_released"}:
+            self._capacity_deferred_dag_ids.clear()
         coalesced = self._admission_event.is_set()
         self._admission_source = source
         self._admission_event.set()
@@ -208,10 +220,18 @@ class DAGManagementService:
                 retry_delay = ADMISSION_RETRY_MIN_SECONDS
 
                 while self._admission_running:
+                    capacity_deferred_before = len(self._capacity_deferred_dag_ids)
                     result = await self.admit_durable_candidates(source=source)
                     if result["admitted"] == 0:
                         if result["deferred"] == 0:
                             break
+                        if (
+                            len(self._capacity_deferred_dag_ids)
+                            > capacity_deferred_before
+                        ):
+                            source = "capacity_scan"
+                            retry_delay = ADMISSION_RETRY_MIN_SECONDS
+                            continue
                         try:
                             await asyncio.wait_for(
                                 self._admission_event.wait(), timeout=retry_delay
@@ -282,13 +302,19 @@ class DAGManagementService:
         candidate_rows = await self.repository.discover_admission_candidates(
             limit=candidate_limit,
             sla_interval_seconds=self._sla_priority_interval_seconds,
-            excluded_dag_ids=tuple(self.active_dags),
+            excluded_dag_ids=(
+                *self.active_dags,
+                *self._capacity_deferred_dag_ids,
+            ),
+            subscribed_queues=self.subscribed_queues,
         )
         if not candidate_rows:
             return {"candidates": 0, "admitted": 0, "deferred": 0, "skipped": 0}
 
         candidate_ids = [str(dag_id) for dag_id, _ in candidate_rows]
-        job_rows = await self.repository.load_hydratable_jobs(candidate_ids)
+        job_rows = await self.repository.load_hydratable_jobs(
+            candidate_ids, subscribed_queues=self.subscribed_queues
+        )
         jobs_by_dag: dict[str, list[WorkInfo]] = defaultdict(list)
         skipped = 0
         for dag_id, job_dict in job_rows:
@@ -330,6 +356,7 @@ class DAGManagementService:
                 dag_id, dag, nodes, source=f"durable_admission:{source}"
             )
             if was_admitted:
+                self._capacity_deferred_dag_ids.pop(dag_id, None)
                 admitted += 1
                 scheduler_trace(
                     "dag_frontier_added",
@@ -342,7 +369,16 @@ class DAGManagementService:
                 if admitted >= target:
                     break
             else:
+                if reason in {
+                    "dag_missing",
+                    "invalid_queue_identity",
+                    "queue_not_subscribed",
+                }:
+                    skipped += 1
+                    continue
                 deferred += 1
+                if reason == "executor_capacity":
+                    self._capacity_deferred_dag_ids[dag_id] = None
                 scheduler_trace(
                     "dag_frontier_deferred",
                     dag_id=dag_id,
@@ -381,6 +417,11 @@ class DAGManagementService:
     ) -> tuple[bool, str]:
         async with self._admission_lock:
             if dag_id in self.active_dags:
+                reason = await self.consumption_rejection_reason(dag_id)
+                if reason:
+                    await self.evict_dag(dag_id, reason=reason)
+                    return False, reason
+                self._admitted_dags[dag_id] = self.active_dags[dag_id]
                 return True, "already_active"
 
             if (
@@ -403,7 +444,13 @@ class DAGManagementService:
                     )
                     return False, "executor_capacity"
 
-            if not await self.repository.mark_dag_as_active(dag_id):
+            if not await self.repository.mark_dag_as_active(
+                dag_id, subscribed_queues=self.subscribed_queues
+            ):
+                reason = await self.consumption_rejection_reason(dag_id)
+                if reason:
+                    await self.evict_dag(dag_id, reason=reason)
+                    return False, reason
                 try:
                     diagnostic = await self.repository.diagnose_dag_activation_failure(
                         dag_id
@@ -448,12 +495,34 @@ class DAGManagementService:
             if nodes is not None:
                 await self.frontier.add_dag(dag, nodes)
             self.active_dags[dag_id] = dag
+            self._admitted_dags[dag_id] = dag
             active_limit = self.max_active_dags or "unbounded"
             self.logger.info(
                 f"[dag] started dag_id={dag_id} source={source} "
                 f"active_dags={len(self.active_dags)}/{active_limit}"
             )
             return True, "admitted"
+
+    def is_admitted(self, dag_id: str) -> bool:
+        """Distinguish validated admission from an externally inserted cache entry."""
+        return (
+            dag_id in self.active_dags
+            and self._admitted_dags.get(dag_id) is self.active_dags[dag_id]
+        )
+
+    async def consumption_rejection_reason(self, dag_id: str) -> str | None:
+        """Check durable identity before a restricted consumer admits a DAG."""
+        if self.subscribed_queues is None:
+            return None
+        identity = await self.repository.get_dag_queue_identity(dag_id)
+        if identity is None:
+            return "dag_missing"
+        queue, consistent = identity
+        if not consistent:
+            return "invalid_queue_identity"
+        if queue not in self.subscribed_queues:
+            return "queue_not_subscribed"
+        return None
 
     async def hydrate_single_dag(self, dag_id: str) -> bool:
         """
@@ -466,7 +535,9 @@ class DAGManagementService:
             self.logger.debug(f"Hydrating single DAG from DB: {dag_id}")
 
             # Load DAG and jobs from repository
-            serialized_dag, job_rows = await self.repository.load_dag_and_jobs(dag_id)
+            serialized_dag, job_rows = await self.repository.load_dag_and_jobs(
+                dag_id, subscribed_queues=self.subscribed_queues
+            )
 
             if serialized_dag is None:
                 self.logger.warning(
@@ -550,6 +621,8 @@ class DAGManagementService:
             self._job_cache.pop(dag_job.id, None)
 
         removed = self.active_dags.pop(dag_id, None) is not None
+        self._admitted_dags.pop(dag_id, None)
+        self._capacity_deferred_dag_ids.pop(dag_id, None)
         self.logger.debug(
             f"Evicted DAG {dag_id} from memory ({reason}); "
             f"removed={removed}, finalize_stats={stats}"
@@ -617,6 +690,7 @@ class DAGManagementService:
             elif op == "UPDATE":
                 new_state = payload.get("state")
                 if new_state == "created":
+                    self._capacity_deferred_dag_ids.pop(dag_id, None)
                     removed = await self.evict_dag(dag_id, "reset to created")
                     await self.request_admission("dag_state_created")
                     admission_requested = True
@@ -806,6 +880,7 @@ class DAGManagementService:
 
     async def sync_once(self) -> None:
         if not self.active_dags:
+            await self.request_admission("dag_sync_deficit")
             scheduler_trace("scheduler_dag_sync_cycle_skipped", reason="no_active_dags")
             self.logger.debug("No active DAGs in memory to validate")
             return
@@ -819,6 +894,10 @@ class DAGManagementService:
         terminal_dags: set[str] = set()
         for dag_id in memory_dag_ids:
             try:
+                rejection = await self.consumption_rejection_reason(dag_id)
+                if rejection:
+                    await self.evict_dag(dag_id, reason=rejection)
+                    continue
                 dag_state = await self.repository.resolve_dag_state(dag_id)
                 if dag_state in {"completed", "failed"}:
                     terminal_dags.add(dag_id)
@@ -850,6 +929,9 @@ class DAGManagementService:
                 await self._notify_callback()
         else:
             self.logger.debug("All DAGs in memory are still valid")
+
+        if self.max_active_dags <= 0 or len(self.active_dags) < self.max_active_dags:
+            await self.request_admission("dag_sync_deficit")
 
         scheduler_trace(
             "scheduler_dag_sync_cycle_done",

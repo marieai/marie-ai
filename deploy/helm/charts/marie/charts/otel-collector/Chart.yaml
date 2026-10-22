@@ -1,0 +1,6 @@
+apiVersion: v2
+name: otel-collector
+description: OpenTelemetry Collector - receives OTLP from Marie services and writes to ClickHouse
+type: application
+version: 0.1.0
+appVersion: "0.149.0"

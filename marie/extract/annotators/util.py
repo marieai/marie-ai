@@ -1,10 +1,16 @@
 import asyncio
+import copy
+import hashlib
 import json
 import logging
 import os
 import os.path
+import shutil
 import threading
-from dataclasses import dataclass
+import time
+import uuid
+from contextlib import nullcontext
+from dataclasses import asdict, dataclass
 from threading import Lock
 from typing import (
     TYPE_CHECKING,
@@ -19,10 +25,20 @@ from typing import (
 )
 
 from marie.engine import EngineLM
-from marie.engine.completion_contract import RequestContext
-from marie.engine.engine_utils import smart_resize
+from marie.engine.completion_contract import CompletionCallParams, RequestContext
+from marie.engine.completion_observer import CompletionAttempt
+from marie.engine.engine_utils import (
+    as_bytes,
+    check_image_preparation_budget,
+    smart_resize,
+)
+from marie.engine.exceptions import BatchExecutionError
 from marie.engine.llm_ops import LLMCall
-from marie.engine.llm_queue.config import DEFAULT_LLM_QUEUE_POOL_ID
+from marie.engine.llm_queue.config import (
+    LlmQueueProducerConfig,
+    llm_queue_enabled,
+    resolve_fabric_id,
+)
 from marie.engine.multimodal_ops import MultimodalLLMCall
 from marie.engine.openai_engine import OpenAIEngine
 from marie.engine.output_parser import (
@@ -38,8 +54,6 @@ from marie.extract.structures.unstructured_document import UnstructuredDocument
 from marie.helper import run_async
 from marie.logging_core.predefined import default_logger as logger
 from marie.prompt.template import PromptTemplate
-from marie.utils.docs import frames_from_file
-from marie.utils.types import to_bool
 from marie.utils.utils import batchify
 
 if TYPE_CHECKING:
@@ -84,7 +98,7 @@ def _extract_page_number_from_filename(filename: str) -> Optional[int]:
 
 
 def _build_request_contexts(
-    batch_mapping: Dict[int, Tuple[Image.Image, str, str, str]],
+    batch_mapping: Dict[int, Tuple[Image.Image | None, str, str, str]],
     request_context: Optional[RequestContext],
 ) -> Optional[List[RequestContext | None]]:
     """Expand a base request context into one context per batch item."""
@@ -98,7 +112,9 @@ def _build_request_contexts(
         page_number = _extract_page_number_from_filename(os.path.basename(image_path))
 
         if (
-            request_context.ref_id
+            request_context.job_id
+            or request_context.work_unit_id
+            or request_context.ref_id
             or request_context.ref_type
             or page_number is not None
             or request_context.requested_pages is not None
@@ -106,6 +122,8 @@ def _build_request_contexts(
             has_context = True
             contexts.append(
                 RequestContext(
+                    job_id=request_context.job_id,
+                    work_unit_id=request_context.work_unit_id,
                     ref_id=request_context.ref_id,
                     ref_type=request_context.ref_type,
                     page_number=(
@@ -137,19 +155,9 @@ def load_prompt(prompt_file: str) -> str:
 
 
 # Module-level engine cache to prevent orphaned AsyncClient instances
-_engine_cache: Dict[Tuple[str, bool, bool, Optional[str], str], EngineLM] = {}
+_engine_cache: Dict[tuple, EngineLM] = {}
+_engine_cache_pid = os.getpid()
 _engine_lock = Lock()
-
-
-def _resolve_queue_pool_id_env() -> str:
-    pool_id = os.environ.get("LLM_QUEUE_POOL_ID")
-    if not pool_id:
-        return DEFAULT_LLM_QUEUE_POOL_ID
-
-    pool_id = pool_id.strip()
-    if not pool_id or pool_id.startswith("$"):
-        return DEFAULT_LLM_QUEUE_POOL_ID
-    return pool_id
 
 
 def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
@@ -161,26 +169,44 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
     :param is_multimodal: Flag indicating if the model is multimodal.
     :return: An instance of the appropriate EngineLM class.
     """
-    queue_enabled = to_bool(os.environ.get("LLM_QUEUE_ENABLED"), False)
-    queue_valkey_url = os.environ.get("LLM_QUEUE_VALKEY_URL")
-    queue_pool_id = _resolve_queue_pool_id_env()
+    global _engine_cache, _engine_lock, _engine_cache_pid
+    if _engine_cache_pid != os.getpid():
+        _engine_cache_pid = os.getpid()
+        _engine_cache = {}
+        _engine_lock = Lock()
+    queue_enabled = llm_queue_enabled()
+    queue_config = LlmQueueProducerConfig.from_env(
+        enabled=queue_enabled,
+    )
+    queue_url = queue_config.queue_url
+    recovery_identity = ()
+    fabric = queue_config.fabric_group_id
+    if queue_enabled:
+        fabric = resolve_fabric_id(fabric)
+        recovery_identity = (
+            fabric,
+            queue_config.producer_ttl_seconds,
+            queue_config.producer_refresh_interval_seconds,
+            queue_config.max_buffered_requests,
+            float(os.getenv('LLM_BATCH_TIMEOUT_S', '900')),
+        )
     cache_key = (
         model_name,
         is_multimodal,
         queue_enabled,
-        queue_valkey_url,
-        queue_pool_id,
+        queue_url,
+        recovery_identity,
     )
 
     with _engine_lock:
         if cache_key in _engine_cache:
             logger.info(
-                "Reusing engine model=%s multimodal=%s queue_enabled=%s queue_pool=%s valkey_configured=%s",
+                "Reusing engine model=%s multimodal=%s queue_enabled=%s "
+                "queue_configured=%s",
                 model_name,
                 is_multimodal,
                 queue_enabled,
-                queue_pool_id,
-                bool(queue_valkey_url),
+                bool(queue_url),
             )
             return _engine_cache[cache_key]
 
@@ -197,18 +223,17 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
             is_multimodal=is_multimodal,
             cache=False,
             queue_enabled=queue_enabled,
-            queue_valkey_url=queue_valkey_url,
-            queue_pool_id=queue_pool_id,
+            queue_url=queue_url,
+            queue_fabric_group_id=fabric,
         )
 
         _engine_cache[cache_key] = engine
         logger.info(
-            "Engine created model=%s multimodal=%s queue_enabled=%s queue_pool=%s valkey_configured=%s",
+            "Engine created model=%s multimodal=%s queue_enabled=%s queue_configured=%s",
             model_name,
             is_multimodal,
             queue_enabled,
-            queue_pool_id,
-            bool(queue_valkey_url),
+            bool(queue_url),
         )
         return engine
 
@@ -266,7 +291,7 @@ def preprocess_images_for_inference(
 
 
 def _write_single_result(
-    b_image: Image.Image,
+    b_image: Image.Image | None,
     b_prompt: str,
     b_image_path: str,
     task_id: str,
@@ -298,7 +323,8 @@ def _write_single_result(
 
     # Save the image
     try:
-        b_image.save(output_filename)
+        if b_image is not None:
+            b_image.save(output_filename)
     except Exception as e:
         logger.error(f"Failed to save image {output_filename}: {e}")
 
@@ -390,6 +416,103 @@ def _write_single_result(
         raise ValueError(f"Unknown expect_output type: {expect_output}")
 
 
+def _write_bytes_exclusively(path: str, payload: bytes) -> None:
+    with open(path, "xb") as f:
+        f.write(payload)
+
+
+def _write_json_exclusively(path: str, value: Any) -> None:
+    payload = json.dumps(value, indent=2, ensure_ascii=False).encode("utf-8")
+    _write_bytes_exclusively(path, payload)
+
+
+def _write_json_atomically(path: str, value: Dict[str, Any]) -> None:
+    payload = json.dumps(value, indent=2, ensure_ascii=False).encode("utf-8")
+    temp_path = os.path.join(
+        os.path.dirname(path),
+        f".{os.path.basename(path)}.{uuid.uuid4().hex}.tmp",
+    )
+    try:
+        with open(temp_path, "xb") as f:
+            f.write(payload)
+        os.replace(temp_path, path)
+    finally:
+        try:
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def _sha256(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _persist_request_evidence(
+    directory: str,
+    image: Image.Image,
+    prompt: str,
+    image_path: str,
+    system_prompt: Optional[str],
+    annotator_conf: Dict[str, Any],
+    unit: "ProcessingUnit",
+    request_context: Optional[RequestContext],
+) -> None:
+    os.makedirs(directory, exist_ok=False)
+    image_bytes = as_bytes(image)
+    config_bytes = json.dumps(
+        annotator_conf, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    _write_bytes_exclusively(os.path.join(directory, "image.png"), image_bytes)
+    _write_json_exclusively(
+        os.path.join(directory, "request.json"),
+        {
+            "prompt": prompt,
+            "prompt_sha256": _sha256(prompt.encode("utf-8")),
+            "system_prompt": system_prompt,
+            "system_prompt_sha256": _sha256((system_prompt or "").encode("utf-8")),
+            "annotator_conf": annotator_conf,
+            "annotator_conf_sha256": _sha256(config_bytes),
+            "image_path": image_path,
+            "processing_unit": asdict(unit),
+            "source_identity": asdict(request_context) if request_context else None,
+            "image": {
+                "encoding": "RGB PNG",
+                "width": image.width,
+                "height": image.height,
+                "byte_count": len(image_bytes),
+                "sha256": _sha256(image_bytes),
+            },
+        },
+    )
+
+
+def _persist_attempt_evidence(
+    *,
+    output_path: str,
+    attempt: CompletionAttempt,
+    request_dir: str,
+) -> None:
+    task_dir = os.path.join(output_path, "attempts", attempt.task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    for name in ("request.json", "image.png"):
+        destination = os.path.join(task_dir, name)
+        if not os.path.exists(destination):
+            os.link(os.path.join(request_dir, name), destination)
+    _write_json_exclusively(
+        os.path.join(task_dir, f"attempt-{attempt.attempt_number:04d}.json"),
+        asdict(attempt),
+    )
+
+
+def _handled_result_path(
+    image_path: str,
+    output_path: str,
+    output_suffix: str,
+) -> str:
+    stem = os.path.splitext(os.path.basename(image_path))[0]
+    return os.path.join(output_path, f"{stem}{output_suffix}.json")
+
+
 async def process_batch(
     batch: List,
     engine: EngineLM,
@@ -400,6 +523,16 @@ async def process_batch(
     metadata: Optional[Dict[str, Any]] = None,
     request_context: Optional[RequestContext] = None,
     system_prompt: Optional[str] = None,
+    mm_processor_kwargs: Optional[Dict[str, Any]] = None,
+    prepare_item: Optional[Callable[[int], list]] = None,
+    preparation_lock: Optional[Lock] = None,
+    cancellation: Optional[threading.Event] = None,
+    response_handler: Optional[Callable[..., Dict[str, Any]]] = None,
+    processing_units: Optional[List[Optional["ProcessingUnit"]]] = None,
+    document: Optional[UnstructuredDocument] = None,
+    run_context: Any = None,
+    annotator_conf: Optional[Dict[str, Any]] = None,
+    prompt_template: Optional[str] = None,
 ) -> list[Any] | None:
     """
     Processes a batch of images using the specified engine.
@@ -418,6 +551,11 @@ async def process_batch(
         request_context: Optional source provenance applied to each request. The
             per-item page number is derived from each image filename when possible.
         system_prompt: Optional system instruction for every request in the batch.
+        mm_processor_kwargs: Image options forwarded unchanged to the formatter.
+        prepare_item: Internal consuming queued-dispatch scanner seam. The batch contains only
+            output metadata; this callback prepares one owned image on demand.
+        preparation_lock: Scanner-shared lock held through preparation and encoding.
+        cancellation: Scanner-shared cancellation signal for queued calls.
 
     Returns:
         List of converted results in original order
@@ -427,6 +565,44 @@ async def process_batch(
 
     if expect_output is None:
         raise ValueError("expect_output must be specified.")
+    if not batch:
+        return []
+    if response_handler is not None:
+        if processing_units is None or len(processing_units) != len(batch):
+            raise ValueError(
+                "response_handler requires one ProcessingUnit for every batch item"
+            )
+        if document is None or annotator_conf is None:
+            raise ValueError(
+                "response_handler requires document and annotator configuration"
+            )
+    effective_system_prompt = system_prompt or getattr(engine, "system_prompt", None)
+    if response_handler is not None:
+        processing_units = copy.deepcopy(processing_units)
+        annotator_conf = copy.deepcopy(annotator_conf)
+    request_root = os.path.join(output_path, "requests", uuid.uuid4().hex)
+    request_dirs: Dict[int, str] = {}
+
+    def bind_request(
+        index: int, image: Image.Image, prompt_text: str, image_path: str
+    ) -> None:
+        if response_handler is None:
+            return
+        unit = processing_units[index]
+        if unit is None:
+            raise ValueError("response_handler requires an actual ProcessingUnit")
+        directory = os.path.join(request_root, str(index))
+        _persist_request_evidence(
+            directory,
+            image,
+            prompt_text,
+            image_path,
+            effective_system_prompt,
+            annotator_conf,
+            unit,
+            request_contexts[index] if request_contexts else None,
+        )
+        request_dirs[index] = directory
 
     if is_multimodal:
         llm_call = MultimodalLLMCall(engine, system_prompt=system_prompt)
@@ -435,7 +611,7 @@ async def process_batch(
 
     # Build mapping from batch index to the image/prompt/output tuple.
     # batch is a list of tuples: (image, prompt, image_path) or (image, prompt, image_path, output_suffix)
-    batch_mapping: Dict[int, Tuple[Image.Image, str, str, str]] = {}
+    batch_mapping: Dict[int, Tuple[Image.Image | None, str, str, str]] = {}
     for i, item in enumerate(batch):
         if len(item) == 4:
             b_image, b_prompt, b_image_path, output_suffix = item
@@ -448,6 +624,90 @@ async def process_batch(
     converted: List[Optional[Any]] = [None] * len(batch)
     write_lock = threading.Lock()
     write_errors: List[Exception] = []
+    attempts_by_task: Dict[str, List[CompletionAttempt]] = {}
+
+    def on_attempt(attempt: CompletionAttempt) -> None:
+        idx = int(attempt.task_id.rsplit("_", 1)[-1])
+        if idx not in batch_mapping:
+            raise ValueError(f"Unknown task index {idx} from task_id {attempt.task_id}")
+        with write_lock:
+            _persist_attempt_evidence(
+                output_path=output_path, attempt=attempt, request_dir=request_dirs[idx]
+            )
+            attempts_by_task.setdefault(attempt.task_id, []).append(attempt)
+
+    def handle_response(
+        task_id: str,
+        response: Optional[str],
+        error: Optional[Exception],
+        *,
+        require_attempts: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        idx = int(task_id.rsplit("_", 1)[-1])
+        if idx not in batch_mapping:
+            raise ValueError(f"Unknown task index {idx} from task_id {task_id}")
+        image, prompt_text, image_path, output_suffix = batch_mapping[idx]
+        unit = processing_units[idx] if processing_units is not None else None
+        if unit is None:
+            raise ValueError("response_handler requires an actual ProcessingUnit")
+        attempts = tuple(attempts_by_task.get(task_id, ()))
+        if require_attempts and not attempts:
+            raise ValueError(f"No transport attempt evidence recorded for {task_id}")
+
+        handler_response = response
+        if error is None:
+            successful_attempt = next(
+                (attempt for attempt in reversed(attempts) if attempt.error is None),
+                None,
+            )
+            if successful_attempt is None:
+                raise ValueError(
+                    f"No successful transport attempt recorded for {task_id}"
+                )
+            handler_response = successful_attempt.raw_response
+
+        with preparation_lock if preparation_lock is not None else nullcontext():
+            image_path_evidence = os.path.join(request_dirs[idx], "image.png")
+            with open(
+                os.path.join(request_dirs[idx], "request.json"), encoding="utf-8"
+            ) as evidence_file:
+                request_evidence = json.load(evidence_file)
+            with open(image_path_evidence, "rb") as evidence_file:
+                if (
+                    hashlib.file_digest(evidence_file, "sha256").hexdigest()
+                    != request_evidence["image"]["sha256"]
+                ):
+                    raise ValueError(
+                        "Prepared image evidence changed before validation"
+                    )
+            with Image.open(os.path.join(request_dirs[idx], "image.png")) as image:
+                result = response_handler(
+                    response=handler_response,
+                    prompt=prompt_text,
+                    prompt_template=prompt_template,
+                    image_path=image_path,
+                    image=image,
+                    unit=unit,
+                    document=document,
+                    run_context=run_context,
+                    annotator_conf=annotator_conf,
+                    attempts=attempts,
+                    error=error,
+                    output_path=output_path,
+                )
+        if error is not None:
+            return None
+        if not isinstance(result, dict):
+            raise TypeError("response_handler must return a dict")
+        stem = os.path.splitext(os.path.basename(image_path))[0] + output_suffix
+        shutil.copyfile(
+            os.path.join(request_dirs[idx], "image.png"),
+            os.path.join(output_path, f"{stem}.png"),
+        )
+        _write_json_atomically(
+            _handled_result_path(image_path, output_path, output_suffix), result
+        )
+        return result
 
     def on_result(task_id: str, response: Optional[str]) -> None:
         """
@@ -466,17 +726,19 @@ async def process_batch(
 
             logger.info(f"Task {task_id} completed - Writing result immediately")
 
-            # Write result to disk
-            result = _write_single_result(
-                b_image=b_image,
-                b_prompt=b_prompt,
-                b_image_path=b_image_path,
-                task_id=task_id,
-                response=response,
-                output_path=output_path,
-                expect_output=expect_output,
-                output_suffix=output_suffix,
-            )
+            if response_handler is not None:
+                result = handle_response(task_id, response, None)
+            else:
+                result = _write_single_result(
+                    b_image=b_image,
+                    b_prompt=b_prompt,
+                    b_image_path=b_image_path,
+                    task_id=task_id,
+                    response=response,
+                    output_path=output_path,
+                    expect_output=expect_output,
+                    output_suffix=output_suffix,
+                )
 
             # Store result in thread-safe manner
             with write_lock:
@@ -488,6 +750,8 @@ async def process_batch(
                 write_errors.append(e)
 
     call_kwargs = {"max_tokens": 4096 * 4, "on_result": on_result}
+    if mm_processor_kwargs is not None:
+        call_kwargs["mm_processor_kwargs"] = mm_processor_kwargs
     if completion_params:
         call_kwargs["completion_params"] = completion_params
     if metadata:
@@ -496,18 +760,108 @@ async def process_batch(
         batch_mapping,
         request_context,
     )
+    if response_handler is not None:
+        for index, (image, prompt_text, image_path, _) in batch_mapping.items():
+            if image is not None:
+                bind_request(index, image, prompt_text, image_path)
     if request_contexts:
         call_kwargs["request_contexts"] = request_contexts
+    if response_handler is not None:
+        call_kwargs["attempt_observer"] = on_attempt
 
-    if is_multimodal:
-        batch_t = [[b[0], b[1]] for b in batch]
-        responses = await llm_call.acall(batch_t, **call_kwargs)
-    else:
-        batch_t = [b[1] for b in batch]
-        responses = await llm_call.acall(batch_t, **call_kwargs)
+    try:
+        if prepare_item is not None:
+            from marie.engine.llm_queue.producer import PreparedCalls
 
-    if write_errors:
-        raise write_errors[0]
+            if not engine.batch_processor.uses_queued_dispatch:
+                raise ValueError("Lazy image preparation requires queued dispatch")
+            cancellation = cancellation or threading.Event()
+            deadline = time.monotonic() + engine.batch_processor.batch_timeout
+            build_kwargs = {"completion_params": completion_params}
+            if mm_processor_kwargs is not None:
+                build_kwargs["mm_processor_kwargs"] = mm_processor_kwargs
+
+            def prepare(index: int) -> CompletionCallParams:
+                with preparation_lock:
+                    item = prepare_item(index)
+                    image, prompt_text, image_path, suffix = item
+                    try:
+                        stem = (
+                            os.path.splitext(os.path.basename(image_path))[0] + suffix
+                        )
+                        bind_request(index, image, prompt_text, image_path)
+                        if response_handler is None:
+                            image.save(os.path.join(output_path, f"{stem}.png"))
+                        batch_mapping[index] = (None, prompt_text, image_path, suffix)
+                        return engine._build_completion_calls(
+                            batch_content=[
+                                [image, prompt_text] if is_multimodal else prompt_text
+                            ],
+                            system_prompt=system_prompt,
+                            request_contexts=(
+                                [request_contexts[index]] if request_contexts else None
+                            ),
+                            **build_kwargs,
+                        )[0]
+                    finally:
+                        image.close()
+                        item.clear()
+
+            validation_call = engine._build_completion_calls(
+                batch_content=[[] if is_multimodal else ""],
+                system_prompt=system_prompt,
+                **build_kwargs,
+            )[0]
+            calls = PreparedCalls(len(batch), prepare, validation_call)
+            try:
+                responses = await asyncio.to_thread(
+                    engine.batch_processor.batch_generate_calls,
+                    calls=calls,
+                    on_result=on_result,
+                    metadata=metadata,
+                    queue_deadline=deadline,
+                    cancellation=cancellation,
+                    **(
+                        {"attempt_observer": on_attempt}
+                        if response_handler is not None
+                        else {}
+                    ),
+                )
+            except asyncio.CancelledError:
+                cancellation.set()
+                raise
+        elif is_multimodal:
+            batch_t = [[b[0], b[1]] for b in batch]
+            responses = await llm_call.acall(batch_t, **call_kwargs)
+        else:
+            batch_t = [b[1] for b in batch]
+            responses = await llm_call.acall(batch_t, **call_kwargs)
+
+        if write_errors:
+            raise write_errors[0]
+    except BatchExecutionError as exc:
+        if response_handler is not None:
+            handler_errors: List[Exception] = []
+            for failed in exc.failed_results:
+                try:
+                    handle_response(
+                        failed.task_id,
+                        None,
+                        failed.error,
+                        require_attempts=False,
+                    )
+                except Exception as handler_error:
+                    handler_errors.append(handler_error)
+            if handler_errors:
+                exc.add_note(
+                    "response_handler also failed while recording batch failure: "
+                    f"{type(handler_errors[0]).__name__}: {handler_errors[0]}"
+                )
+                raise exc from handler_errors[0]
+        raise
+    finally:
+        # Callbacks may fail before the LLM call itself raises.
+        write_errors.clear()
 
     assert isinstance(responses, list), "Expected a list of responses."
     assert len(responses) == len(batch), (
@@ -523,6 +877,8 @@ def _prompt_lines_by_page(
     from marie.components.document_taxonomy.verbalizers import verbalizers
 
     extraction = doc.source_metadata.get("extraction", {})
+    if not isinstance(extraction, dict):
+        extraction = {}
     semantic_text = (
         extraction.get("result_kind") == "semantic_document"
         and extraction.get("ocr_invoked") is False
@@ -657,7 +1013,6 @@ def prepare_batch_with_meta(
 def prepare_batch_with_meta_units(
     file_batch: List[str],
     units_by_index: Dict[int, Optional["ProcessingUnit"]],
-    frames: list[ndarray],
     doc: UnstructuredDocument,
     prompt: PromptTemplate,
     source_dir: str,
@@ -673,7 +1028,6 @@ def prepare_batch_with_meta_units(
     Args:
         file_batch: List of filenames in the batch
         units_by_index: Mapping from batch index to ProcessingUnit (None for legacy mode)
-        frames: List of image frames (numpy arrays)
         doc: The UnstructuredDocument being processed
         prompt: The prompt template
         source_dir: Directory containing the image files
@@ -813,6 +1167,9 @@ def scan_and_process_images(
     metadata: Optional[Dict[str, Any]] = None,
     request_context: Optional[RequestContext] = None,
     system_prompt: Optional[str] = None,
+    response_handler: Optional[Callable[..., Dict[str, Any]]] = None,
+    run_context: Any = None,
+    annotator_conf: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Synchronous wrapper for the ascan_and_process_images function.
@@ -857,6 +1214,9 @@ def scan_and_process_images(
         metadata=metadata,
         request_context=request_context,
         system_prompt=system_prompt,
+        response_handler=response_handler,
+        run_context=run_context,
+        annotator_conf=annotator_conf,
     )
 
     return run_async(coroutine)
@@ -930,6 +1290,9 @@ async def ascan_and_process_images(
     metadata: Optional[Dict[str, Any]] = None,
     request_context: Optional[RequestContext] = None,
     system_prompt: Optional[str] = None,
+    response_handler: Optional[Callable[..., Dict[str, Any]]] = None,
+    run_context: Any = None,
+    annotator_conf: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Scans the source directory for image files, processes each image
@@ -966,6 +1329,8 @@ async def ascan_and_process_images(
         f for f in os.listdir(source_dir) if f.lower().endswith((".png", ".tif"))
     )
     if not all_files:
+        if response_handler is not None:
+            raise ValueError("response_handler requires source frames")
         logging.info("No images found in %s; nothing to do.", source_dir)
         return
 
@@ -989,6 +1354,10 @@ async def ascan_and_process_images(
         )
 
         if not processing_units:
+            if response_handler is not None:
+                raise ValueError(
+                    "response_handler requires at least one processing unit"
+                )
             logging.info("No processing units from context providers; nothing to do.")
             return
 
@@ -998,6 +1367,10 @@ async def ascan_and_process_images(
             if file_name:
                 processing_items.append(ProcessingItem(file_name=file_name, unit=unit))
             else:
+                if response_handler is not None:
+                    raise ValueError(
+                        f"No frame found for processing unit page {unit.page_number}"
+                    )
                 logging.warning(
                     "No file found for page %d (unit index=%s)",
                     unit.page_number,
@@ -1043,11 +1416,20 @@ async def ascan_and_process_images(
             logging.info("No processing items to process; nothing to do.")
             return
 
-    pending_items = [
-        item
-        for item in processing_items
-        if not _has_completed_item(item, output_dir, expect_output)
-    ]
+    if response_handler is not None and any(
+        item.unit is None for item in processing_items
+    ):
+        raise ValueError("response_handler requires actual ProcessingUnit values")
+
+    pending_items = (
+        processing_items
+        if response_handler is not None
+        else [
+            item
+            for item in processing_items
+            if not _has_completed_item(item, output_dir, expect_output)
+        ]
+    )
     completed_count = len(processing_items) - len(pending_items)
     if completed_count:
         logging.info(
@@ -1059,12 +1441,17 @@ async def ascan_and_process_images(
         return
     processing_items = pending_items
 
-    # Load frames for unique files
-    unique_files = list(dict.fromkeys(item.file_name for item in processing_items))
-    file_to_frame = {
-        f: frames_from_file(os.path.join(source_dir, f))[0] for f in unique_files
-    }
-    frames = [file_to_frame[item.file_name] for item in processing_items]
+    batch_processor = getattr(engine, "batch_processor", None)
+    uses_queued_dispatch = getattr(batch_processor, "uses_queued_dispatch", False)
+    scan_cancellation = threading.Event() if uses_queued_dispatch else None
+    preparation_lock = threading.Lock()
+    if uses_queued_dispatch:
+        # One source decode, prepared RGB and formatter copy; no image resize.
+        for item in processing_items:
+            with Image.open(os.path.join(source_dir, item.file_name)) as image:
+                check_image_preparation_budget([image])
+        request_limit = batch_processor.max_concurrency
+        mini_batch_size = min(mini_batch_size, request_limit)
 
     batched_items = list(batchify(processing_items, mini_batch_size))
     logging.info(
@@ -1078,10 +1465,57 @@ async def ascan_and_process_images(
         file_batch = [item.file_name for item in batch]
         units_by_index = {i: item.unit for i, item in enumerate(batch)}
 
+        if uses_queued_dispatch:
+
+            def prepare(index: int) -> list:
+                gen = prepare_batch_with_meta_units(
+                    file_batch=[file_batch[index]],
+                    units_by_index={0: units_by_index[index]},
+                    doc=document,
+                    prompt=prompt,
+                    source_dir=source_dir,
+                    context_manager=context_manager,
+                    mm_processor_kwargs=mm_processor_kwargs,
+                )
+                try:
+                    return next(gen)[0]
+                finally:
+                    gen.close()
+
+            await process_batch(
+                [
+                    (
+                        None,
+                        "",
+                        os.path.join(source_dir, item.file_name),
+                        item.output_suffix,
+                    )
+                    for item in batch
+                ],
+                engine,
+                output_dir,
+                is_multimodal=is_multimodal,
+                expect_output=expect_output,
+                completion_params=completion_params,
+                metadata=metadata,
+                request_context=request_context,
+                system_prompt=system_prompt,
+                mm_processor_kwargs=mm_processor_kwargs,
+                prepare_item=prepare,
+                preparation_lock=preparation_lock,
+                cancellation=scan_cancellation,
+                response_handler=response_handler,
+                processing_units=[item.unit for item in batch],
+                document=document,
+                run_context=run_context,
+                annotator_conf=annotator_conf,
+                prompt_template=prompt.source if response_handler is not None else None,
+            )
+            return
+
         gen = prepare_batch_with_meta_units(
             file_batch=file_batch,
             units_by_index=units_by_index,
-            frames=frames,
             doc=document,
             prompt=prompt,
             source_dir=source_dir,
@@ -1104,6 +1538,13 @@ async def ascan_and_process_images(
                 metadata=metadata,
                 request_context=request_context,
                 system_prompt=system_prompt,
+                mm_processor_kwargs=mm_processor_kwargs,
+                response_handler=response_handler,
+                processing_units=[item.unit for item in batch],
+                document=document,
+                run_context=run_context,
+                annotator_conf=annotator_conf,
+                prompt_template=prompt.source if response_handler is not None else None,
             )
 
     batch_processor = getattr(engine, "batch_processor", None)
@@ -1112,7 +1553,11 @@ async def ascan_and_process_images(
         request_limit = mini_batch_size
     worker_count = min(
         len(batched_items),
-        max(1, (request_limit + mini_batch_size - 1) // mini_batch_size),
+        (
+            max(1, request_limit // mini_batch_size)
+            if uses_queued_dispatch
+            else max(1, (request_limit + mini_batch_size - 1) // mini_batch_size)
+        ),
     )
 
     batches = iter(batched_items)
@@ -1130,10 +1575,20 @@ async def ascan_and_process_images(
                 await _process_mini_batch(batch)
             except Exception as exc:
                 errors.append(exc)
+                if scan_cancellation is not None:
+                    scan_cancellation.set()
                 stop.set()
 
-    await asyncio.gather(*(_batch_worker() for _ in range(worker_count)))
-    if errors:
-        raise errors[0]
+    try:
+        await asyncio.gather(*(_batch_worker() for _ in range(worker_count)))
+        if errors:
+            raise errors[0]
+    except asyncio.CancelledError:
+        if scan_cancellation is not None:
+            scan_cancellation.set()
+        raise
+    finally:
+        # Tracebacks retain this frame; clear saved errors on every exit.
+        errors.clear()
 
     logging.debug("All image batches have been processed.")

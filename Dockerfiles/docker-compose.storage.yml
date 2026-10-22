@@ -18,7 +18,10 @@ services:
     container_name: marie-psql-server
     init: true
     shm_size: 1gb
-    image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
+    image: marie-postgres-documentdb:17-0.103.0-repack-1.5.3
+    build:
+      context: ./Dockerfiles/postgres
+    pull_policy: build
     command: >
       postgres
       -c max_connections=500
@@ -40,7 +43,7 @@ services:
       - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb_core,pg_documentdb
     volumes:
       - psql_data:/var/lib/postgresql/data
-      - /mnt/data/marie-ai/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ${DATA_DIR:-/mnt/data/marie-ai}/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - marie_default
 volumes:

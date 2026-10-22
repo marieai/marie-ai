@@ -18,7 +18,8 @@ replicas_for() {
   ' "${manifest}"
 }
 
-workloads=(lifecycle-proof-server lifecycle-proof-executor-default-local)
+# Executor identity for namespace m3-lifecycle-proof, release lifecycle-proof, pool default-local.
+workloads=(lifecycle-proof-server ex-619d196d7e98188632cb539c)
 infrastructure=(
   lifecycle-proof-gitea
   lifecycle-proof-postgresql
@@ -27,6 +28,9 @@ infrastructure=(
   lifecycle-proof-valkey
   lifecycle-proof-minio
   lifecycle-proof-clickhouse
+  lifecycle-proof-otel-collector
+  lifecycle-proof-ferretdb
+  lifecycle-proof-hyperdx
 )
 
 for phase in infrastructure migrating active suspended; do
@@ -60,9 +64,9 @@ for phase in infrastructure migrating active suspended; do
   if [[ "${phase}" == suspended ]]; then
     test "${provisioning_jobs}" -eq 0
   elif [[ "${phase}" == migrating ]]; then
-    test "${provisioning_jobs}" -eq 2
+    test "${provisioning_jobs}" -eq 3
   else
-    test "${provisioning_jobs}" -eq 1
+    test "${provisioning_jobs}" -eq 2
   fi
 done
 

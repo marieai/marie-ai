@@ -11,17 +11,17 @@ from marie.scheduler.memory_frontier import MemoryFrontier
 
 
 def wi_factory(
-        jid: str,
-        *,
-        dag_id: str = "D1",
-        name: str = "job",
-        job_level: int = 0,
-        priority: int = 1,
-        state: str = "created",
-        soft_sla=None,
-        hard_sla=None,
-        deps=None,
-        executor: str = "exe://default",
+    jid: str,
+    *,
+    dag_id: str = "D1",
+    name: str = "job",
+    job_level: int = 0,
+    priority: int = 1,
+    state: str = "created",
+    soft_sla=None,
+    hard_sla=None,
+    deps=None,
+    executor: str = "exe://default",
 ):
     """Duck-typed WorkInfo with only the fields MemoryFrontier touches."""
     return NS(
@@ -71,7 +71,7 @@ async def test_ordering_level_priority_age(frontier: MemoryFrontier):
 
 @pytest.mark.asyncio
 async def test_executor_work_outranks_control_flow_when_priority_and_sla_match(
-        frontier: MemoryFrontier,
+    frontier: MemoryFrontier,
 ):
     """
     Ready executor work should outrank control-flow wrappers for equal
@@ -196,8 +196,7 @@ async def test_capture_ready_lets_planner_fill_skewed_executor_capacity(
     slots = {"executor_a": 1, "executor_b": 1}
     global_prefix = await frontier.peek_ready(72)
     engine = InMemorySchedulingEngine(
-        frontier,
-        sla_priority_interval_seconds=60,
+        frontier, sla_priority_interval_seconds=60, subscribed_queues=None
     )
     selection = await engine.select_ready(
         slots_by_executor=slots,
@@ -350,7 +349,10 @@ async def test_select_ready_scan_budget_skips_blocked_heads(frontier: MemoryFron
     """
     # First 5 jobs are for an executor with 0 slots (blocked), last 2 are runnable
     blocked = [wi_factory(f"B{i}", executor="exe://blocked") for i in range(5)]
-    runnable = [wi_factory("OK1", executor="exe://ok"), wi_factory("OK2", executor="exe://ok")]
+    runnable = [
+        wi_factory("OK1", executor="exe://ok"),
+        wi_factory("OK2", executor="exe://ok"),
+    ]
     await add_ready_jobs(frontier, *(blocked + runnable))
 
     # Filter that rejects blocked executor
@@ -430,7 +432,7 @@ async def test_summary_includes_sla_snapshot(frontier: MemoryFrontier):
 
     await add_ready_jobs(frontier, overdue_hard, overdue_soft, approaching, completed)
 
-    summary = frontier.summary(detail=True, top_n=3)
+    summary = await frontier.summary(detail=True, top_n=3)
     sla = summary["sla"]
 
     assert sla["tracked"] == 3
@@ -471,7 +473,9 @@ async def test_refresh_priorities_keeps_zero_when_db_has_zero(frontier: MemoryFr
 
 
 @pytest.mark.asyncio
-async def test_completed_job_not_resurrected_after_lease_expires(frontier: MemoryFrontier):
+async def test_completed_job_not_resurrected_after_lease_expires(
+    frontier: MemoryFrontier,
+):
     """Completed jobs must not re-enter ready queue when soft lease expires."""
     job = wi_factory("resurrection_test", priority=1)
     await add_ready_jobs(frontier, job)
@@ -577,7 +581,9 @@ async def test_release_lease_does_not_requeue_active_job(frontier: MemoryFrontie
 
 
 @pytest.mark.asyncio
-async def test_on_job_skipped_sets_state_and_removes_from_ready(frontier: MemoryFrontier):
+async def test_on_job_skipped_sets_state_and_removes_from_ready(
+    frontier: MemoryFrontier,
+):
     """on_job_skipped() should set state to SKIPPED and remove from ready queue."""
     job = wi_factory("skip_test", priority=1)
     await add_ready_jobs(frontier, job)
@@ -708,9 +714,7 @@ async def test_on_jobs_skipped_waits_for_all_selected_merger_parents(
     assert frontier.unmet_count["multi-merger"] == 2
 
     await frontier.on_job_completed("selected-a")
-    assert "multi-merger" not in [
-        wi.id for wi in await frontier.peek_ready(10)
-    ]
+    assert "multi-merger" not in [wi.id for wi in await frontier.peek_ready(10)]
 
     await frontier.on_job_completed("selected-b")
     assert "multi-merger" in [wi.id for wi in await frontier.peek_ready(10)]
@@ -738,14 +742,16 @@ async def test_on_job_completed_does_unblock_children(frontier: MemoryFrontier):
     ready = await frontier.peek_ready(10)
     ready_ids = [wi.id for wi in ready]
     assert "parent2" not in ready_ids  # Parent removed from ready
-    assert "child2" in ready_ids       # Child unblocked
+    assert "child2" in ready_ids  # Child unblocked
 
     # Verify unmet_count was decremented to 0
     assert frontier.unmet_count.get("child2", 0) == 0
 
 
 @pytest.mark.asyncio
-async def test_skipped_job_not_resurrected_after_lease_expires(frontier: MemoryFrontier):
+async def test_skipped_job_not_resurrected_after_lease_expires(
+    frontier: MemoryFrontier,
+):
     """Skipped jobs must not re-enter ready queue when soft lease expires."""
     job = wi_factory("skip_resurrection", priority=1)
     await add_ready_jobs(frontier, job)
@@ -827,8 +833,9 @@ async def test_on_job_retry_without_clearing_lease_would_delay():
     # After 0.15s, job should be ready (retry_delay passed)
     await asyncio.sleep(0.15)
     ready = await frontier.peek_ready(10)
-    assert "retry_timing" in [wi.id for wi in ready], \
-        "Job should be ready after retry_delay, not blocked by old lease"
+    assert "retry_timing" in [
+        wi.id for wi in ready
+    ], "Job should be ready after retry_delay, not blocked by old lease"
 
 
 @pytest.mark.asyncio
@@ -852,7 +859,9 @@ async def test_on_job_retry_can_use_database_start_after():
 
 
 @pytest.mark.asyncio
-async def test_heap_ordering_matches_planner_priority_before_level(frontier: MemoryFrontier):
+async def test_heap_ordering_matches_planner_priority_before_level(
+    frontier: MemoryFrontier,
+):
     """Heap must order by priority before level to match GlobalPriorityExecutionPlanner."""
     deep_low_pri = wi_factory("deep", job_level=10, priority=0)
     shallow_high_pri = wi_factory("shallow", job_level=1, priority=100)
@@ -861,7 +870,9 @@ async def test_heap_ordering_matches_planner_priority_before_level(frontier: Mem
 
     ready = await frontier.peek_ready(2)
     ids = [wi.id for wi in ready]
-    assert ids[0] == "shallow", "High-priority shallow job should come before low-priority deep job"
+    assert (
+        ids[0] == "shallow"
+    ), "High-priority shallow job should come before low-priority deep job"
 
 
 @pytest.mark.asyncio
@@ -880,7 +891,9 @@ async def test_heap_ordering_matches_planner_sla_before_level(frontier: MemoryFr
 
     ready = await frontier.peek_ready(2)
     ids = [wi.id for wi in ready]
-    assert ids[0] == "shallow", "Urgent shallow job should come before non-urgent deep job"
+    assert (
+        ids[0] == "shallow"
+    ), "Urgent shallow job should come before non-urgent deep job"
 
 
 @pytest.mark.asyncio
@@ -891,13 +904,19 @@ async def test_heap_ordering_priority_then_sla_then_level(frontier: MemoryFronti
     # priority=0, no SLA, level=10
     deep_neutral = wi_factory("A", job_level=10, priority=0)
     # priority=0, hard SLA missed, level=1
-    shallow_urgent = wi_factory("B", job_level=1, priority=0, hard_sla=now - timedelta(hours=1))
+    shallow_urgent = wi_factory(
+        "B", job_level=1, priority=0, hard_sla=now - timedelta(hours=1)
+    )
     # priority=50, no SLA, level=1
     shallow_high_pri = wi_factory("C", job_level=1, priority=50)
     # priority=50, hard SLA missed, level=5
-    mid_urgent_high_pri = wi_factory("D", job_level=5, priority=50, hard_sla=now - timedelta(hours=2))
+    mid_urgent_high_pri = wi_factory(
+        "D", job_level=5, priority=50, hard_sla=now - timedelta(hours=2)
+    )
 
-    await add_ready_jobs(frontier, deep_neutral, shallow_urgent, shallow_high_pri, mid_urgent_high_pri)
+    await add_ready_jobs(
+        frontier, deep_neutral, shallow_urgent, shallow_high_pri, mid_urgent_high_pri
+    )
 
     ready = await frontier.peek_ready(4)
     ids = [wi.id for wi in ready]
@@ -940,6 +959,7 @@ async def test_refresh_ready_ordering_rebuilds_heap_for_time_based_sla_changes(
 def generate_mixed_sla_jobs(count: int, seed: int = 42):
     """Generate jobs with mixed SLA configurations (25% each category)."""
     import random
+
     random.seed(seed)
     now = datetime.now(timezone.utc)
     jobs = []
@@ -957,13 +977,15 @@ def generate_mixed_sla_jobs(count: int, seed: int = 42):
         else:
             soft_sla = now - timedelta(hours=random.randint(1, 5))
             hard_sla = now - timedelta(minutes=random.randint(1, 60))
-        jobs.append(wi_factory(
-            f"job_{i:0{digits}d}",
-            job_level=random.randint(0, 10),
-            priority=random.randint(0, 100),
-            soft_sla=soft_sla,
-            hard_sla=hard_sla,
-        ))
+        jobs.append(
+            wi_factory(
+                f"job_{i:0{digits}d}",
+                job_level=random.randint(0, 10),
+                priority=random.randint(0, 100),
+                soft_sla=soft_sla,
+                hard_sla=hard_sla,
+            )
+        )
     return jobs
 
 
@@ -987,22 +1009,24 @@ async def run_frontier_stress_test(job_count: int, thresholds: dict):
     assert peek_time < thresholds["peek"], f"Peeking 100 jobs took {peek_time:.2f}s"
 
     for i in range(len(top_100) - 1):
-        assert top_100[i].priority >= top_100[i + 1].priority, f"Priority ordering violated at {i}"
+        assert (
+            top_100[i].priority >= top_100[i + 1].priority
+        ), f"Priority ordering violated at {i}"
 
     start = time.monotonic()
     capture = await frontier.capture_ready(100, {"exe": 25})
     capture_time = time.monotonic() - start
     assert len(capture.jobs) == 100
-    assert capture_time < thresholds["capture"], (
-        f"Capturing 100 jobs took {capture_time:.2f}s"
-    )
+    assert (
+        capture_time < thresholds["capture"]
+    ), f"Capturing 100 jobs took {capture_time:.2f}s"
 
     start = time.monotonic()
     await frontier.refresh_ready_ordering()
     refresh_time = time.monotonic() - start
     assert refresh_time < thresholds["refresh"], f"Refresh took {refresh_time:.2f}s"
 
-    summary = frontier.summary(detail=True, top_n=10)
+    summary = await frontier.summary(detail=True, top_n=10)
     sla = summary["sla"]
     assert sla["tracked"] == job_count
     assert sla["no_sla"] == job_count // 4
@@ -1014,7 +1038,9 @@ async def run_frontier_stress_test(job_count: int, thresholds: dict):
     selected = await frontier.select_ready(select_count, lease_ttl=1.0)
     select_time = time.monotonic() - start
     assert len(selected) == select_count
-    assert select_time < thresholds["select"], f"Selecting {select_count} jobs took {select_time:.2f}s"
+    assert (
+        select_time < thresholds["select"]
+    ), f"Selecting {select_count} jobs took {select_time:.2f}s"
 
     for wi in selected:
         assert wi.id in frontier.leased_until
@@ -1025,28 +1051,35 @@ async def run_frontier_stress_test(job_count: int, thresholds: dict):
 @pytest.mark.asyncio
 async def test_large_frontier_stress_10k_jobs_with_mixed_slas():
     """Stress test: 10k jobs with mixed SLAs, priorities, and levels."""
-    await run_frontier_stress_test(10_000, {
-        "add": 5.0,
-        "peek": 1.0,
-        "capture": 1.0,
-        "refresh": 2.0,
-        "select": 1.0,
-    })
+    await run_frontier_stress_test(
+        10_000,
+        {
+            "add": 5.0,
+            "peek": 1.0,
+            "capture": 1.0,
+            "refresh": 2.0,
+            "select": 1.0,
+        },
+    )
 
 
 @pytest.mark.asyncio
 async def test_large_frontier_stress_100k_jobs_with_mixed_slas():
     """Stress test: 100k jobs with mixed SLAs, priorities, and levels."""
-    frontier = await run_frontier_stress_test(100_000, {
-        "add": 30.0,
-        "peek": 2.0,
-        "capture": 3.0,
-        "refresh": 15.0,
-        "select": 2.0,
-        "select_count": 100,
-    })
+    frontier = await run_frontier_stress_test(
+        100_000,
+        {
+            "add": 30.0,
+            "peek": 2.0,
+            "capture": 3.0,
+            "refresh": 15.0,
+            "select": 2.0,
+            "select_count": 100,
+        },
+    )
 
     import time
+
     start = time.monotonic()
     for _ in range(10):
         await frontier.peek_ready(50)

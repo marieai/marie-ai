@@ -38,6 +38,13 @@ BEGIN
       )
       AND NOT EXISTS (
           SELECT 1
+          FROM {schema}.job routing_pending
+          WHERE routing_pending.dag_id = d.id
+            AND routing_pending.state IN ('created', 'retry')
+            AND NOT routing_pending.llm_routing_ready
+      )
+      AND NOT EXISTS (
+          SELECT 1
           FROM {schema}.job blocker
           WHERE blocker.dag_id = d.id
             AND blocker.state IN ('failed', 'expired', 'cancelled')

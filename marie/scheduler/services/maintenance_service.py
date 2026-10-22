@@ -4,23 +4,23 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from marie.logging_core.logger import MarieLogger
 from marie.scheduler.models import RecoveredRunLease
 from marie.scheduler.repository import JobRepository
+from marie.scheduler.util import validate_queue_scope
 
 
 class MaintenanceService:
-    """
-    Service for performing periodic maintenance tasks on the scheduler.
-    Handles expiring leases, archiving completed jobs, and purging old data.
-    """
+    """Recover expired scheduler leases and active run attempts."""
 
     def __init__(
         self,
         repository: JobRepository,
-        notify_callback: Optional[callable] = None,
+        notify_callback: Callable[[], Awaitable[bool]] | None = None,
         recovery_callback: Optional[
             Callable[[list[RecoveredRunLease]], Awaitable[None]]
         ] = None,
         maintenance_interval: int = 60,  # seconds
-    ):
+        *,
+        subscribed_queues: frozenset[str] | None,
+    ) -> None:
         """
         Initialize the maintenance service.
 
@@ -30,6 +30,8 @@ class MaintenanceService:
         """
         self.logger = MarieLogger(MaintenanceService.__name__)
         self.repository = repository
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self._notify_callback = notify_callback
         self._recovery_callback = recovery_callback
         self.maintenance_interval = maintenance_interval
@@ -40,16 +42,10 @@ class MaintenanceService:
 
     # ==================== Maintenance Operations ====================
 
-    async def maintenance(self):
-        """
-        Performs the maintenance process, including expiring, archiving, and purging.
-
-        :return: None
-        """
+    async def maintenance(self) -> None:
+        """Run periodic lease recovery."""
         try:
             await self.expire()
-            await self.archive()
-            await self.purge()
         except Exception as e:
             self.logger.error(f"Error in maintenance: {e}")
 
@@ -60,8 +56,11 @@ class MaintenanceService:
         """
         self.logger.debug("Checking for expired job leases")
 
+        # Acquisition-marker cleanup is global and never supplies local work.
         released_count = await self.repository.release_expired_leases()
-        recovered = await self.repository.recover_expired_run_leases()
+        recovered = await self.repository.recover_expired_run_leases(
+            subscribed_queues=self.subscribed_queues
+        )
         recovered_retry_count = sum(
             1 for row in recovered if row.recovered_state == "retry"
         )
@@ -87,27 +86,13 @@ class MaintenanceService:
             if self._notify_callback:
                 await self._notify_callback()
 
-    async def archive(self):
-        """
-        Archive completed jobs.
-        Move completed jobs to archive table for historical tracking.
-        """
-        self.logger.debug("Archiving completed jobs")
-        # TODO: Implement archival logic
-        # - Move completed jobs older than X days to archive table
-        # - Keep original IDs for reference
-        # - Update archive timestamp
+    async def archive(self) -> None:
+        """Raise until job archival and its retention policy are implemented."""
+        raise NotImplementedError("Job archiving is not implemented")
 
-    async def purge(self):
-        """
-        Purge old archived jobs.
-        Remove very old archived jobs to prevent database bloat.
-        """
-        self.logger.debug("Purging old archived jobs")
-        # TODO: Implement purge logic
-        # - Delete archived jobs older than retention period
-        # - Respect configured retention policy
-        # - Log purge statistics
+    async def purge(self) -> None:
+        """Raise until archived-job purging and its retention policy are implemented."""
+        raise NotImplementedError("Archived job purging is not implemented")
 
     async def start(self):
         """

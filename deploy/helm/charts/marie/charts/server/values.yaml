@@ -10,7 +10,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "5.0.4-cuda"
+      tag: "5.1.0-cuda"
       digest: ""
     logging:
       level: INFO
@@ -38,6 +38,9 @@ global:
       existingSecretPasswordKey: password
   llmQueue:
     enabled: false
+    url: ""
+    existingSecret: ""
+    existingSecretUrlKey: url
     poolId: default
     fabricGroupId: default
     gatewayId: default
@@ -52,6 +55,8 @@ global:
     maxBufferedRequestsPerPool: 32
     maxInlinePayloadBytes: "16777216"
 
+queryPlanners: []
+
 enabled: true
 replicas: 1
 progressDeadlineSeconds: 600
@@ -61,7 +66,7 @@ llmTracking:
 
 image:
   repository: marieai/marie-gateway
-  tag: "5.0.4-cpu"
+  tag: "5.1.0-cpu"
   digest: ""
   pullPolicy: IfNotPresent
 

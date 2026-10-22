@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import glob
+import hashlib
+import json
 import os
 import random
 import re
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import psycopg
+from marie.engine.llm_queue.admission_policy import AdmissionPolicy
 from psycopg.rows import tuple_row
 from psycopg.types.json import Jsonb
 
@@ -18,6 +21,7 @@ from marie.excepts import RuntimeFailToStart
 from marie.logging_core.logger import MarieLogger
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.fixtures import create_sql_from_file
+from marie.scheduler.llm_routing import PlannedLlmRoute
 from marie.scheduler.models import RecoveredRunLease, WorkInfo
 from marie.scheduler.repository.plans import (
     cancel_jobs,
@@ -28,11 +32,13 @@ from marie.scheduler.repository.plans import (
     count_dag_states,
     count_job_states,
     create_queue,
+    dag_queue_predicate,
     fail_jobs_by_attempt,
     fail_jobs_by_id,
     insert_dag,
     insert_job_search_documents,
     insert_jobs,
+    insert_llm_routes,
     insert_version,
     load_dag,
     mark_as_active_dags,
@@ -41,11 +47,20 @@ from marie.scheduler.repository.plans import (
 )
 from marie.scheduler.search_documents import build_job_search_documents
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import validate_queue_scope
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
+from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-SCHEDULER_SCHEMA_VERSION = 87
+SCHEDULER_SCHEMA_VERSION = 96
+
+_WORK_INFO_COLUMNS = (
+    "id, name, priority, state, retry_limit, start_after, "
+    "expire_in, data, retry_delay, retry_backoff, keep_until, "
+    "dag_id, job_level, soft_sla, hard_sla, "
+    "run_owner, run_attempt_id, branch_metadata"
+)
 
 OPERATIONAL_JOB_ATTENTION = {
     "any",
@@ -71,6 +86,79 @@ OPERATIONAL_ATTEMPT_ATTENTION = {
     "owner_mismatch",
 }
 OPERATIONAL_EVENT_SEVERITIES = {"info", "warning", "bad"}
+
+
+def _routing_digest(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(',', ':'),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _llm_routing_reference_predicate(
+    resource_type: str, resource_id: str, revision: str | None
+) -> tuple[str, tuple[Any, ...]]:
+    if resource_type == 'pool':
+        return 'route.pool_id = %s', (resource_id,)
+    if resource_type == 'policy_generation':
+        try:
+            generation = int(resource_id)
+        except ValueError:
+            raise ValueError('Invalid routing policy generation') from None
+        if not 1 <= generation <= 2**53 - 1:
+            raise ValueError('Invalid routing policy generation')
+        return 'route.policy_generation = %s', (generation,)
+    if resource_type == 'endpoint_group':
+        if revision is None:
+            return 'route.logical_endpoint_group_id = %s', (resource_id,)
+        return (
+            'route.logical_endpoint_group_id = %s AND route.endpoint_revision = %s',
+            (resource_id, revision),
+        )
+    if resource_type == 'replica':
+        revision_filter = (
+            "AND endpoint_group->>'revision' = %s" if revision is not None else ''
+        )
+        params: tuple[Any, ...] = (
+            (resource_id, revision) if revision is not None else (resource_id,)
+        )
+        legacy = 'FALSE'
+        if revision in {None, 'r1'}:
+            legacy = """(
+                route.logical_endpoint_group_id = %s
+                AND route.endpoint_revision = 'r1'
+                AND EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(
+                        policy.policy_snapshot->'dispatch'->'endpoints'
+                    ) endpoint
+                    WHERE endpoint->>'endpoint_id' = %s
+                )
+            )"""
+            params = (*params, resource_id, resource_id)
+        return (
+            f"""(
+                EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(
+                        policy.policy_snapshot->'dispatch'->'endpoint_groups'
+                    ) endpoint_group
+                    CROSS JOIN LATERAL jsonb_array_elements(
+                        endpoint_group->'replicas'
+                    ) replica
+                    WHERE replica->>'replica_id' = %s
+                      AND endpoint_group->>'group_id' = route.logical_endpoint_group_id
+                      AND endpoint_group->>'revision' = route.endpoint_revision
+                      {revision_filter}
+                ) OR {legacy}
+            )""",
+            params,
+        )
+    raise ValueError('Invalid routing resource type')
 
 
 class _GuardrailRouteConflict(RuntimeError):
@@ -110,10 +198,7 @@ class AsyncJobRepository:
 
     async def get_job_by_id(self, job_id: str) -> Optional[WorkInfo]:
         query = f"""
-            SELECT id, name, priority, state, retry_limit, start_after,
-                   expire_in, data, retry_delay, retry_backoff, keep_until,
-                   dag_id, job_level, soft_sla, hard_sla,
-                   run_owner, run_attempt_id, branch_metadata
+            SELECT {_WORK_INFO_COLUMNS}
             FROM {DEFAULT_SCHEMA}.job
             WHERE id = %s
         """
@@ -123,13 +208,12 @@ class AsyncJobRepository:
 
     async def get_job_by_policy(self, ref_type: str, ref_id: str) -> Optional[WorkInfo]:
         query = f"""
-            SELECT id, name, priority, state, retry_limit, start_after,
-                   expire_in, data, retry_delay, retry_backoff, keep_until,
-                   dag_id, job_level, soft_sla, hard_sla,
-                   run_owner, run_attempt_id, branch_metadata
+            SELECT {_WORK_INFO_COLUMNS}
             FROM {DEFAULT_SCHEMA}.job
             WHERE data->'metadata'->>'ref_type' = %s
               AND data->'metadata'->>'ref_id' = %s
+            ORDER BY created_on DESC, id DESC
+            LIMIT 1
         """
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(query, ref_type, ref_id)
@@ -161,15 +245,12 @@ class AsyncJobRepository:
         if state_values:
             where.append(f"state = ANY(%s::{DEFAULT_SCHEMA}.job_state[])")
             params.append(state_values)
-        where_sql = "WHERE " + " AND ".join(where) if where else ""
-        limit_sql = "LIMIT %s" if limit > 0 else ""
+        where_sql = "WHERE " + " AND ".join(where) if where else ''
+        limit_sql = "LIMIT %s" if limit > 0 else ''
         if limit > 0:
             params.append(limit)
         query = f"""
-            SELECT id, name, priority, state, retry_limit, start_after,
-                   expire_in, data, retry_delay, retry_backoff, keep_until,
-                   dag_id, job_level, soft_sla, hard_sla,
-                   run_owner, run_attempt_id, branch_metadata
+            SELECT {_WORK_INFO_COLUMNS}
             FROM {DEFAULT_SCHEMA}.job
             {where_sql}
             ORDER BY created_on DESC
@@ -373,6 +454,13 @@ class AsyncJobRepository:
             }
         )
         return item
+
+    async def get_failure_report(
+        self, job_id: str, history_id: int
+    ) -> Dict[str, Any] | None:
+        from marie.scheduler.repository.failure_report import read_failure_report
+
+        return await read_failure_report(self._pool, job_id, history_id)
 
     async def list_operational_execution_history(
         self,
@@ -626,9 +714,9 @@ class AsyncJobRepository:
                 "ready": ready,
                 "active": int(row[8]),
                 "oldest_ready_seconds": self._optional_float(row[9]),
-                "drain_seconds": ready / -delta_rate
-                if delta_rate < 0 and ready
-                else None,
+                "drain_seconds": (
+                    ready / -delta_rate if delta_rate < 0 and ready else None
+                ),
             },
             "stages": [
                 self._flow_stage("ready_to_running", row[10], row[11], row[12]),
@@ -652,7 +740,7 @@ class AsyncJobRepository:
             "reachable": True,
             "latency_ms": (time.perf_counter() - started) * 1_000.0,
             "schema_version": SCHEDULER_SCHEMA_VERSION,
-            "pool": {
+            'pool': {
                 "minimum": stats.get("pool_min"),
                 "maximum": stats.get("pool_max"),
                 "size": stats.get("pool_size"),
@@ -708,7 +796,7 @@ class AsyncJobRepository:
         dag_attention = self._operational_dag_attention_sql()
         if attention != "any":
             where.append(dag_attention[attention])
-        where_sql = "WHERE " + " AND ".join(where) if where else ""
+        where_sql = "WHERE " + " AND ".join(where) if where else ''
         cte = self._operational_dag_stats_cte()
         from_sql = f"""
             FROM {DEFAULT_SCHEMA}.dag AS d
@@ -1383,14 +1471,14 @@ class AsyncJobRepository:
     async def create_job(self, work_info: WorkInfo) -> bool:
         try:
             async with self._pool.acquire() as conn:
-                await conn.execute(
+                row = await conn.fetchrow(
                     insert_jobs(DEFAULT_SCHEMA),
                     Jsonb([work_info.model_dump(mode="json")]),
                 )
         except Exception as error:
             self.logger.error(f"Error creating job: {error}")
             return False
-        return True
+        return row is not None
 
     async def delete_job(self, job_id: str) -> bool:
         async with self._pool.acquire() as conn:
@@ -1594,11 +1682,13 @@ class AsyncJobRepository:
     async def discover_admission_candidates(
         self,
         *,
+        subscribed_queues: frozenset[str] | None,
         limit: int,
         sla_interval_seconds: int,
         excluded_dag_ids: Sequence[str] = (),
     ) -> List[Tuple[str, Dict]]:
         """Return eligible DAGs in durable admission order."""
+        validate_queue_scope(subscribed_queues)
         if limit <= 0:
             return []
         async with self._pool.acquire() as conn:
@@ -1606,6 +1696,7 @@ class AsyncJobRepository:
                 f"""
                 SELECT candidate.dag_id, candidate.serialized_dag
                 FROM {DEFAULT_SCHEMA}.admission_candidate_dags(
+                    %s::text[],
                     %s,
                     %s,
                     %s::uuid[]
@@ -1616,20 +1707,32 @@ class AsyncJobRepository:
                 )
                 ORDER BY candidate.admission_rank
                 """,
+                None if subscribed_queues is None else sorted(subscribed_queues),
                 limit,
                 max(1, int(sla_interval_seconds)),
                 list(excluded_dag_ids),
             )
         return [(str(row[0]), row[1]) for row in rows]
 
-    async def load_hydratable_jobs(self, dag_ids: List[str]) -> List[Tuple[str, Dict]]:
+    async def load_hydratable_jobs(
+        self, dag_ids: List[str], *, subscribed_queues: frozenset[str] | None
+    ) -> List[Tuple[str, Dict]]:
+        scope = dag_queue_predicate(DEFAULT_SCHEMA, "d", subscribed_queues)
         if not dag_ids:
             return []
+        requested_ids = (
+            "%s::uuid[]"
+            if subscribed_queues is None
+            else f"""ARRAY(
+            SELECT d.id FROM {DEFAULT_SCHEMA}.dag d
+            WHERE d.id = ANY(%s::uuid[]) AND ({scope})
+        )"""
+        )
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT dag_id, job
-                FROM {DEFAULT_SCHEMA}.hydrate_frontier_jobs(%s::uuid[])
+                FROM {DEFAULT_SCHEMA}.hydrate_frontier_jobs({requested_ids})
                 """,
                 dag_ids,
             )
@@ -1654,8 +1757,9 @@ class AsyncJobRepository:
         return now + timedelta(seconds=delay + delay * random.random())
 
     async def recover_expired_run_leases(
-        self, limit: int = 1000
+        self, *, subscribed_queues: frozenset[str] | None, limit: int = 1000
     ) -> list[RecoveredRunLease]:
+        validate_queue_scope(subscribed_queues)
         recovered: list[RecoveredRunLease] = []
         async with self._pool.acquire() as conn:
             async with conn.transaction():
@@ -1664,8 +1768,9 @@ class AsyncJobRepository:
                     SELECT id, name, dag_id, previous_state, retry_count,
                            retry_limit, retry_delay, retry_backoff, start_after,
                            run_owner, run_attempt_id, run_lease_expires_at
-                    FROM {DEFAULT_SCHEMA}.claim_expired_run_leases(%s)
+                    FROM {DEFAULT_SCHEMA}.claim_expired_run_leases(%s::text[], %s)
                     """,
+                    None if subscribed_queues is None else sorted(subscribed_queues),
                     int(limit),
                 )
                 for row in rows:
@@ -1762,15 +1867,17 @@ class AsyncJobRepository:
         return recovered
 
     async def load_dag_and_jobs(
-        self, dag_id: str
+        self, dag_id: str, *, subscribed_queues: frozenset[str] | None
     ) -> Tuple[Optional[Dict], List[Tuple[str, Dict]]]:
+        scope = dag_queue_predicate(DEFAULT_SCHEMA, "d", subscribed_queues)
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 dag_row = await conn.fetchrow(
                     f"""
-                    SELECT dag_id, serialized_dag
-                    FROM {DEFAULT_SCHEMA}.hydrate_frontier_dags()
-                    WHERE dag_id = %s::uuid
+                    SELECT h.dag_id, h.serialized_dag
+                    FROM {DEFAULT_SCHEMA}.hydrate_frontier_dags() h
+                    JOIN {DEFAULT_SCHEMA}.dag d ON d.id = h.dag_id
+                    WHERE d.id = %s::uuid AND ({scope})
                     """,
                     dag_id,
                 )
@@ -1787,9 +1894,32 @@ class AsyncJobRepository:
                 )
         return dag_row[1], [(str(row[0]), row[1]) for row in rows]
 
-    async def mark_dag_as_active(self, dag_id: str) -> bool:
+    async def get_dag_queue_identity(
+        self, dag_id: str
+    ) -> tuple[str | None, bool] | None:
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(mark_as_active_dags(DEFAULT_SCHEMA, [dag_id]))
+            row = await conn.fetchrow(
+                f"""
+                SELECT d.submission_name,
+                    COALESCE(d.submission_name <> '', false)
+                    AND EXISTS (SELECT 1 FROM {DEFAULT_SCHEMA}.job child WHERE child.dag_id=d.id)
+                    AND NOT EXISTS (SELECT 1 FROM {DEFAULT_SCHEMA}.job child
+                        WHERE child.dag_id=d.id AND child.name IS DISTINCT FROM d.submission_name)
+                FROM {DEFAULT_SCHEMA}.dag d WHERE d.id=%s::uuid
+            """,
+                dag_id,
+            )
+        return (row[0], bool(row[1])) if row else None
+
+    async def mark_dag_as_active(
+        self, dag_id: str, *, subscribed_queues: frozenset[str] | None
+    ) -> bool:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                mark_as_active_dags(
+                    DEFAULT_SCHEMA, [dag_id], subscribed_queues=subscribed_queues
+                )
+            )
         return bool(rows)
 
     async def lease_jobs(
@@ -2058,6 +2188,7 @@ class AsyncJobRepository:
         terminal_status: str,
         source: str,
         output_metadata: Optional[dict] = None,
+        allow_retry: bool = True,
         schema: str = DEFAULT_SCHEMA,
     ) -> tuple[bool, Optional[str]]:
         if terminal_status == "SUCCEEDED":
@@ -2093,16 +2224,16 @@ class AsyncJobRepository:
                 transitioned AS (
                     UPDATE {schema}.job AS job
                     SET state = CASE
-                            WHEN job.retry_count < job.retry_limit
+                            WHEN %s AND job.retry_count < job.retry_limit
                             THEN %s::{schema}.job_state
                             ELSE %s::{schema}.job_state
                         END,
                         completed_on = CASE
-                            WHEN job.retry_count < job.retry_limit THEN NULL
+                            WHEN %s AND job.retry_count < job.retry_limit THEN NULL
                             ELSE NOW()
                         END,
                         start_after = CASE
-                            WHEN job.retry_count = job.retry_limit
+                            WHEN NOT %s OR job.retry_count = job.retry_limit
                             THEN job.start_after
                             WHEN NOT job.retry_backoff
                             THEN NOW() + job.retry_delay * INTERVAL '1 second'
@@ -2116,7 +2247,7 @@ class AsyncJobRepository:
                         lease_expires_at = NULL,
                         run_owner = NULL,
                         run_attempt_id = CASE
-                            WHEN job.retry_count < job.retry_limit THEN NULL
+                            WHEN %s AND job.retry_count < job.retry_limit THEN NULL
                             ELSE job.run_attempt_id
                         END,
                         run_lease_expires_at = NULL
@@ -2153,9 +2284,13 @@ class AsyncJobRepository:
                 )
             """
             transition_params = (
+                allow_retry,
                 WorkState.RETRY.value,
                 WorkState.FAILED.value,
+                allow_retry,
+                allow_retry,
                 Jsonb({"on_complete": "failed", **(output_metadata or {})}),
+                allow_retry,
                 queue_name,
                 job_id,
                 WorkState.ACTIVE.value,
@@ -2589,6 +2724,70 @@ class AsyncJobRepository:
             return 0, None
         return int(row[0]), row[1]
 
+    async def commit_branch_route(
+        self,
+        *,
+        job_id: str,
+        queue_name: str,
+        run_owner: str,
+        run_attempt_id: str,
+        branch_metadata: dict[str, Any],
+        skipped_job_ids: list[str],
+        skip_metadata: dict[str, Any],
+        schema: str = DEFAULT_SCHEMA,
+    ) -> tuple[bool, set[str]]:
+        """Commit an attempt's branch decision, skips, and completion together."""
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                completed = await conn.fetchrow(
+                    f"""
+                    UPDATE {schema}.job
+                    SET state = 'completed', completed_on = NOW(),
+                        output = %s, branch_metadata = %s,
+                        lease_owner = NULL, lease_expires_at = NULL,
+                        run_owner = NULL,
+                        run_lease_expires_at = NULL
+                    WHERE name = %s AND id = %s::uuid AND state = 'active'
+                      AND run_owner = %s AND run_attempt_id = %s::uuid
+                    RETURNING id
+                    """,
+                    Jsonb({"on_complete": "done"}),
+                    Jsonb(branch_metadata),
+                    queue_name,
+                    job_id,
+                    run_owner,
+                    run_attempt_id,
+                )
+                if completed is None:
+                    return False, set()
+
+                skipped_ids: set[str] = set()
+                if skipped_job_ids:
+                    rows = await conn.fetch(
+                        f"""
+                        UPDATE {schema}.job
+                        SET state = 'skipped', completed_on = NOW(), output = %s,
+                            branch_metadata = COALESCE(branch_metadata, '{{}}'::jsonb)
+                                || jsonb_build_object('skipped', TRUE, 'skip_reason', %s::jsonb),
+                            lease_owner = NULL, lease_expires_at = NULL,
+                            run_owner = NULL, run_attempt_id = NULL,
+                            run_lease_expires_at = NULL
+                        WHERE name = %s AND id = ANY(%s::uuid[])
+                          AND state IN ('created', 'retry', 'skipped')
+                        RETURNING id
+                        """,
+                        Jsonb({"on_skip": "skipped", **skip_metadata}),
+                        Jsonb(skip_metadata.get("skip_reason", {})),
+                        queue_name,
+                        skipped_job_ids,
+                    )
+                    skipped_ids = {str(row[0]) for row in rows}
+                    if skipped_ids != set(skipped_job_ids):
+                        raise RuntimeError(
+                            f"Branch {job_id} could not skip all unselected jobs"
+                        )
+        return True, skipped_ids
+
     async def mark_jobs_as_skipped(
         self,
         job_ids: list[str],
@@ -2696,13 +2895,28 @@ class AsyncJobRepository:
         plan: QueryPlan,
         dag_nodes: List[WorkInfo],
         work_info: WorkInfo,
+        llm_routes: Sequence[PlannedLlmRoute] = (),
     ) -> Tuple[bool, Optional[str]]:
+        if not work_info.name or not dag_nodes:
+            raise ValueError("A DAG requires a nonempty submission queue and children")
+        if any(
+            str(node.dag_id) != str(dag_id) or node.name != work_info.name
+            for node in dag_nodes
+        ):
+            raise ValueError("Every child must match the submitted DAG ID and queue")
         dag_name = f"{dag_id}_dag"
         metadata = work_info.data.get("metadata", {})
         planner = metadata.get("planner")
         search_documents = build_job_search_documents(
             plan=plan, dag_nodes=dag_nodes, planner=planner
         )
+        route_records = self._routing_records(dag_id, dag_nodes, llm_routes)
+        routed_ids = {record['work_unit_id'] for record in route_records}
+        serialized_nodes = []
+        for node in dag_nodes:
+            payload = node.model_dump(mode="json")
+            payload['llm_routing_ready'] = node.id not in routed_ids
+            serialized_nodes.append(payload)
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
@@ -2725,13 +2939,499 @@ class AsyncJobRepository:
                     return False, None
                 await conn.execute(
                     insert_jobs(DEFAULT_SCHEMA),
-                    Jsonb([node.model_dump(mode="json") for node in dag_nodes]),
+                    Jsonb(serialized_nodes),
                 )
                 await conn.execute(
                     insert_job_search_documents(DEFAULT_SCHEMA),
                     Jsonb([asdict(document) for document in search_documents]),
                 )
+                if route_records:
+                    inserted = await conn.fetch(
+                        insert_llm_routes(DEFAULT_SCHEMA), Jsonb(route_records)
+                    )
+                    if len(inserted) != len(route_records):
+                        raise RuntimeError('routing_manifest_insert_incomplete')
         return True, str(row[0])
+
+    async def read_llm_job_route(self, work_unit_id: str) -> Dict[str, Any] | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT work_unit_id, job_id, fabric_group_id, policy_generation,
+                       policy_digest, rule_digest, normalized_fact_digest,
+                       effective_page_count, pool_id,
+                       logical_endpoint_group_id, endpoint_revision,
+                       estimator_version, routing_source, routing_actor,
+                       routing_reason, projection_state,
+                       projected_on, created_on
+                FROM {DEFAULT_SCHEMA}.llm_job_route
+                WHERE work_unit_id = %s::uuid
+                """,
+                work_unit_id,
+            )
+        if row is None:
+            return None
+        names = (
+            'work_unit_id',
+            "job_id",
+            'fabric_group_id',
+            'policy_generation',
+            'policy_digest',
+            'rule_digest',
+            'normalized_fact_digest',
+            'effective_page_count',
+            'pool_id',
+            'logical_endpoint_group_id',
+            'endpoint_revision',
+            'estimator_version',
+            'routing_source',
+            'routing_actor',
+            'routing_reason',
+            'projection_state',
+            'projected_on',
+            'created_on',
+        )
+        return dict(zip(names, row, strict=True))
+
+    async def read_llm_routing_diagnostics(
+        self, fabric_group_id: str, *, limit: int = 50
+    ) -> dict[str, Any]:
+        """Return bounded durable routing and drain state for one fabric."""
+        if not 1 <= limit <= 250:
+            raise ValueError('Invalid routing diagnostic limit')
+        async with self._pool.acquire() as conn:
+            policy = await conn.fetchrow(
+                f"""
+                SELECT config.active_policy_generation, generation.policy_digest
+                FROM {DEFAULT_SCHEMA}.llm_queue_fabric_config config
+                LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation generation
+                  ON generation.fabric_group_id = config.fabric_group_id
+                 AND generation.generation = config.active_policy_generation
+                WHERE config.fabric_group_id = %s
+                """,
+                fabric_group_id,
+            )
+            if policy is None:
+                raise ValueError('routing_policy_unavailable')
+            routing = await conn.fetchrow(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE projection_state <> 'projected'),
+                    COUNT(*) FILTER (WHERE routing_source = 'automatic'),
+                    COUNT(*) FILTER (WHERE routing_source = 'operator-override')
+                FROM {DEFAULT_SCHEMA}.llm_job_route
+                WHERE fabric_group_id = %s
+                """,
+                fabric_group_id,
+            )
+            rows = await conn.fetch(
+                f"""
+                SELECT pool.pool_id,
+                       COUNT(route.work_unit_id) AS accepted,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE job.state = 'completed'
+                       ) AS completed,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE route.projection_state <> 'projected'
+                       ) AS projection_pending,
+                       COUNT(route.work_unit_id) FILTER (
+                           WHERE job.state NOT IN (
+                               'completed', 'skipped', 'expired', 'cancelled', 'failed'
+                           )
+                       ) AS drain_references,
+                       COUNT(*) OVER() AS pool_count
+                FROM {DEFAULT_SCHEMA}.llm_queue_pool pool
+                LEFT JOIN {DEFAULT_SCHEMA}.llm_job_route route
+                  ON route.fabric_group_id = pool.fabric_group_id
+                 AND route.pool_id = pool.pool_id
+                LEFT JOIN {DEFAULT_SCHEMA}.job job
+                  ON job.id = route.work_unit_id
+                WHERE pool.fabric_group_id = %s
+                GROUP BY pool.pool_id, pool.sort_order
+                ORDER BY pool.sort_order, pool.pool_id
+                LIMIT %s
+                """,
+                fabric_group_id,
+                limit + 1,
+            )
+            route_rows = await conn.fetch(
+                f"""
+                SELECT job_id, work_unit_id, policy_generation, policy_digest,
+                       rule_digest, effective_page_count, pool_id,
+                       logical_endpoint_group_id, endpoint_revision,
+                       estimator_version, routing_source, routing_actor,
+                       routing_reason, projection_state
+                FROM {DEFAULT_SCHEMA}.llm_job_route
+                WHERE fabric_group_id = %s
+                ORDER BY created_on DESC, work_unit_id
+                LIMIT %s
+                """,
+                fabric_group_id,
+                limit + 1,
+            )
+        visible = rows[:limit]
+        visible_routes = route_rows[:limit]
+        return {
+            'policy': {
+                'desired_generation': int(policy[0]) if policy[0] is not None else None,
+                'desired_digest': str(policy[1]) if policy[1] is not None else None,
+            },
+            'routing': {
+                'projection_pending_count': int(routing[0]),
+                'matched': {
+                    'automatic': int(routing[1]),
+                    'operator_override': int(routing[2]),
+                },
+                'rejected': {},
+            },
+            'pools': [
+                {
+                    'pool_id': str(row[0]),
+                    'accepted': int(row[1]),
+                    "completed": int(row[2]),
+                    'projection_pending': int(row[3]),
+                    'drain_references': int(row[4]),
+                }
+                for row in visible
+            ],
+            'pool_count': int(rows[0][5]) if rows else 0,
+            'pools_truncated': len(rows) > limit,
+            'recent_routes': [
+                {
+                    "job_id": str(row[0]),
+                    'work_unit_id': str(row[1]),
+                    'policy_generation': int(row[2]),
+                    'policy_digest': str(row[3]),
+                    'rule_digest': str(row[4]),
+                    'effective_page_count': (
+                        int(row[5]) if row[5] is not None else None
+                    ),
+                    'pool_id': str(row[6]),
+                    'endpoint_group_id': str(row[7]),
+                    'endpoint_revision': str(row[8]),
+                    'estimator_version': str(row[9]),
+                    'routing_source': str(row[10]),
+                    'routing_actor': str(row[11]) if row[11] is not None else None,
+                    'routing_reason': str(row[12]) if row[12] is not None else None,
+                    'projection_state': str(row[13]),
+                }
+                for row in visible_routes
+            ],
+            'recent_routes_truncated': len(route_rows) > limit,
+        }
+
+    async def routing_resource_references(
+        self,
+        *,
+        fabric_group_id: str,
+        resource_type: str,
+        resource_id: str,
+        revision: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Count durable route references without treating read failure as zero."""
+        if not 1 <= limit <= 250:
+            raise ValueError('Invalid routing reference limit')
+        where, params = _llm_routing_reference_predicate(
+            resource_type, resource_id, revision
+        )
+        base = f"""
+            FROM {DEFAULT_SCHEMA}.llm_job_route route
+            LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation policy
+              ON policy.fabric_group_id = route.fabric_group_id
+             AND policy.generation = route.policy_generation
+            LEFT JOIN {DEFAULT_SCHEMA}.job job
+              ON job.id = route.work_unit_id
+            WHERE route.fabric_group_id = %s AND {where}
+              AND (
+                %s = 'policy_generation'
+                OR job.state NOT IN (
+                    'completed', 'skipped', 'expired', 'cancelled', 'failed'
+                )
+              )
+        """
+        values = (fabric_group_id, *params, resource_type)
+        async with self._pool.acquire() as conn:
+            count = int(await conn.fetchval(f'SELECT COUNT(*) {base}', *values))
+            rows = await conn.fetch(
+                f"""
+                SELECT route.work_unit_id {base}
+                ORDER BY route.created_on DESC, route.work_unit_id
+                LIMIT %s
+                """,
+                *values,
+                limit,
+            )
+        samples = [str(row[0]) for row in rows]
+        return {
+            'postgres': count,
+            'samples': samples,
+            'truncated': count > len(samples),
+        }
+
+    async def load_active_admission_policy(
+        self, fabric_group_id: str
+    ) -> AdmissionPolicy:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT config.active_policy_generation, generation.policy_digest,
+                       generation.policy_snapshot
+                FROM {DEFAULT_SCHEMA}.llm_queue_fabric_config config
+                LEFT JOIN {DEFAULT_SCHEMA}.llm_queue_policy_generation generation
+                  ON generation.fabric_group_id = config.fabric_group_id
+                 AND generation.generation = config.active_policy_generation
+                WHERE config.fabric_group_id = %s AND config.enabled = true
+                """,
+                fabric_group_id,
+            )
+        if row is None:
+            raise ValueError('routing_policy_unavailable')
+        if row[0] is None or not isinstance(row[2], dict):
+            raise ValueError('routing_policy_unavailable')
+        generation, digest, snapshot = int(row[0]), str(row[1]), row[2]
+        if _routing_digest(snapshot) != digest:
+            raise ValueError('routing_policy_digest_mismatch')
+        dispatch_lanes = {
+            lane['pool_id']: lane
+            for lane in snapshot.get('dispatch', {}).get('lanes', [])
+            if isinstance(lane, dict) and isinstance(lane.get('pool_id'), str)
+        }
+        admission = snapshot.get('admission')
+        if not isinstance(admission, dict):
+            raise ValueError('routing_policy_unavailable')
+        rows = []
+        for rule in admission.get('rules', []):
+            lane = dispatch_lanes.get(rule.get('pool_id'))
+            if lane is None:
+                raise ValueError('routing_endpoint_binding_missing')
+            rows.append(
+                {
+                    'pool_id': rule['pool_id'],
+                    'enabled': rule['enabled'],
+                    "metadata": {
+                        'admission': rule['admission'],
+                        'llm_dispatch': {
+                            "schema_version": 1,
+                            'endpoint_id': lane.get('endpoint_group_id')
+                            or lane['endpoint_id'],
+                            'revision': lane['revision'],
+                        },
+                    },
+                }
+            )
+        policy = AdmissionPolicy.from_rows(fabric_group_id, generation, rows)
+        return replace(policy, policy_digest=digest)
+
+    async def get_submission_document_for_routing(
+        self, *, document_id: str | None, storage_key: str | None
+    ) -> SubmissionDocument | None:
+        if document_id:
+            predicate = 'id = %s::uuid'
+            value = document_id
+        elif storage_key:
+            predicate = 'storage_key = %s'
+            value = storage_key
+        else:
+            return None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""
+                SELECT id, submission_id, file_name, file_size, content_type,
+                       storage_key, status, page_count, document_type,
+                       error_message, confidence_score, extracted_fields,
+                       dag_id, job_id, hitl_request_id, indexing_status,
+                       indexing_error, indexed_at, created_at, updated_at
+                FROM {DEFAULT_SCHEMA}.submission_documents
+                WHERE {predicate}
+                """,
+                value,
+            )
+        if row is None:
+            return None
+        names = (
+            "id",
+            'submission_id',
+            'file_name',
+            'file_size',
+            'content_type',
+            'storage_key',
+            "status",
+            'page_count',
+            'document_type',
+            'error_message',
+            'confidence_score',
+            'extracted_fields',
+            "dag_id",
+            "job_id",
+            'hitl_request_id',
+            'indexing_status',
+            'indexing_error',
+            'indexed_at',
+            "created_at",
+            "updated_at",
+        )
+        return SubmissionDocument.from_row(dict(zip(names, row, strict=True)))
+
+    async def claim_pending_routing_outbox(
+        self, *, limit: int = 100, lease_seconds: int = 30
+    ) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 1000 or not 1 <= lease_seconds <= 300:
+            raise ValueError('Invalid routing outbox claim bounds')
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    f"""
+                    WITH candidates AS (
+                        SELECT event_id
+                        FROM {DEFAULT_SCHEMA}.llm_routing_outbox
+                        WHERE published_on IS NULL AND available_on <= NOW()
+                        ORDER BY available_on, event_id
+                        FOR UPDATE SKIP LOCKED
+                        LIMIT %s
+                    )
+                    UPDATE {DEFAULT_SCHEMA}.llm_routing_outbox outbox
+                    SET attempt_count = outbox.attempt_count + 1,
+                        available_on = NOW() + make_interval(secs => %s),
+                        last_error_category = NULL
+                    FROM candidates
+                    WHERE outbox.event_id = candidates.event_id
+                    RETURNING outbox.event_id, outbox.work_unit_id,
+                              outbox.route_digest, outbox.payload,
+                              outbox.attempt_count
+                    """,
+                    limit,
+                    lease_seconds,
+                )
+        names = (
+            "event_id",
+            'work_unit_id',
+            'route_digest',
+            'payload',
+            'attempt_count',
+        )
+        return [dict(zip(names, row, strict=True)) for row in rows]
+
+    async def acknowledge_routing_projection(
+        self, *, event_id: str, route_digest: str
+    ) -> bool:
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.llm_routing_outbox outbox
+                    SET published_on = NOW(), last_error_category = NULL
+                    FROM {DEFAULT_SCHEMA}.llm_job_route route
+                    WHERE outbox.event_id = %s::uuid
+                      AND outbox.route_digest = %s
+                      AND outbox.published_on IS NULL
+                      AND route.work_unit_id = outbox.work_unit_id
+                    RETURNING route.work_unit_id, route.job_id
+                    """,
+                    event_id,
+                    route_digest,
+                )
+                if row is None:
+                    return False
+                work_unit_id, job_id = str(row[0]), str(row[1])
+                locked_dag = await conn.fetchval(
+                    f"""
+                    SELECT id
+                    FROM {DEFAULT_SCHEMA}.dag
+                    WHERE id = %s::uuid
+                    FOR UPDATE
+                    """,
+                    job_id,
+                )
+                if locked_dag is None:
+                    raise RuntimeError('routing_projection_dag_missing')
+                await conn.execute(
+                    f"""
+                    UPDATE {DEFAULT_SCHEMA}.llm_job_route
+                    SET projection_state = 'projected', projected_on = NOW()
+                    WHERE work_unit_id = %s::uuid
+                    """,
+                    work_unit_id,
+                )
+                pending = await conn.fetchval(
+                    f"""
+                    SELECT EXISTS (
+                        SELECT 1 FROM {DEFAULT_SCHEMA}.llm_job_route
+                        WHERE job_id = %s::uuid AND projection_state <> 'projected'
+                    )
+                    """,
+                    job_id,
+                )
+                if not pending:
+                    await conn.execute(
+                        f"""
+                        UPDATE {DEFAULT_SCHEMA}.job job
+                        SET llm_routing_ready = true
+                        FROM {DEFAULT_SCHEMA}.llm_job_route route
+                        WHERE route.job_id = %s::uuid
+                          AND job.id = route.work_unit_id
+                        """,
+                        job_id,
+                    )
+        return True
+
+    async def record_routing_projection_failure(
+        self,
+        *,
+        event_id: str,
+        route_digest: str,
+        category: str,
+        retry_seconds: int = 5,
+    ) -> bool:
+        if not re.fullmatch(r'[a-z0-9_]{1,128}', category):
+            raise ValueError('Invalid routing projection failure category')
+        if not 1 <= retry_seconds <= 300:
+            raise ValueError('Invalid routing projection retry interval')
+        async with self._pool.acquire() as conn:
+            value = await conn.fetchval(
+                f"""
+                UPDATE {DEFAULT_SCHEMA}.llm_routing_outbox
+                SET available_on = NOW() + make_interval(secs => %s),
+                    last_error_category = %s
+                WHERE event_id = %s::uuid
+                  AND route_digest = %s
+                  AND published_on IS NULL
+                RETURNING true
+                """,
+                retry_seconds,
+                category,
+                event_id,
+                route_digest,
+            )
+        return bool(value)
+
+    @staticmethod
+    def _routing_records(
+        dag_id: str,
+        dag_nodes: Sequence[WorkInfo],
+        routes: Sequence[PlannedLlmRoute],
+    ) -> list[dict[str, Any]]:
+        node_ids = {node.id for node in dag_nodes}
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for route in routes:
+            if (
+                route.job_id != dag_id
+                or route.work_unit_id not in node_ids
+                or route.work_unit_id in seen
+            ):
+                raise ValueError('routing_manifest_invalid')
+            payload = route.model_dump(mode="json")
+            route_digest = _routing_digest(payload)
+            records.append(
+                {
+                    **payload,
+                    'route_digest': route_digest,
+                    'payload': payload,
+                }
+            )
+            seen.add(route.work_unit_id)
+        return records
 
     async def create_dag(self, dag: QueryPlan, jobs: List[WorkInfo]) -> bool:
         """Create a DAG and jobs through the transactional submission path."""
@@ -3219,7 +3919,7 @@ class AsyncJobRepository:
                         "project_id",
                         "ref_type",
                         "ref_id",
-                        "policy",
+                        'policy',
                         "task_count",
                     ],
                 ),
@@ -3227,8 +3927,23 @@ class AsyncJobRepository:
             ),
             (
                 "SELECT to_regprocedure(%s) IS NOT NULL",
-                (f"{schema}.admission_candidate_dags(integer,integer,uuid[])",),
+                (f"{schema}.admission_candidate_dags(text[],integer,integer,uuid[])",),
                 f"{schema}.admission_candidate_dags is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NULL",
+                (f"{schema}.admission_candidate_dags(integer,integer,uuid[])",),
+                f"{schema}.admission_candidate_dags retired signature is present",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NOT NULL",
+                (f"{schema}.claim_expired_run_leases(text[],integer)",),
+                f"{schema}.claim_expired_run_leases is missing",
+            ),
+            (
+                "SELECT to_regprocedure(%s) IS NULL",
+                (f"{schema}.claim_expired_run_leases(integer)",),
+                f"{schema}.claim_expired_run_leases retired signature is present",
             ),
             (
                 "SELECT to_regprocedure(%s) IS NOT NULL",
@@ -3351,6 +4066,7 @@ class AsyncJobRepository:
 
     def _record_to_work_info(self, record: Any) -> WorkInfo:
         if len(record) == 17:
+            # Legacy rows omit the trailing branch_metadata column.
             record = (*record, None)
         (
             id_,

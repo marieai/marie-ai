@@ -1,5 +1,8 @@
+import os
+
 from request_handling_custom import GatewayRequestHandler
 
+from marie.constants import __config_dir__
 from marie.runtime import Flow
 from marie.serve.runtimes.servers.marie_gateway import MarieServerGateway
 
@@ -50,11 +53,12 @@ def main():
             discovery_port=2379,
             discovery_watchdog_interval=2,
             discovery_service_name="gateway/marie",
-        )
+        ) as flow
         # .add(tls=False, host="0.0.0.0", external=True, port=61000)
-        as flow
     ):
-        flow.save_config("/mnt/data/marie-ai/config/service/direct-flow-gateway.yml")
+        flow.save_config(
+            os.path.join(__config_dir__, 'service', 'direct-flow-gateway.yml')
+        )
         flow.block()
 
 

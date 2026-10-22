@@ -18,6 +18,7 @@
 {{- $etcdExternal := $etcd.external | default dict }}
 {{- $minio := $.Values.global.minio | default dict }}
 {{- $minioExternal := $minio.external | default dict }}
+{{- $minioAuth := $minio.auth | default dict }}
 {{- $storage := $.Values.global.storage | default dict }}
 {{- $storageS3 := $storage.s3 | default dict }}
 {{- $grpc := $.Values.global.grpc | default dict }}
@@ -29,7 +30,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}
+  name: {{ include "executor.poolFullname" (dict "pool" $pool "root" $) }}
   namespace: {{ $.Release.Namespace }}
   labels:
     {{- include "executor.poolLabels" (list $pool $) | nindent 4 }}
@@ -44,8 +45,8 @@ spec:
     type: {{ $strategyType }}
     {{- if eq $strategyType "RollingUpdate" }}
     rollingUpdate:
-      maxSurge: {{ $strategy.maxSurge | default 1 | quote }}
-      maxUnavailable: {{ $strategy.maxUnavailable | default 0 | quote }}
+      maxSurge: {{ ternary $strategy.maxSurge 1 (hasKey $strategy "maxSurge") | toJson }}
+      maxUnavailable: {{ ternary $strategy.maxUnavailable 0 (hasKey $strategy "maxUnavailable") | toJson }}
     {{- end }}
   selector:
     matchLabels:
@@ -84,7 +85,7 @@ spec:
             - server
             - --start
             - --uses
-            - {{ $pool.configFile | default "/etc/marie/config/service/extract/marie-extract-4.0.0.yml" }}
+            - {{ $pool.configFile | default "/etc/marie/config/service/extract/marie-extract-4.0.0.yml" | quote }}
           ports:
             - name: grpc
               containerPort: {{ $port }}
@@ -102,7 +103,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.uid
             - name: K8S_DEPLOYMENT_NAME
-              value: {{ include "executor.poolFullname" (list $pool $.Release.Name) }}
+              value: {{ include "executor.poolFullname" (dict "pool" $pool "root" $) }}
             - name: K8S_NAMESPACE_NAME
               value: {{ $.Release.Namespace }}
             - name: K8S_POD_NAME
@@ -155,12 +156,6 @@ spec:
                   name: {{ $openai.existingSecret }}
                   key: {{ $openai.existingSecretApiKeyKey | default "api-key" }}
             {{- end }}
-            {{- if $pool.gpu }}
-            - name: NVIDIA_VISIBLE_DEVICES
-              value: "all"
-            - name: CUDA_VISIBLE_DEVICES
-              value: "0"
-            {{- end }}
             {{- if $postgresql.enabled }}
             - name: DATABASE_HOST
               value: {{ printf "%s-postgresql" $.Release.Name | quote }}
@@ -177,12 +172,12 @@ spec:
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" $.Release.Name }}
+                  name: {{ $postgresqlAuth.existingSecret | default (printf "%s-postgresql" $.Release.Name) }}
                   key: postgres-password
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-postgresql" $.Release.Name }}
+                  name: {{ $postgresqlAuth.existingSecret | default (printf "%s-postgresql" $.Release.Name) }}
                   key: postgres-password
             {{- else if $postgresqlExternal.host }}
             - name: DATABASE_HOST
@@ -226,9 +221,9 @@ spec:
               value: "2379"
             {{- end }}
             - name: OTEL_EXPORTER_HOST
-              value: localhost
+              value: {{ tpl ((($.Values.global).otel).host | default "localhost") $ | quote }}
             - name: OTEL_EXPORTER_ENDPOINT
-              value: http://localhost:4317
+              value: {{ tpl ((($.Values.global).otel).endpoint | default "http://localhost:4317") $ | quote }}
             - name: CLICKHOUSE_HOSTNAME
               value: {{ printf "%s-clickhouse" $.Release.Name | quote }}
             {{- if $rabbitmq.enabled }}
@@ -290,13 +285,13 @@ spec:
             - name: S3_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-minio" $.Release.Name }}
-                  key: root-user
+                  name: {{ $minioAuth.existingSecret | default (printf "%s-minio" $.Release.Name) }}
+                  key: {{ $minioAuth.rootUserKey | default "root-user" }}
             - name: S3_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "%s-minio" $.Release.Name }}
-                  key: root-password
+                  name: {{ $minioAuth.existingSecret | default (printf "%s-minio" $.Release.Name) }}
+                  key: {{ $minioAuth.rootPasswordKey | default "root-password" }}
             {{- else if eq ($storage.type | default "") "s3" }}
             - name: S3_ENDPOINT_URL
               value: {{ $storageS3.endpoint | default $minioExternal.endpoint | quote }}
@@ -317,22 +312,10 @@ spec:
                   key: {{ $storageS3.existingSecretSecretKeyKey | default "secret-key" }}
             {{- end }}
             {{- end }}
-            {{- if $.Values.global.valkey.enabled }}
-            {{- $valkeyHost := default (printf "%s-valkey" $.Release.Name) $.Values.global.valkey.host }}
-            {{- $valkeyPort := default 6379 $.Values.global.valkey.port }}
-            {{- $valkeyDatabase := default 0 $.Values.global.valkey.database }}
-            {{- $valkeyTls := default false $.Values.global.valkey.tls }}
-            {{- if $.Values.global.valkey.auth.enabled }}
-            - name: VALKEY_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ default (printf "%s-valkey-auth" $.Release.Name) $.Values.global.valkey.auth.existingSecret }}
-                  key: {{ $.Values.global.valkey.auth.existingSecretPasswordKey | default "password" }}
-            {{- end }}
             - name: LLM_QUEUE_ENABLED
               value: {{ $.Values.global.llmQueue.enabled | default false | quote }}
-            - name: LLM_QUEUE_VALKEY_URL
-              value: {{ printf "%s://%s%s:%v/%v" (ternary "rediss" "redis" $valkeyTls) (ternary ":$(VALKEY_PASSWORD)@" "" $.Values.global.valkey.auth.enabled) $valkeyHost $valkeyPort $valkeyDatabase | quote }}
+            {{- include "marie.llmQueueConnection" $ | nindent 12 }}
+            {{- if $.Values.global.llmQueue.enabled }}
             - name: LLM_QUEUE_POOL_ID
               value: {{ $.Values.global.llmQueue.poolId | default "default" | quote }}
             - name: LLM_QUEUE_FABRIC_GROUP_ID
@@ -360,6 +343,7 @@ spec:
             - name: LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES
               value: {{ $.Values.global.llmQueue.maxInlinePayloadBytes | default "16777216" | quote }}
             {{- end }}
+            {{- include "executor.pluginRuntimeEnv" (dict "pool" $pool "root" $) | nindent 12 }}
             {{- with $pool.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -388,6 +372,11 @@ spec:
             - name: config
               mountPath: /etc/marie/config/service/extract
               readOnly: true
+            {{- if eq ($pool.configFile | default "") "/etc/marie/config/service/mock/marie-mock-sandbox.yml" }}
+            - name: config
+              mountPath: /etc/marie/config/service/mock
+              readOnly: true
+            {{- end }}
           lifecycle:
             preStop:
               exec:

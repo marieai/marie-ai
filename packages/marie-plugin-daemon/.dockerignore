@@ -1,0 +1,15 @@
+**
+!go.mod
+!go.sum
+!**/*.go
+!python_runtime/marie_plugins/runtime/*.py
+**/*_test.go
+**/testdata/**
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/secrets/**
+**/.venv/**
+**/venv/**
+**/__pycache__/**

@@ -10,8 +10,8 @@ PROVIDER="${1:-${PROVIDER:-k3d}}"
 CLUSTER_NAME="${CLUSTER_NAME:-marie-helm-smoke}"
 NAMESPACE="${NAMESPACE:-marie}"
 RELEASE="${RELEASE:-marie}"
-MARIE_IMAGE="${MARIE_IMAGE:-marieai/marie:5.0.4-cuda}"
-GATEWAY_IMAGE="${GATEWAY_IMAGE:-marieai/marie-gateway:5.0.4-cpu}"
+MARIE_IMAGE="${MARIE_IMAGE:-marieai/marie:5.1.0-cuda}"
+GATEWAY_IMAGE="${GATEWAY_IMAGE:-marieai/marie-gateway:5.1.0-cpu}"
 LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-true}"
 SKIP_OPTIONAL="${SKIP_OPTIONAL:-false}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-20m}"
@@ -31,8 +31,8 @@ Environment:
   CLUSTER_NAME       Local cluster name (default: marie-helm-smoke)
   NAMESPACE          Kubernetes namespace (default: marie)
   RELEASE            Helm release name (default: marie)
-  MARIE_IMAGE        Executor image (default: marieai/marie:5.0.4-cuda)
-  GATEWAY_IMAGE      Gateway/server image (default: marieai/marie-gateway:5.0.4-cpu)
+  MARIE_IMAGE        Executor image (default: marieai/marie:5.1.0-cuda)
+  GATEWAY_IMAGE      Gateway/server image (default: marieai/marie-gateway:5.1.0-cpu)
   LOAD_LOCAL_IMAGES  Load local Docker images into the cluster if present (default: true)
   SKIP_OPTIONAL      Disable ClickHouse for smoke speed (default: false)
   WAIT_TIMEOUT       Helm/kubectl wait timeout (default: 20m)
@@ -179,7 +179,8 @@ fi
 
 log "Waiting for core workloads"
 kubectl -n "${NAMESPACE}" rollout status "deploy/${RELEASE}-server" --timeout="${WAIT_TIMEOUT}"
-kubectl -n "${NAMESPACE}" rollout status "deploy/${RELEASE}-executor-cpu-local" --timeout="${WAIT_TIMEOUT}"
+kubectl -n "${NAMESPACE}" rollout status deployment \
+    --selector "app.kubernetes.io/instance=${RELEASE},marie.ai/pool=cpu-local" --timeout="${WAIT_TIMEOUT}"
 kubectl -n "${NAMESPACE}" rollout status "statefulset/${RELEASE}-valkey" --timeout="${WAIT_TIMEOUT}"
 
 log "Current pods"

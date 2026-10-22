@@ -16,29 +16,21 @@ import psycopg
 
 from marie.constants import JOB_STATUS_NOTIFICATION_CHANNEL
 from marie.excepts import BadConfigSource, RuntimeFailToStart
-from marie.job.common import JobInfo, JobStatus
+from marie.job.common import DuplicateJobSubmissionError, JobInfo, JobStatus
 from marie.job.job_manager import JobManager
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import mark_as_complete as mark_as_complete_toast
 from marie.messaging import mark_as_failed as mark_as_failed_toast
-from marie.query_planner.base import (
-    QueryPlan,
-)
+from marie.query_planner.base import QueryPlan
 from marie.query_planner.builtin import register_all_known_planners
 from marie.scheduler.dag_topology_cache import DagTopologyCache
 from marie.scheduler.in_memory_scheduling_engine import InMemorySchedulingEngine
 from marie.scheduler.job_lock import AsyncJobLock
 from marie.scheduler.job_scheduler import JobScheduler
 from marie.scheduler.memory_frontier import MemoryFrontier
-from marie.scheduler.models import (
-    ExistingWorkPolicy,
-    RecoveredRunLease,
-    WorkInfo,
-)
-from marie.scheduler.planner_util import (
-    debug_candidates_and_plan,
-)
+from marie.scheduler.models import ExistingWorkPolicy, RecoveredRunLease, WorkInfo
+from marie.scheduler.planner_util import debug_candidates_and_plan
 from marie.scheduler.postgres_scheduler_config import PostgreSQLSchedulerConfig
 from marie.scheduler.repository import JobRepository
 from marie.scheduler.services import (
@@ -48,6 +40,7 @@ from marie.scheduler.services import (
     ControlFlowExecutionService,
     DAGManagementService,
     DagSubmissionService,
+    LlmRoutingProjectionService,
     MaintenanceService,
     NotificationService,
     SchedulerDiagnostics,
@@ -62,6 +55,7 @@ from marie.scheduler.util import (
     frontier_candidate_window,
     is_control_flow_entrypoint,
     ordered_leased_jobs,
+    queue_is_subscribed,
 )
 from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.runtimes.servers.cluster_state import ClusterState
@@ -173,6 +167,10 @@ class PriorityRefreshResult:
 # this will allow us to track the status of the deployment and not just the executor.
 
 
+class _QueueNotSubscribedError(ValueError):
+    pass
+
+
 class PostgreSQLJobScheduler(JobScheduler):
     """A PostgreSQL-based job scheduler."""
 
@@ -194,7 +192,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._fetch_counter = 0
         self._debounced_notify = False
 
-        self.known_queues = set(scheduler_config.queue_names)
+        self.subscribed_queues = scheduler_config.queue_names
+        self.known_queues = set(self.subscribed_queues or ())
         self.running = False
         self._paused = False
         self._lifecycle_lock = asyncio.Lock()
@@ -205,7 +204,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         self._event_queue = Queue()
         self._status_update_lock = AsyncJobLock()
 
-        self.logger.info(f"Queue names to monitor: {self.known_queues}")
+        self.logger.info(
+            "Consumer queue scope: %s",
+            "all" if self.subscribed_queues is None else sorted(self.subscribed_queues),
+        )
 
         self.job_manager = job_manager
         self.dispatch_confirmation_max_in_flight = (
@@ -257,6 +259,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             resolution_retry_max_delay=self._dag_resolution_retry_max_delay,
             admission_batch_size=scheduler_config.priority_refresh_hydrate_limit,
             sla_priority_interval_seconds=self.sla_priority_interval_seconds,
+            subscribed_queues=self.subscribed_queues,
         )
 
         # Register handler for DAG state changes (delegate to DAGManagementService)
@@ -268,18 +271,20 @@ class PostgreSQLJobScheduler(JobScheduler):
             handler=self.job_manager.handle_job_status_notification,
         )
 
-        # Initialize MaintenanceService for periodic cleanup tasks
+        # Initialize periodic lease recovery.
         self._maintenance_interval = scheduler_config.maintenance_interval
         self.maintenance_service = MaintenanceService(
             repository=self.repository,
             notify_callback=self.notify_event,
             recovery_callback=self._reconcile_recovered_run_leases,
             maintenance_interval=self._maintenance_interval,
+            subscribed_queues=self.subscribed_queues,
         )
 
         self.scheduling_engine = InMemorySchedulingEngine(
             self.frontier,
             sla_priority_interval_seconds=self.sla_priority_interval_seconds,
+            subscribed_queues=self.subscribed_queues,
         )
         self.logger.info(
             "SLA priority interval configured to %ss",
@@ -351,6 +356,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         self.cycle_log_interval_seconds = 10.0
         self.submission_service = self._build_submission_service()
+        self.llm_routing_projection_service: LlmRoutingProjectionService | None = None
         self.diagnostics = self._build_diagnostics()
 
     def _build_submission_service(
@@ -387,6 +393,25 @@ class PostgreSQLJobScheduler(JobScheduler):
             sla_warning_top_n=self.sla_warning_top_n,
             frontier_batch_size=self.frontier_batch_size,
             lease_ttl_seconds=self.lease_ttl_seconds,
+            subscribed_queues=self.subscribed_queues,
+        )
+
+    def start_llm_routing_projection(self, store: Any) -> None:
+        """Attach the initialized fabric store to the scheduler-owned outbox loop."""
+        if not self.running:
+            raise RuntimeError('Job scheduler must be running before route projection')
+        if self.runtime.tasks(prefix='scheduler-llm-routing-projection'):
+            return
+        service = LlmRoutingProjectionService(
+            repository=self.repository,
+            store=store,
+            logger=self.logger,
+            admission_callback=self.dag_service.request_admission,
+        )
+        self.llm_routing_projection_service = service
+        self.runtime.create_task(
+            service.run_forever(),
+            name='scheduler-llm-routing-projection',
         )
 
     def _build_control_flow_service(self) -> ControlFlowExecutionService:
@@ -402,6 +427,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             gateway_instance_id=self.gateway_instance_id,
             notify_callback=self.notify_event,
             runtime=self.runtime,
+            subscribed_queues=self.subscribed_queues,
         )
 
     def _build_attempt_lifecycle_service(self) -> AttemptLifecycleService:
@@ -648,6 +674,19 @@ class PostgreSQLJobScheduler(JobScheduler):
         if not control_flow_jobs:
             return ControlFlowBatchResult()
 
+        rejected_dags = {
+            wi.dag_id
+            for wi in control_flow_jobs
+            if not queue_is_subscribed(wi.name, self.subscribed_queues)
+        }
+        for dag_id in rejected_dags:
+            await self.dag_service.evict_dag(dag_id, reason="queue_not_subscribed")
+        control_flow_jobs = [
+            wi for wi in control_flow_jobs if wi.dag_id not in rejected_dags
+        ]
+        if not control_flow_jobs:
+            return ControlFlowBatchResult()
+
         processable_jobs: list[WorkInfo] = []
         reconciled_count = 0
 
@@ -671,6 +710,12 @@ class PostgreSQLJobScheduler(JobScheduler):
             job_ids = [wi.id for wi in jobs]
             try:
                 leased_ids = await self._lease_jobs_db(job_name, job_ids)
+            except _QueueNotSubscribedError:
+                for dag_id in {wi.dag_id for wi in jobs}:
+                    await self.dag_service.evict_dag(
+                        dag_id, reason="queue_not_subscribed"
+                    )
+                continue
             except Exception as e:
                 self.logger.error(
                     f"[WORK_DIST] Error leasing {len(job_ids)} control flow nodes "
@@ -806,6 +851,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             self.logger.info(f"Create queue: {work_queue}")
             await self.repository.create_queue(work_queue)
             await self.repository.create_queue(f"${work_queue}_dlq")
+        self.known_queues.update(defined_queues)
 
         # Start the NotificationService before admission or polling so DAG
         # state transitions cannot race ahead of the LISTEN connection.
@@ -988,6 +1034,9 @@ class PostgreSQLJobScheduler(JobScheduler):
                     )
 
                 def control_flow_filter(wi: WorkInfo) -> bool:
+                    if not queue_is_subscribed(wi.name, self.subscribed_queues):
+                        rejected_control_dags.add(wi.dag_id)
+                        return False
                     metadata = (
                         wi.data.get("metadata", {}) if isinstance(wi.data, dict) else {}
                     )
@@ -998,14 +1047,20 @@ class PostgreSQLJobScheduler(JobScheduler):
                         entrypoint
                     )
 
+                rejected_control_dags: set[str] = set()
                 peek_started = time.perf_counter()
                 visible_control_flow = await self.frontier.peek_ready(
                     candidate_window,
                     filter_fn=control_flow_filter,
                 )
+                for dag_id in rejected_control_dags:
+                    await self.dag_service.evict_dag(
+                        dag_id, reason="queue_not_subscribed"
+                    )
                 control_flow_jobs = [
                     wi
                     for wi in visible_control_flow
+                    if wi.dag_id not in rejected_control_dags
                     if is_control_flow_entrypoint(
                         wi.data.get("metadata", {}).get("on", "")
                     )
@@ -1087,6 +1142,10 @@ class PostgreSQLJobScheduler(JobScheduler):
                     max_resident_dags=max_concurrent_dags,
                 )
                 candidates_captured_at = time.perf_counter()
+                for dag_id in selection.rejected_dag_ids:
+                    await self.dag_service.evict_dag(
+                        dag_id, reason="queue_not_subscribed"
+                    )
                 candidate_window = selection.candidate_window
                 regular_candidates = list(selection.candidates)
                 scheduler_trace(
@@ -1113,7 +1172,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                             f"Slots by executor: {slots_by_executor}"
                         )
                     else:
-                        frontier_summary = self.frontier.summary(detail=False)
+                        frontier_summary = await self.frontier.summary(detail=False)
                         self.logger.debug(
                             f"[WORK_DIST] No ready work in frontier. Short sleep. "
                             f"Batch size: {batch_size} | "
@@ -1247,10 +1306,32 @@ class PostgreSQLJobScheduler(JobScheduler):
                     )
 
                 ids_by_job_name: dict[str, list[str]] = defaultdict(list)
+                rejected_dags = {
+                    wi.dag_id
+                    for wi in selected_wis
+                    if not queue_is_subscribed(wi.name, self.subscribed_queues)
+                }
+                if self.subscribed_queues is not None:
+                    for dag_id in {wi.dag_id for wi in selected_wis} - rejected_dags:
+                        if self.dag_service.is_admitted(dag_id):
+                            continue
+                        dag = await self.get_dag_by_id(dag_id)
+                        if dag is None or not await self.dag_service.admit_dag(
+                            dag_id, dag, source="dispatch_scope"
+                        ):
+                            rejected_dags.add(dag_id)
+                for dag_id in rejected_dags:
+                    await self.dag_service.evict_dag(
+                        dag_id, reason="queue_not_subscribed"
+                    )
+                selected_wis = [
+                    wi for wi in selected_wis if wi.dag_id not in rejected_dags
+                ]
                 for wi in selected_wis:
                     ids_by_job_name[wi.name].append(wi.id)
 
                 leased_ids: set[str] = set()
+                rejected_lease_ids: set[str] = set()
                 for job_name, ids in ids_by_job_name.items():
                     try:
                         self.logger.debug(
@@ -1272,11 +1353,25 @@ class PostgreSQLJobScheduler(JobScheduler):
                                 f"[WORK_DIST] DB lease shortfall for '{job_name}': got {len(got)}/{len(ids)}. "
                                 f"Missing IDs: {list(missing_ids)[:5]}"
                             )
+                    except _QueueNotSubscribedError:
+                        rejected_dags = {
+                            wi.dag_id for wi in selected_wis if wi.id in ids
+                        }
+                        rejected_lease_ids.update(
+                            wi.id for wi in selected_wis if wi.dag_id in rejected_dags
+                        )
+                        for dag_id in rejected_dags:
+                            await self.dag_service.evict_dag(
+                                dag_id, reason="queue_not_subscribed"
+                            )
                     except Exception as e:
                         self.logger.error(
                             f"[WORK_DIST] DB lease FAILED for '{job_name}' ({len(ids)} ids): {e}",
                             exc_info=True,
                         )
+                selected_wis = [
+                    wi for wi in selected_wis if wi.id not in rejected_lease_ids
+                ]
                 if len(leased_ids) < len(selected_wis):
                     reconciled_shortfall = await self._reconcile_db_lease_shortfall(
                         selected_wis, leased_ids
@@ -1889,6 +1984,7 @@ class PostgreSQLJobScheduler(JobScheduler):
             resolution_retry_max_delay=self._dag_resolution_retry_max_delay,
             admission_batch_size=self.priority_refresh_hydrate_limit,
             sla_priority_interval_seconds=self.sla_priority_interval_seconds,
+            subscribed_queues=self.subscribed_queues,
         )
         self.notification_service.register_handler(
             channel='dag_state_changed', handler=self.dag_service.handle_state_change
@@ -1902,12 +1998,14 @@ class PostgreSQLJobScheduler(JobScheduler):
             notify_callback=self.notify_event,
             recovery_callback=self._reconcile_recovered_run_leases,
             maintenance_interval=self._maintenance_interval,
+            subscribed_queues=self.subscribed_queues,
         )
         self.control_flow_service = self._build_control_flow_service()
         self.attempt_lifecycle_service = self._build_attempt_lifecycle_service()
         self.submission_service = self._build_submission_service(
             initial_submission_count=submission_count
         )
+        self.llm_routing_projection_service = None
         self.diagnostics = self._build_diagnostics()
         self._resources_closed = False
 
@@ -1920,7 +2018,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         )
         pending = len(self._pending_dispatches)
         limit = self.dispatch_confirmation_max_in_flight
-        snapshot['dispatch'] = {
+        snapshot["dispatch"] = {
             'pending_confirmations': pending,
             'confirmation_limit': limit,
             'available_confirmations': max(0, limit - pending),
@@ -1997,15 +2095,41 @@ class PostgreSQLJobScheduler(JobScheduler):
                 )
 
             async def _submit_and_confirm() -> None:
-                await self.job_manager.submit_job(
-                    entrypoint=entrypoint,
-                    submission_id=submission_id,
-                    metadata=job_metadata,
-                    confirmation_event=confirmation_event,
-                    is_retry=is_retry,
-                    run_owner=run_owner,
-                    run_attempt_id=run_attempt_id,
-                )
+                async def submit(retry: bool) -> None:
+                    await self.job_manager.submit_job(
+                        entrypoint=entrypoint,
+                        submission_id=submission_id,
+                        metadata=job_metadata,
+                        confirmation_event=confirmation_event,
+                        is_retry=retry,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                    )
+
+                try:
+                    await submit(bool(is_retry))
+                except DuplicateJobSubmissionError:
+                    existing_status = await self.job_manager.get_job_status(
+                        submission_id
+                    )
+                    if existing_status is None or not existing_status.is_terminal():
+                        raise
+                    self.logger.info(
+                        "Replaying reset job %s over terminal runtime status %s",
+                        submission_id,
+                        existing_status.value,
+                    )
+                    scheduler_trace(
+                        "gateway_dispatch_terminal_replay",
+                        job_id=submission_id,
+                        dag_id=work_info.dag_id,
+                        entrypoint=entrypoint,
+                        previous_status=existing_status.value,
+                        run_owner=run_owner,
+                        run_attempt_id=run_attempt_id,
+                        **self._ha_trace_fields(),
+                    )
+                    await submit(True)
                 scheduler_trace(
                     "gateway_dispatch_submitted",
                     job_id=submission_id,
@@ -2310,6 +2434,13 @@ class PostgreSQLJobScheduler(JobScheduler):
             )
 
     async def mark_as_active(self, work_info: WorkInfo) -> bool:
+        if not queue_is_subscribed(work_info.name, self.subscribed_queues):
+            return False
+        if (
+            self.subscribed_queues is not None
+            and await self.dag_service.consumption_rejection_reason(work_info.dag_id)
+        ):
+            return False
         self.logger.debug(f"Marking as active : {work_info.id}")
         count = await self.repository.mark_jobs_as_active(
             job_ids=[work_info.id], job_name=work_info.name
@@ -2365,7 +2496,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         self, recovered: list[RecoveredRunLease]
     ) -> None:
         admission_required = False
+        rejection_by_dag: dict[str, str | None] = {}
         for recovery in recovered:
+            if not queue_is_subscribed(recovery.name, self.subscribed_queues):
+                continue
             work_item = await self.repository.get_job_by_id(recovery.id)
             if work_item is None:
                 self.logger.warning(
@@ -2373,6 +2507,16 @@ class PostgreSQLJobScheduler(JobScheduler):
                 )
                 continue
 
+            if not queue_is_subscribed(work_item.name, self.subscribed_queues):
+                continue
+            if self.subscribed_queues is not None:
+                dag_id = work_item.dag_id
+                if dag_id not in rejection_by_dag:
+                    rejection_by_dag[
+                        dag_id
+                    ] = await self.dag_service.consumption_rejection_reason(dag_id)
+                if rejection_by_dag[dag_id]:
+                    continue
             self._job_cache[recovery.id] = work_item
             scheduler_trace(
                 "run_lease_recovered",
@@ -2424,13 +2568,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         if admission_required:
             await self.dag_service.request_admission("run_lease_recovery")
 
-    async def maintenance(self):
-        """
-        Performs the maintenance process, including expiring, archiving, and purging.
-        Delegates to MaintenanceService.
-
-        :return: None
-        """
+    async def maintenance(self) -> None:
+        """Run periodic lease recovery."""
         await self.maintenance_service.maintenance()
 
     async def expire(self):
@@ -2440,18 +2579,12 @@ class PostgreSQLJobScheduler(JobScheduler):
         """
         await self.maintenance_service.expire()
 
-    async def archive(self):
-        """
-        Archive completed jobs.
-        Delegates to MaintenanceService.
-        """
+    async def archive(self) -> None:
+        """Raise until job archival is implemented."""
         await self.maintenance_service.archive()
 
-    async def purge(self):
-        """
-        Purge old archived jobs.
-        Delegates to MaintenanceService.
-        """
+    async def purge(self) -> None:
+        """Raise until archived-job purging is implemented."""
         await self.maintenance_service.purge()
 
     def _setup_event_subscriptions(self):
@@ -2554,7 +2687,15 @@ class PostgreSQLJobScheduler(JobScheduler):
             self.logger.info(f"Syncing job status every {wait_time} seconds")
             await asyncio.sleep(wait_time)
             try:
-                active_jobs = await self.list_jobs(state=[WorkState.ACTIVE.value])
+                if self.subscribed_queues is None:
+                    active_jobs = await self.list_jobs(state=[WorkState.ACTIVE.value])
+                else:
+                    active_jobs = {}
+                    for queue_name in sorted(self.subscribed_queues):
+                        rows = await self.repository.list_jobs(
+                            queue=queue_name, state=["active"], limit=0
+                        )
+                        active_jobs.update((wi.id, wi) for wi in rows)
                 if not active_jobs:
                     continue
 
@@ -2761,6 +2902,8 @@ class PostgreSQLJobScheduler(JobScheduler):
         *,
         min_sync_interval_seconds: int,
     ) -> bool:
+        if not queue_is_subscribed(work_item.name, self.subscribed_queues):
+            return False
         job_info_state = convert_job_status_to_work_state(job_info.status)
         if not job_info.status.is_terminal() or work_item.state == job_info_state:
             return False
@@ -2774,6 +2917,15 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         current_work_item = await self.repository.get_job_by_id(job_id)
         if current_work_item is None or current_work_item.state != WorkState.ACTIVE:
+            return False
+        if not queue_is_subscribed(current_work_item.name, self.subscribed_queues):
+            return False
+        if (
+            self.subscribed_queues is not None
+            and await self.dag_service.consumption_rejection_reason(
+                current_work_item.dag_id
+            )
+        ):
             return False
 
         if (
@@ -2947,6 +3099,10 @@ class PostgreSQLJobScheduler(JobScheduler):
         Try to lease the given job ids for this scheduler instance in the DB.
         Returns the subset of ids that were successfully leased.
         """
+        if not queue_is_subscribed(job_name, self.subscribed_queues):
+            raise _QueueNotSubscribedError(
+                f"Consumer is not subscribed to queue {job_name!r}"
+            )
         if not ids:
             return set()
 
@@ -3012,7 +3168,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                     self._semaphore_store.reserve,
                     executor,
                     wi.id,
-                    node='',
+                    node="",
                     ttl=self._sem_default_ttl,
                     owner=wi.id,
                     run_attempt_id=run_attempt_ids[wi.id],
@@ -3080,7 +3236,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                 self._semaphore_store.reserve_many,
                 executor,
                 job_ids,
-                node='',
+                node="",
                 ttl=self._sem_default_ttl,
                 owner_by_ticket={wi.id: wi.id for wi in jobs},
                 run_attempt_id_by_ticket=run_attempt_ids,
@@ -3125,7 +3281,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         Hydrate a specific DAG from the database into the MemoryFrontier.
         Delegates to DAGManagementService.
 
-        :param dag_id: The ID of the DAG to hydrate
+        :param dag_id: The ID of the DAG to hydrateS
         :return: True if DAG was hydrated, False if not found or failed
         """
         return await self.dag_service.hydrate_single_dag(dag_id)

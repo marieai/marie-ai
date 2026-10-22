@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marie-registry"
+version = "0.1.0"
+description = "Model catalog and metadata resolution for the Marie namespace"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = {text = "Apache-2.0"}
+dependencies = ["pydantic>=2.11.0", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+huggingface = ["huggingface-hub>=0.30.0", "transformers>=4.49.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/marie"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

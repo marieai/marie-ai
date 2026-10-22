@@ -8,8 +8,6 @@ import pytest
 from docarray import DocList
 from docarray.documents import TextDoc
 from jsonschema import ValidationError
-from pydantic import ValidationError as PydanticValidationError
-
 from marie.agent.backends.base import (
     AgentResult,
     AgentStatus,
@@ -19,9 +17,11 @@ from marie.agent.backends.openai_backend import (
     OpenAIBackendConfig,
 )
 from marie.agent.message import Message
+from pydantic import ValidationError as PydanticValidationError
+
 from marie.api import AssetKeyDoc
 from marie.executor.agent import AgentExecutor
-from marie.plugins.embedded import PluginInvocationResult
+from marie.plugins.embedded import EmbeddedPlugins, PluginInvocationResult
 
 
 def executor_with_result(result: AgentResult) -> tuple[AgentExecutor, AsyncMock]:
@@ -37,23 +37,24 @@ def plugin_executor(
     *,
     route: dict | None = None,
 ) -> tuple[AgentExecutor, AsyncMock]:
-    executor = AgentExecutor(
-        enable_conversation_store=False,
-        plugins=[
-            {
-                'package': 'marie/fixture-agent',
-                'path': '/not-read-during-routing.zip',
-                'actions': ['run'],
-            }
-        ],
-        agent_routes={
-            'fixture.echo': route
-            or {
-                'package': 'marie/fixture-agent',
-                'action': 'run',
-            }
-        },
-    )
+    with patch.object(EmbeddedPlugins, 'ensure_started'):
+        executor = AgentExecutor(
+            enable_conversation_store=False,
+            plugins=[
+                {
+                    'package': 'marie/fixture-agent',
+                    'path': '/not-read-during-routing.zip',
+                    'actions': ['run'],
+                }
+            ],
+            agent_routes={
+                'fixture.echo': route
+                or {
+                    'package': 'marie/fixture-agent',
+                    'action': 'run',
+                }
+            },
+        )
     invocation = AsyncMock(
         return_value=PluginInvocationResult(
             result={'proposal': {'decision': 'repair'}},
@@ -300,6 +301,51 @@ def test_agent_route_must_reference_allowlisted_plugin_action() -> None:
                 }
             },
         )
+
+
+def test_agent_executor_starts_configured_plugins_at_startup() -> None:
+    with patch.object(EmbeddedPlugins, 'ensure_started') as ensure_started:
+        AgentExecutor(
+            enable_conversation_store=False,
+            plugins=[
+                {
+                    'package': 'marie/fixture-agent',
+                    'path': '/fixture.zip',
+                    'actions': ['run'],
+                }
+            ],
+        )
+    ensure_started.assert_called_once_with()
+
+
+def test_agent_executor_reports_plugin_start_failure_without_raising() -> None:
+    failure = RuntimeError('plugin install failed: missing archive')
+    with (
+        patch.object(EmbeddedPlugins, 'ensure_started', side_effect=failure),
+        patch('marie.executor.agent.agent_executor.logger') as log,
+    ):
+        AgentExecutor(
+            enable_conversation_store=False,
+            plugins=[
+                {
+                    'package': 'marie/fixture-agent',
+                    'path': '/fixture.zip',
+                    'actions': ['run'],
+                }
+            ],
+            agent_routes={
+                'fixture.echo': {'package': 'marie/fixture-agent', 'action': 'run'}
+            },
+        )
+    message = log.error.call_args.args[0]
+    assert 'missing archive' in message
+    assert 'fixture.echo' in message
+
+
+def test_agent_executor_without_plugins_starts_no_daemon() -> None:
+    with patch.object(EmbeddedPlugins, 'ensure_started') as ensure_started:
+        AgentExecutor(enable_conversation_store=False)
+    ensure_started.assert_not_called()
 
 
 def test_agent_executor_closes_owned_embedded_plugins() -> None:

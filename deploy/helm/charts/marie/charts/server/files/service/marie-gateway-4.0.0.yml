@@ -96,7 +96,7 @@ with:
     <<: *psql_connection_shared
     max_pool_size: 5
     max_connections: 5
-    queue_names: [extract,classify,transform,load, gen5_extract] # Queue names for the job scheduler to monitor
+    queue_names: [extract,classify,transform,load, gen5_extract,kb_indexing] # Consumer subscriptions; omit to consume all queues
 
     # DAG Concurrency Management
     dag_manager:
@@ -112,7 +112,7 @@ with:
       # Auto-discover planners from packages
       discover_packages: []
       # Explicit planners (mock planners for testing)
-      planners: []
+      planners: __QUERY_PLANNERS__
 
   # Toast event tracking system
   # It can be backed by Message Queue or Database backed

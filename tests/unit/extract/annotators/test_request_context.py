@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
+from marie.engine.completion_contract import RequestContext
 from PIL import Image
 
-from marie.engine.completion_contract import RequestContext
 from marie.extract.annotators.llm_annotator import LLMAnnotator
 from marie.extract.annotators.util import _build_request_contexts
 
@@ -17,6 +17,8 @@ def test_build_request_contexts_uses_source_identity_and_page_number_only():
     contexts = _build_request_contexts(
         batch_mapping,
         RequestContext(
+            job_id="dag-1",
+            work_unit_id="node-1",
             ref_id="PID_2_10832_0_255720425.tif",
             ref_type="stress",
             requested_pages=(0,),
@@ -25,12 +27,16 @@ def test_build_request_contexts_uses_source_identity_and_page_number_only():
 
     assert contexts == [
         RequestContext(
+            job_id="dag-1",
+            work_unit_id="node-1",
             ref_id="PID_2_10832_0_255720425.tif",
             ref_type="stress",
             page_number=1,
             requested_pages=(0,),
         ),
         RequestContext(
+            job_id="dag-1",
+            work_unit_id="node-1",
             ref_id="PID_2_10832_0_255720425.tif",
             ref_type="stress",
             page_number=2,
@@ -65,7 +71,6 @@ def test_llm_annotator_separates_span_metadata_from_request_context():
     annotator.job_id = "job-runtime"
     annotator.dag_id = "dag-1"
     annotator.node_task_id = "node-1"
-    annotator.llm_pool_id = "document-small"
     annotator.ref_id = "PID_2_10832_0_255720425.tif"
     annotator.ref_type = "stress"
     annotator.requested_pages = [0]
@@ -77,8 +82,10 @@ def test_llm_annotator_separates_span_metadata_from_request_context():
     assert "ref_type" not in metadata
     assert "requested_pages" not in metadata
     assert metadata["job_id"] == "job-runtime"
-    assert metadata["pool_id"] == "document-small"
+    assert "pool_id" not in metadata
     assert request_context == RequestContext(
+        job_id="dag-1",
+        work_unit_id="node-1",
         ref_id="PID_2_10832_0_255720425.tif",
         ref_type="stress",
         requested_pages=(0,),
@@ -87,11 +94,15 @@ def test_llm_annotator_separates_span_metadata_from_request_context():
 
 def test_model_request_context_preserves_none_requested_pages_as_all_pages():
     annotator = object.__new__(LLMAnnotator)
+    annotator.dag_id = "dag-1"
+    annotator.node_task_id = "node-1"
     annotator.ref_id = "PID_2_10832_0_255720425.tif"
     annotator.ref_type = "stress"
     annotator.requested_pages = None
 
     assert annotator._build_model_request_context() == RequestContext(
+        job_id="dag-1",
+        work_unit_id="node-1",
         ref_id="PID_2_10832_0_255720425.tif",
         ref_type="stress",
         requested_pages=None,
@@ -100,8 +111,40 @@ def test_model_request_context_preserves_none_requested_pages_as_all_pages():
 
 def test_model_request_context_requires_source_identity():
     annotator = object.__new__(LLMAnnotator)
+    annotator.dag_id = None
+    annotator.node_task_id = None
     annotator.ref_id = None
     annotator.ref_type = None
     annotator.requested_pages = [0]
 
     assert annotator._build_model_request_context() is None
+
+
+def test_model_request_context_keeps_durable_route_identity_without_source() -> None:
+    annotator = object.__new__(LLMAnnotator)
+    annotator.dag_id = "dag-1"
+    annotator.node_task_id = "node-1"
+    annotator.ref_id = None
+    annotator.ref_type = None
+    annotator.requested_pages = None
+
+    assert annotator._build_model_request_context() == RequestContext(
+        job_id="dag-1",
+        work_unit_id="node-1",
+    )
+
+
+def test_refinement_context_reuses_parent_work_unit_route() -> None:
+    annotator = object.__new__(LLMAnnotator)
+    annotator.dag_id = "dag-1"
+    annotator.node_task_id = "node-1"
+    annotator.ref_id = "doc-1"
+    annotator.ref_type = "stress"
+    annotator.requested_pages = None
+
+    first = annotator._build_model_request_context()
+    refined = annotator._build_model_request_context()
+
+    assert refined is not None
+    assert refined.job_id == first.job_id
+    assert refined.work_unit_id == first.work_unit_id

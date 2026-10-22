@@ -6,6 +6,7 @@ from uuid import UUID
 
 import pytest
 
+from marie.scheduler.llm_routing import TrustedRoutingOverride
 from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (  # noqa: F401
     GatewayLlmDispatchRuntime,
 )
@@ -23,6 +24,9 @@ def build_gateway() -> tuple[MarieServerGateway, list[Any]]:
         return work_info.id
 
     gateway.job_scheduler = SimpleNamespace(submit_job=submit)
+    gateway.llm_dispatch_runtime = SimpleNamespace(
+        config=SimpleNamespace(fabric_group_id='default')
+    )
     gateway.gateway_instance_id = 'gateway-1'
     gateway.logger = MagicMock()
     return gateway, submitted
@@ -42,6 +46,67 @@ def submission_message() -> dict[str, object]:
             'planner': 'extract',
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_submission_persists_http_context_instead_of_caller_context() -> None:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+
+    gateway, submitted = build_gateway()
+    provider = TracerProvider()
+    message = submission_message()
+    message['submission_trace_context'] = {'traceparent': 'caller-controlled'}
+    with provider.get_tracer('test').start_as_current_span(
+        'POST /api/v1/invoke'
+    ) as span:
+        response = await gateway.handle_job_submit_command(message)
+        context = span.get_span_context()
+        assert span.attributes['marie.submission_id'] == response.parameters['job_id']
+    carrier = submitted[0].data['submission_trace_context']
+    assert carrier['traceparent'] == (
+        f'00-{context.trace_id:032x}-{context.span_id:016x}-{int(context.trace_flags):02x}'
+    )
+    assert message['submission_trace_context'] == {'traceparent': 'caller-controlled'}
+    provider.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_submission_without_active_trace_discards_caller_context() -> None:
+    from opentelemetry import context as context_api
+    from opentelemetry.context import Context
+
+    gateway, submitted = build_gateway()
+    message = submission_message()
+    message['submission_trace_context'] = {'traceparent': 'caller-controlled'}
+    token = context_api.attach(Context())
+    try:
+        await gateway.handle_job_submit_command(message)
+    finally:
+        context_api.detach(token)
+    assert submitted[0].data['submission_trace_context'] == {}
+
+
+@pytest.mark.asyncio
+async def test_gateway_marks_operator_override_as_trusted_scheduler_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway, submitted = build_gateway()
+    monkeypatch.delenv('MARIE_GATEWAY_PUBLISH_ACCEPTED_EVENT', raising=False)
+    override = TrustedRoutingOverride(
+        pool_id='document-small',
+        actor='routing-admin',
+        reason='qualification replay',
+    )
+
+    response = await gateway.handle_job_submit_command(
+        submission_message(), routing_override=override
+    )
+
+    assert response.parameters['status'] == 'ok'
+    assert submitted[0].routing_request_source == 'operator'
+    assert submitted[0].routing_override == override
+    assert submitted[0].data['metadata'].get('pool_id') is None
 
 
 @pytest.mark.asyncio

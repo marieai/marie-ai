@@ -139,10 +139,10 @@ class DesiredStatusStresser:
             )
 
             # Flip through a small cycle
-            ok1 = self._status.set_serving(node, depl, owner)
-            ok2 = self._status.set_not_serving(node, depl, owner)
-            ok3 = self._status.set_unknown(node, depl, owner)
-            ok4 = self._status.set_service_unknown(node, depl, owner)
+            ok1 = self._status.set_serving(node, depl, owner, epoch=1)
+            ok2 = self._status.set_not_serving(node, depl, owner, epoch=1)
+            ok3 = self._status.set_unknown(node, depl, owner, epoch=1)
+            ok4 = self._status.set_service_unknown(node, depl, owner, epoch=1)
             return bool(ok1 and ok2 and ok3 and ok4)
         except Exception as e:
             logger.error(f"status_set error: {e}", exc_info=False)
@@ -160,7 +160,7 @@ class DesiredStatusStresser:
                 epoch=1,
                 initial_status=HealthCheckResponse.NOT_SERVING,
             )
-            return bool(self._status.heartbeat(node, depl, owner))
+            return bool(self._status.heartbeat(node, depl, owner, epoch=1))
         except Exception as e:
             logger.error(f"heartbeat error: {e}", exc_info=False)
             return False
@@ -169,7 +169,7 @@ class DesiredStatusStresser:
         node, depl = self._ids()
         try:
             # gateway-like desired schedule
-            _ = self._desired.schedule_new_epoch(node, depl, params={"idx": idx})
+            desired = self._desired.schedule_new_epoch(node, depl, params={"idx": idx})
 
             # worker claims and sets SERVING
             owner = f"worker-{uuid.uuid4()}"
@@ -177,18 +177,20 @@ class DesiredStatusStresser:
                 node,
                 depl,
                 owner,
-                epoch=1,
+                epoch=desired.epoch,
                 initial_status=HealthCheckResponse.NOT_SERVING,
             )
             if not ok_claim:
                 return False
 
-            ok_serving = self._status.set_serving(node, depl, owner)
+            ok_serving = self._status.set_serving(
+                node, depl, owner, epoch=desired.epoch
+            )
             if not ok_serving:
                 return False
 
             # heartbeat once
-            ok_hb = self._status.heartbeat(node, depl, owner)
+            ok_hb = self._status.heartbeat(node, depl, owner, epoch=desired.epoch)
             return bool(ok_hb)
         except Exception as e:
             logger.error(f"end_to_end error: {e}", exc_info=False)
@@ -240,7 +242,7 @@ class DesiredStatusStresser:
 
         logger.info(
             f"Starting Desired/Status stress: mode={self.mode}, "
-            f"{'num_requests='+str(num_requests) if num_requests else 'run_time='+run_time}, "
+            f"{'num_requests=' + str(num_requests) if num_requests else 'run_time=' + run_time}, "
             f"concurrency={concurrency}, cap={cap}"
         )
 

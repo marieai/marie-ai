@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any, Callable, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from marie.engine.completion_contract import CompletionCallParams
 from marie.engine.openai_compat import execute_completion_call
+from marie.instrumentation.context import inject_trace_context
 
 
 class OpenAICompatibleExecutionAdapter:
@@ -50,6 +52,23 @@ class OpenAICompatibleExecutionAdapter:
         timeout_budget: Optional[float],
     ):
         try:
+            trace_headers = inject_trace_context()
+            if trace_headers:
+                headers = {
+                    key: value
+                    for key, value in (
+                        call.extra_create_kwargs.get("extra_headers") or {}
+                    ).items()
+                    if key.lower() not in {"traceparent", "tracestate"}
+                }
+                headers.update(trace_headers)
+                call = replace(
+                    call,
+                    extra_create_kwargs={
+                        **call.extra_create_kwargs,
+                        "extra_headers": headers,
+                    },
+                )
             completion_coro = execute_completion_call(client, call)
             if timeout_budget is None:
                 return await completion_coro

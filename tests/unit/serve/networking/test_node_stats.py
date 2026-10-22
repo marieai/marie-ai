@@ -9,6 +9,7 @@ from marie.serve.networking.balancer.least_connection_balancer import (
     LeastConnectionsLoadBalancer,
 )
 from marie.serve.networking.connection_pool_map import _ConnectionPoolMap
+from marie.serve.networking.replica_list import _ReplicaList
 
 
 @pytest.mark.asyncio
@@ -61,7 +62,7 @@ async def test_node_stats_report_least_connection_load() -> None:
 
 
 @pytest.mark.asyncio
-async def test_single_document_requests_track_node_usage() -> None:
+async def test_single_document_requests_track_node_usage(monkeypatch) -> None:
     events = []
 
     class Connection:
@@ -69,20 +70,17 @@ async def test_single_document_requests_track_node_usage() -> None:
         deployment_name = "executor"
 
         async def send_single_doc_request(self, **kwargs):
+            assert replica_list.get_load_balancer().get_active_count(self.address) == 1
             events.append("send")
             yield "response", "metadata"
 
     connection = Connection()
-    replica_list = Mock()
-    replica_list.get_all_connections.return_value = [connection]
-    replica_list.get_next_connection = Mock(return_value=None)
-
-    async def get_next_connection(**kwargs):
-        return connection
-
-    replica_list.get_next_connection.side_effect = get_next_connection
-    replica_list.incr_usage.side_effect = lambda address: events.append("increment")
-    replica_list.decr_usage.side_effect = lambda address: events.append("decrement")
+    monkeypatch.setattr(
+        'marie.serve.networking.replica_list.create_async_channel_stub',
+        lambda *args, **kwargs: (connection, None),
+    )
+    replica_list = _ReplicaList(None, Mock(), 'test')
+    replica_list.add_connection(connection.address, connection.deployment_name)
 
     connection_pool = object.__new__(GrpcConnectionPool)
     connection_pool.compression = None
@@ -98,4 +96,5 @@ async def test_single_document_requests_track_node_usage() -> None:
     ]
 
     assert responses == [("response", "metadata")]
-    assert events == ["increment", "send", "decrement"]
+    assert events == ["send"]
+    assert replica_list.get_load_balancer().get_active_count(connection.address) == 0

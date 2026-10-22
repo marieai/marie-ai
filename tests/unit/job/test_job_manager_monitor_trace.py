@@ -3,7 +3,9 @@ import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from marie.job.common import JobInfo, JobStatus
+import pytest
+
+from marie.job.common import DuplicateJobSubmissionError, JobInfo, JobStatus
 from marie.job.job_manager import JobManager
 
 
@@ -94,6 +96,53 @@ async def test_terminal_notification_publishes_and_wakes_monitor(monkeypatch) ->
     assert published is False
     manager.event_publisher.publish.assert_awaited_once()
     assert events[-1][0] == "job_terminal_event_publish_skipped"
+
+
+@pytest.mark.parametrize("source", ["job_info_proxy", "postgres_notify"])
+async def test_terminal_failure_event_preserves_structured_error(
+    monkeypatch, source
+) -> None:
+    manager = object.__new__(JobManager)
+    manager.logger = Mock()
+    manager.event_publisher = SimpleNamespace(publish=AsyncMock())
+    manager._job_info_client = SimpleNamespace(
+        get_info=AsyncMock(
+            return_value=JobInfo(
+                entrypoint="test",
+                status=JobStatus.FAILED,
+                runtime_env={
+                    "attributes": {"source": "annotator"},
+                    "error": {
+                        "type": "RepetitionError",
+                        "message": "LLM output is repetitive",
+                    },
+                },
+            )
+        )
+    )
+    manager._published_terminal_events = {}
+    manager._committed_terminal_events = {}
+    monkeypatch.setattr("marie.job.job_manager.scheduler_trace", lambda *_a, **_k: None)
+
+    published = await manager._publish_terminal_event(
+        "job-1",
+        JobStatus.FAILED,
+        "owner-1",
+        "attempt-1",
+        source,
+    )
+
+    assert published is True
+    payload = manager.event_publisher.publish.await_args.args[1]
+    assert payload["jobinfo_replace_kwargs"] == {
+        "runtime_env": {
+            "error": {
+                "type": "RepetitionError",
+                "message": "LLM output is repetitive",
+            }
+        }
+    }
+    assert "attributes" not in payload["jobinfo_replace_kwargs"]["runtime_env"]
 
 
 async def test_terminal_notification_rejects_stale_run_attempt(monkeypatch) -> None:
@@ -278,3 +327,35 @@ async def test_submit_passes_committed_job_info_to_fresh_tasks(monkeypatch) -> N
         job_supervisor=supervisor,
         initial_job_info=stored_job_info,
     )
+
+
+async def test_duplicate_submit_preserves_existing_terminal_tracking() -> None:
+    manager = object.__new__(JobManager)
+    manager.logger = Mock()
+    manager._job_info_client = SimpleNamespace(put_info=AsyncMock(return_value=False))
+    manager._published_terminal_events = {
+        'job-1': (JobStatus.SUCCEEDED, 'attempt-1')
+    }
+    manager._committed_terminal_events = {
+        'job-1': (JobStatus.SUCCEEDED, 'attempt-1')
+    }
+    manager._terminal_notifications = {'job-1': JobStatus.SUCCEEDED}
+    manager._active_run_attempts = {'job-1': 'attempt-1'}
+    manager._recover_running_jobs_event = asyncio.Event()
+    manager._recover_running_jobs_event.set()
+
+    with pytest.raises(DuplicateJobSubmissionError):
+        await manager.submit_job(
+            entrypoint='mock_executor_a:///document/extract',
+            submission_id='job-1',
+            run_attempt_id='attempt-2',
+        )
+
+    assert manager._published_terminal_events == {
+        'job-1': (JobStatus.SUCCEEDED, 'attempt-1')
+    }
+    assert manager._committed_terminal_events == {
+        'job-1': (JobStatus.SUCCEEDED, 'attempt-1')
+    }
+    assert manager._terminal_notifications == {'job-1': JobStatus.SUCCEEDED}
+    assert manager._active_run_attempts == {'job-1': 'attempt-1'}

@@ -29,99 +29,115 @@ RETURNS TABLE (
 LANGUAGE SQL
 STABLE
 AS $function$
-WITH bounds AS (
-    SELECT
-        NOW() AS observed_at,
-        NOW() - make_interval(secs => p_window_seconds) AS cutoff
-), arrivals AS (
+WITH arrivals AS (
     SELECT COUNT(*)::BIGINT AS count
-    FROM {schema}.job AS j, bounds
-    WHERE j.created_on >= bounds.cutoff
+    FROM {schema}.job AS j
+    WHERE j.created_on >= NOW() - make_interval(secs => p_window_seconds)
       AND (p_queue IS NULL OR j.name = p_queue)
 ), ready_transitions AS (
     SELECT COUNT(*)::BIGINT AS count
-    FROM {schema}.job_history AS jh, bounds
-    WHERE jh.history_created_on >= bounds.cutoff
-      AND jh.state::TEXT IN ('created', 'retry')
+    FROM {schema}.job_history AS jh
+    WHERE jh.history_created_on >= NOW() - make_interval(secs => p_window_seconds)
+      AND jh.state IN ('created', 'retry')
       AND (p_queue IS NULL OR jh.name = p_queue)
 ), activations AS (
     SELECT COUNT(*)::BIGINT AS count
-    FROM {schema}.job_attempt AS ja, bounds
-    WHERE ja.activated_at >= bounds.cutoff
+    FROM {schema}.job_attempt AS ja
+    WHERE ja.activated_at >= NOW() - make_interval(secs => p_window_seconds)
       AND (p_queue IS NULL OR ja.job_name = p_queue)
 ), starts AS (
     SELECT COUNT(*)::BIGINT AS count
-    FROM {schema}.job AS j, bounds
-    WHERE j.started_on >= bounds.cutoff
+    FROM {schema}.job AS j
+    WHERE j.started_on >= NOW() - make_interval(secs => p_window_seconds)
       AND (p_queue IS NULL OR j.name = p_queue)
 ), terminals AS (
     SELECT
         COUNT(*)::BIGINT AS count,
         COUNT(*) FILTER (
-            WHERE j.state::TEXT IN ('failed', 'expired', 'cancelled')
+            WHERE j.state IN ('failed', 'expired', 'cancelled')
         )::BIGINT AS failures
-    FROM {schema}.job AS j, bounds
-    WHERE j.completed_on >= bounds.cutoff
-      AND j.state::TEXT IN ('completed', 'skipped', 'failed', 'expired', 'cancelled')
+    FROM {schema}.job AS j
+    WHERE j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+      AND j.state IN ('completed', 'skipped', 'failed', 'expired', 'cancelled')
       AND (p_queue IS NULL OR j.name = p_queue)
 ), current_work AS (
     SELECT
         COUNT(*) FILTER (
-            WHERE j.state::TEXT IN ('created', 'retry') AND j.start_after <= bounds.observed_at
+            WHERE j.state IN ('created', 'retry') AND j.start_after <= NOW()
         )::BIGINT AS ready,
-        COUNT(*) FILTER (WHERE j.state::TEXT = 'active')::BIGINT AS active,
-        MAX(EXTRACT(EPOCH FROM (bounds.observed_at - j.start_after))) FILTER (
-            WHERE j.state::TEXT IN ('created', 'retry') AND j.start_after <= bounds.observed_at
+        COUNT(*) FILTER (WHERE j.state = 'active')::BIGINT AS active,
+        MAX(EXTRACT(EPOCH FROM (NOW() - j.start_after))) FILTER (
+            WHERE j.state IN ('created', 'retry') AND j.start_after <= NOW()
         )::DOUBLE PRECISION AS oldest_ready_seconds
-    FROM {schema}.job AS j, bounds
+    FROM {schema}.job AS j
     WHERE (p_queue IS NULL OR j.name = p_queue)
-      AND j.state::TEXT IN ('created', 'retry', 'active')
+      AND j.state IN ('created', 'retry', 'active')
 ), stage_latency AS (
     SELECT
         percentile_cont(0.50) WITHIN GROUP (
             ORDER BY EXTRACT(EPOCH FROM (j.started_on - GREATEST(j.created_on, j.start_after)))
-        ) FILTER (WHERE j.started_on >= bounds.cutoff) AS ready_p50,
+        ) FILTER (
+            WHERE j.started_on >= NOW() - make_interval(secs => p_window_seconds)
+        ) AS ready_p50,
         percentile_cont(0.95) WITHIN GROUP (
             ORDER BY EXTRACT(EPOCH FROM (j.started_on - GREATEST(j.created_on, j.start_after)))
-        ) FILTER (WHERE j.started_on >= bounds.cutoff) AS ready_p95,
+        ) FILTER (
+            WHERE j.started_on >= NOW() - make_interval(secs => p_window_seconds)
+        ) AS ready_p95,
         MAX(EXTRACT(EPOCH FROM (j.started_on - GREATEST(j.created_on, j.start_after))))
-            FILTER (WHERE j.started_on >= bounds.cutoff) AS ready_max,
+            FILTER (
+                WHERE j.started_on >= NOW() - make_interval(secs => p_window_seconds)
+            ) AS ready_max,
         percentile_cont(0.50) WITHIN GROUP (
             ORDER BY EXTRACT(EPOCH FROM (j.completed_on - j.started_on))
-        ) FILTER (WHERE j.completed_on >= bounds.cutoff AND j.started_on IS NOT NULL) AS run_p50,
+        ) FILTER (
+            WHERE j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+              AND j.started_on IS NOT NULL
+        ) AS run_p50,
         percentile_cont(0.95) WITHIN GROUP (
             ORDER BY EXTRACT(EPOCH FROM (j.completed_on - j.started_on))
-        ) FILTER (WHERE j.completed_on >= bounds.cutoff AND j.started_on IS NOT NULL) AS run_p95,
+        ) FILTER (
+            WHERE j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+              AND j.started_on IS NOT NULL
+        ) AS run_p95,
         MAX(EXTRACT(EPOCH FROM (j.completed_on - j.started_on)))
-            FILTER (WHERE j.completed_on >= bounds.cutoff AND j.started_on IS NOT NULL) AS run_max
-    FROM {schema}.job AS j, bounds
+            FILTER (
+                WHERE j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+                  AND j.started_on IS NOT NULL
+            ) AS run_max
+    FROM {schema}.job AS j
     WHERE (p_queue IS NULL OR j.name = p_queue)
-      AND (j.started_on >= bounds.cutoff OR j.completed_on >= bounds.cutoff)
+      AND (
+          j.started_on >= NOW() - make_interval(secs => p_window_seconds)
+          OR j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+      )
 ), queue_counts AS (
     SELECT
         j.name,
-        COUNT(*) FILTER (WHERE j.created_on >= bounds.cutoff)::BIGINT AS arrivals,
         COUNT(*) FILTER (
-            WHERE j.completed_on >= bounds.cutoff
-              AND j.state::TEXT IN ('completed', 'skipped', 'failed', 'expired', 'cancelled')
+            WHERE j.created_on >= NOW() - make_interval(secs => p_window_seconds)
+        )::BIGINT AS arrivals,
+        COUNT(*) FILTER (
+            WHERE j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+              AND j.state IN ('completed', 'skipped', 'failed', 'expired', 'cancelled')
         )::BIGINT AS terminals,
         COUNT(*) FILTER (
-            WHERE j.completed_on >= bounds.cutoff
-              AND j.state::TEXT IN ('failed', 'expired', 'cancelled')
+            WHERE j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+              AND j.state IN ('failed', 'expired', 'cancelled')
         )::BIGINT AS failures,
         COUNT(*) FILTER (
-            WHERE j.state::TEXT IN ('created', 'retry') AND j.start_after <= bounds.observed_at
+            WHERE j.state IN ('created', 'retry') AND j.start_after <= NOW()
         )::BIGINT AS ready,
-        COUNT(*) FILTER (WHERE j.state::TEXT = 'active')::BIGINT AS active,
-        MAX(EXTRACT(EPOCH FROM (bounds.observed_at - j.start_after))) FILTER (
-            WHERE j.state::TEXT IN ('created', 'retry') AND j.start_after <= bounds.observed_at
+        COUNT(*) FILTER (WHERE j.state = 'active')::BIGINT AS active,
+        MAX(EXTRACT(EPOCH FROM (NOW() - j.start_after))) FILTER (
+            WHERE j.state IN ('created', 'retry') AND j.start_after <= NOW()
         )::DOUBLE PRECISION AS oldest_ready_seconds
-    FROM {schema}.job AS j, bounds
+    FROM {schema}.job AS j
     WHERE (p_queue IS NULL OR j.name = p_queue)
       AND (
-          j.created_on >= bounds.cutoff
-          OR j.completed_on >= bounds.cutoff
-          OR j.state::TEXT IN ('created', 'retry', 'active')
+          j.created_on >= NOW() - make_interval(secs => p_window_seconds)
+          OR j.completed_on >= NOW() - make_interval(secs => p_window_seconds)
+          OR j.state IN ('created', 'retry', 'active')
       )
     GROUP BY j.name
 ), queue_page AS (
@@ -151,7 +167,7 @@ WITH bounds AS (
     FROM queue_page
 )
 SELECT
-    bounds.observed_at,
+    NOW() AS observed_at,
     arrivals.count,
     ready_transitions.count,
     activations.count,
@@ -168,8 +184,7 @@ SELECT
     stage_latency.run_p95::DOUBLE PRECISION,
     stage_latency.run_max::DOUBLE PRECISION,
     queue_json.queues
-FROM bounds
-CROSS JOIN arrivals
+FROM arrivals
 CROSS JOIN ready_transitions
 CROSS JOIN activations
 CROSS JOIN starts

@@ -30,6 +30,7 @@ from marie.scheduler.repository import JobRepository
 from marie.scheduler.services.dag_management_service import DAGManagementService
 from marie.scheduler.services.scheduler_runtime import SchedulerRuntime
 from marie.scheduler.state import WorkState
+from marie.scheduler.util import queue_is_subscribed, validate_queue_scope
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
 
@@ -90,9 +91,13 @@ class ControlFlowExecutionService:
         gateway_instance_id: str,
         notify_callback: Callable[[], Awaitable[bool]],
         runtime: SchedulerRuntime,
+        *,
+        subscribed_queues: frozenset[str] | None,
     ) -> None:
         self.logger = MarieLogger(ControlFlowExecutionService.__name__)
         self.repository = repository
+        validate_queue_scope(subscribed_queues)
+        self.subscribed_queues = subscribed_queues
         self.frontier = frontier
         self.dag_service = dag_service
         self._status_update_lock = status_update_lock
@@ -202,21 +207,26 @@ class ControlFlowExecutionService:
         self, job_id: str, work_item: WorkInfo
     ) -> None:
         """Advance the frontier and apply a completed branch decision."""
-        await self.frontier.on_job_completed(job_id)
-
         dag_plan = await self.dag_service.get_dag(work_item.dag_id)
-        if not dag_plan:
-            return
-
-        node = get_node_from_dag(job_id, dag_plan)
+        node = get_node_from_dag(job_id, dag_plan) if dag_plan else None
         if node and self._is_branch_node(node):
             self.logger.info(
                 f"Completed branch node detected: {job_id}. Evaluating paths..."
             )
             await self._evaluate_and_mark_branch_paths(job_id, work_item, dag_plan)
+        await self.frontier.on_job_completed(job_id)
 
     async def process_node(self, work_item: WorkInfo) -> ControlFlowExecutionOutcome:
         """Execute a scheduler-local control-flow node."""
+        if not queue_is_subscribed(work_item.name, self.subscribed_queues) or (
+            self.subscribed_queues is not None
+            and not self.dag_service.is_admitted(work_item.dag_id)
+            and await self.dag_service.consumption_rejection_reason(work_item.dag_id)
+        ):
+            await self.dag_service.evict_dag(
+                work_item.dag_id, reason="queue_not_subscribed"
+            )
+            return ControlFlowExecutionOutcome.ADMISSION_REFUSED
         try:
             node_type = self._trace_started(work_item)
             admission_outcome = await self._admit_node(work_item, node_type)
@@ -245,8 +255,24 @@ class ControlFlowExecutionService:
         outcomes: dict[str, ControlFlowExecutionOutcome] = {}
         candidates: list[WorkInfo] = []
         node_types: dict[str, str] = {}
+        rejected_dags = {
+            item.dag_id
+            for item in work_items
+            if not queue_is_subscribed(item.name, self.subscribed_queues)
+        }
+        if self.subscribed_queues is not None:
+            for dag_id in {item.dag_id for item in work_items} - rejected_dags:
+                if not self.dag_service.is_admitted(
+                    dag_id
+                ) and await self.dag_service.consumption_rejection_reason(dag_id):
+                    rejected_dags.add(dag_id)
+        for dag_id in rejected_dags:
+            await self.dag_service.evict_dag(dag_id, reason="queue_not_subscribed")
 
         for work_item in work_items:
+            if work_item.dag_id in rejected_dags:
+                outcomes[work_item.id] = ControlFlowExecutionOutcome.ADMISSION_REFUSED
+                continue
             try:
                 node_type = self._trace_started(work_item)
                 node_types[work_item.id] = node_type
@@ -258,6 +284,8 @@ class ControlFlowExecutionService:
             except Exception as error:
                 outcomes[work_item.id] = await self._handle_node_error(work_item, error)
 
+        if not candidates:
+            return [outcomes[item.id] for item in work_items]
         activated, activation_outcomes = await self._activate_nodes(candidates)
         outcomes.update(activation_outcomes)
 
@@ -503,9 +531,22 @@ class ControlFlowExecutionService:
         try:
             job_levels = self._job_levels(work_item)
             self._schedule_started_toast(work_item, job_levels)
-            if not await self._complete_attempt(work_item):
+            skipped_ids: list[str] = []
+            if node_type in ('branch', 'switch'):
+                # A completed parent must never expose an uncommitted branch decision.
+                completed, skipped_ids = await self._evaluate_and_mark_branch_paths(
+                    work_item.id,
+                    work_item,
+                    self.dag_service.active_dags[work_item.dag_id],
+                    complete_attempt=True,
+                )
+            else:
+                completed = await self._complete_attempt(work_item)
+            if not completed:
                 return ControlFlowExecutionOutcome.COMPLETION_REJECTED
             durably_completed = True
+            if skipped_ids:
+                await self.frontier.on_jobs_skipped(skipped_ids)
             await self._finish_completed_node(
                 work_item,
                 node_type,
@@ -566,13 +607,7 @@ class ControlFlowExecutionService:
         notify: bool,
     ) -> None:
         dag_id = work_item.dag_id
-        if node_type in ('branch', 'switch'):
-            await self._evaluate_and_mark_branch_paths(
-                work_item.id,
-                work_item,
-                self.dag_service.active_dags[dag_id],
-            )
-        elif node_type not in ('noop', 'merger'):
+        if node_type not in ('branch', 'switch', 'noop', 'merger'):
             self.logger.warning(
                 f"[CONTROL_FLOW] Unknown control flow type: "
                 f"{node_type} for {work_item.id}"
@@ -718,7 +753,9 @@ class ControlFlowExecutionService:
         branch_node_id: str,
         work_item: WorkInfo,
         dag_plan: QueryPlan,
-    ) -> None:
+        *,
+        complete_attempt: bool = False,
+    ) -> tuple[bool, list[str]]:
         try:
             self.logger.info(f"Evaluating branch paths for node: {branch_node_id}")
             branch_node = get_node_from_dag(branch_node_id, dag_plan)
@@ -726,7 +763,7 @@ class ControlFlowExecutionService:
                 self.logger.warning(
                     f"Node {branch_node_id} is not a branch node, skipping evaluation"
                 )
-                return
+                return False, []
 
             branch_definition = branch_node.definition
             context = BranchEvaluationContext(
@@ -774,13 +811,7 @@ class ControlFlowExecutionService:
                     'evaluated_at': datetime.now(timezone.utc).isoformat(),
                 }
             else:
-                return
-
-            await self._update_job_branch_metadata(
-                job_id=branch_node_id,
-                queue_name=work_item.name,
-                branch_metadata=branch_metadata,
-            )
+                return False, []
 
             all_target_nodes: set[str] = set()
             active_target_nodes: set[str] = set()
@@ -801,6 +832,59 @@ class ControlFlowExecutionService:
                     path_to_nodes['default'] = branch_definition.default_case
                     all_target_nodes.update(branch_definition.default_case)
 
+            skipped_target_nodes = all_target_nodes - active_target_nodes
+            skip_reason = SkipReason(
+                branch_node_id=branch_node_id,
+                reason=(f'Branch condition not met. Active paths: {active_path_ids}'),
+                evaluated_condition={'active_paths': active_path_ids},
+                selected_paths=active_path_ids,
+                timestamp=datetime.now(timezone.utc),
+            )
+            committed_node_ids: list[str] = []
+            if complete_attempt:
+                if not work_item.run_owner or not work_item.run_attempt_id:
+                    self._trace_missing_attempt(work_item)
+                    return False, []
+                skipped_node_ids = exclusive_skip_closure(
+                    dag_plan, list(skipped_target_nodes)
+                )
+                async with self._status_update_lock[branch_node_id]:
+                    committed, skipped_ids = await self.repository.commit_branch_route(
+                        job_id=branch_node_id,
+                        queue_name=work_item.name,
+                        run_owner=work_item.run_owner,
+                        run_attempt_id=work_item.run_attempt_id,
+                        branch_metadata=branch_metadata,
+                        skipped_job_ids=skipped_node_ids,
+                        skip_metadata={
+                            'skip_reason': skip_reason.model_dump(mode='json'),
+                            'skipped_at': skip_reason.timestamp.isoformat(),
+                        },
+                    )
+                if not committed:
+                    self.logger.warning(
+                        "Branch terminal update rejected for %s (run_attempt_id=%s)",
+                        branch_node_id,
+                        work_item.run_attempt_id,
+                    )
+                    scheduler_trace(
+                        'control_flow_terminal_rejected',
+                        job_id=branch_node_id,
+                        dag_id=work_item.dag_id,
+                        reason='attempt_mismatch',
+                        run_owner=work_item.run_owner,
+                        run_attempt_id=work_item.run_attempt_id,
+                    )
+                    return False, []
+                committed_node_ids = [
+                    node_id for node_id in skipped_node_ids if node_id in skipped_ids
+                ]
+            else:
+                await self._update_job_branch_metadata(
+                    job_id=branch_node_id,
+                    queue_name=work_item.name,
+                    branch_metadata=branch_metadata,
+                )
             if active_target_nodes:
                 await self._mark_selected_nodes(
                     branch_node_id,
@@ -811,28 +895,20 @@ class ControlFlowExecutionService:
                     path_to_nodes,
                 )
 
-            skipped_target_nodes = all_target_nodes - active_target_nodes
-            if skipped_target_nodes:
-                skip_reason = SkipReason(
-                    branch_node_id=branch_node_id,
-                    reason=(
-                        f'Branch condition not met. Active paths: {active_path_ids}'
-                    ),
-                    evaluated_condition={'active_paths': active_path_ids},
-                    selected_paths=active_path_ids,
-                    timestamp=datetime.now(timezone.utc),
-                )
+            if skipped_target_nodes and not complete_attempt:
                 await self._mark_nodes_skipped(
                     list(skipped_target_nodes),
                     work_item.name,
                     skip_reason,
                     dag_plan,
                 )
+            return True, committed_node_ids
         except Exception as error:
             self.logger.error(
                 f"Error evaluating branch paths for {branch_node_id}: {error}",
                 exc_info=True,
             )
+            raise
 
     async def _mark_selected_nodes(
         self,
@@ -946,3 +1022,4 @@ class ControlFlowExecutionService:
             await self.frontier.on_jobs_skipped(committed_node_ids)
         except Exception as error:
             self.logger.error(f"Error marking nodes as skipped: {error}", exc_info=True)
+            raise

@@ -9,9 +9,8 @@ from marie.serve.networking.replica_list import _ReplicaList
 
 
 @pytest.fixture()
-def replica_list(logger, metrics):
+def replica_list(logger):
     return _ReplicaList(
-        metrics=metrics,
         histograms=_NetworkingHistograms(),
         logger=logger,
         runtime_name='test',

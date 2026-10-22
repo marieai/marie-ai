@@ -2,25 +2,31 @@
 
 Mirrors `marie.mcp.agent_tool.MCPRemoteTool` / `marie.mcp.runtime.MCPToolSpec`.
 An installed extension (plugin) tool dropped onto an agent is resolved by
-`resolve_tools()` into a `PluginTool`, which (from Slice 3a) invokes the marie
+`resolve_tools()` into a `PluginTool`, which invokes the marie
 plugin daemon (`POST /v1/dispatch/invoke`).
 
-The spec carries only the stable IDENTITY of the tool. The daemon wire identity
-(`packageRef`/`provider`/`tool`), the parameter schema, credentials, and the
-org/workspace context are injected at call time — never persisted here.
+Studio supplies the package identity and input schema. The execution runtime
+binds tenant and signing context; the daemon client resolves credentials.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 
+from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
 from marie.secret_store import CredentialRequirement
 
 if TYPE_CHECKING:
     from marie.plugins.daemon_client import PluginDaemonClient
+
+_runtime_client_factory: ContextVar[Callable[[], PluginDaemonClient] | None] = (
+    ContextVar('plugin_tool_client_factory', default=None)
+)
 
 
 def _to_camel(value: str) -> str:
@@ -56,7 +62,7 @@ class PluginToolSpec(BaseModel):
     package_trust_level: str | None = None
 
     description: str | None = None
-    # Hydrated fresh at call time (Slice 3a); not persisted into saved plans.
+    # Supplied by Studio's tool registration.
     input_schema: dict[str, Any] | None = None
     # Credential requirements (name + bound secret_ref); resolved in marie-ai by
     # the CredentialResolver at call time. Empty/absent -> no credentials.
@@ -95,8 +101,7 @@ def is_plugin_tool_spec(spec: dict[str, Any]) -> bool:
 class PluginTool(AgentTool):
     """AgentTool backed by an installed plugin tool (invoked via the plugin daemon).
 
-    Mirrors `MCPRemoteTool`. Resolution is complete here; `call()` is wired in
-    Slice 3a (build the marie envelope, dispatch to ``/v1/dispatch/invoke``).
+    Builds the runtime envelope and dispatches to ``/v1/dispatch/invoke``.
     """
 
     def __init__(
@@ -127,6 +132,16 @@ class PluginTool(AgentTool):
         self._client = client
         return self
 
+    @staticmethod
+    @contextmanager
+    def runtime(client_factory: Callable[[], PluginDaemonClient]) -> Iterator[None]:
+        """Bind a client factory to this execution, including async tool threads."""
+        token = _runtime_client_factory.set(client_factory)
+        try:
+            yield
+        finally:
+            _runtime_client_factory.reset(token)
+
     def build_payload(self, tool_parameters: dict[str, Any]) -> dict[str, Any]:
         """Build the dify `invoke_tool` request the daemon forwards to the plugin.
 
@@ -146,13 +161,17 @@ class PluginTool(AgentTool):
         }
 
     def call(self, **kwargs: Any) -> ToolOutput:
-        if self._client is None:
+        if self._client is not None:
+            return self._client.invoke(self._spec, self.build_payload(kwargs))
+        factory = _runtime_client_factory.get()
+        if factory is None:
             raise RuntimeError(
                 "PluginTool has no daemon client bound; the execution environment "
                 "must call bind_client() (or construct PluginTool(spec, client)) "
                 f"before invoking tool={self._spec.tool_name!r}"
             )
-        return self._client.invoke(self._spec, self.build_payload(kwargs))
+        with factory() as client:
+            return client.invoke(self._spec, self.build_payload(kwargs))
 
     def _default_description(self) -> str:
         return f"Invoke the installed plugin tool {self._spec.tool_name}."
