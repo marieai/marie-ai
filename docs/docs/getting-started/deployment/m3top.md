@@ -40,6 +40,13 @@ Use `m3top` during deployment verification and incident response to answer quest
 
 Static Linux binaries and SHA-256 files are published in the [Marie-AI GitHub Releases](https://github.com/marieai/marie-ai/releases) repository.
 
+m3top is versioned separately from Marie-AI: `m3top-v0.2.0` is a component
+release, while `v5.1.0` is a Marie-AI core release. The m3top source and release
+workflow live in `marieai/marie-studio`; its `m3top-v*` source tag triggers the
+public binaries and matching distribution tag in Marie-AI. Create release tags
+in Studio using `packages/m3top/releasing.md`, rather than running the Marie-AI
+core `scripts/release.sh` or manually tagging this checkout for m3top.
+
 ### Install from a Marie-AI checkout
 
 The repository installer detects x86-64 or ARM64, selects the newest `m3top-v*` release, verifies its checksum, and installs the binary to `~/.local/bin`:
@@ -51,17 +58,17 @@ The repository installer detects x86-64 or ARM64, selects the newest `m3top-v*` 
 Install a specific version or choose another user-writable directory:
 
 ```bash
-M3TOP_VERSION=0.1.0 \
+M3TOP_VERSION=0.2.0 \
 M3TOP_INSTALL_DIR="$HOME/bin" \
 ./scripts/install-m3top.sh
 ```
 
 ### Install directly from a release
 
-The following example installs `m3top-v0.1.0`. Set `M3TOP_TARGET=aarch64-unknown-linux-musl` on ARM64.
+The following example installs `m3top-v0.2.0`. Set `M3TOP_TARGET=aarch64-unknown-linux-musl` on ARM64.
 
 ```bash
-M3TOP_VERSION=0.1.0
+M3TOP_VERSION=0.2.0
 M3TOP_TARGET=x86_64-unknown-linux-musl
 
 curl -fLO "https://github.com/marieai/marie-ai/releases/download/m3top-v${M3TOP_VERSION}/m3top-${M3TOP_VERSION}-${M3TOP_TARGET}.tar.gz"
