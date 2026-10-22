@@ -1,0 +1,157 @@
+syntax = "proto3";
+package marieai.events;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+// Bidirectional streaming for real-time events
+service EventStreamService {
+    rpc StreamEvents(stream ClientMessage) returns (stream ServerMessage);
+    rpc GetReplayBuffer(ReplayRequest) returns (ReplayResponse);
+}
+
+// ==================== Client -> Server ====================
+
+message ClientMessage {
+    oneof message {
+        SubscribeRequest subscribe = 1;
+        UnsubscribeRequest unsubscribe = 2;
+        AckMessage ack = 3;
+        ClientHeartbeat heartbeat = 4;
+        FilterUpdate filter_update = 5;
+    }
+}
+
+message SubscribeRequest {
+    string subscription_id = 1;           // Client-generated unique ID
+    repeated string topics = 2;           // api_key values, or "*" for all
+    repeated string events = 3;           // Filter by event name (empty = all)
+    optional int64 last_sequence_num = 4; // Resume from this sequence (per-topic)
+    optional int32 replay_count = 5;      // Max events to replay
+    FilterConfig filter = 6;              // Advanced filtering
+}
+
+message FilterConfig {
+    repeated string include_sources = 1;  // Only these sources
+    repeated string exclude_sources = 2;  // Exclude these sources
+    repeated string jobids = 3;           // Filter by job ID
+    map<string, string> metadata_match = 4;
+}
+
+message FilterUpdate {
+    string subscription_id = 1;
+    FilterConfig filter = 2;
+}
+
+message UnsubscribeRequest {
+    string subscription_id = 1;
+}
+
+message AckMessage {
+    string subscription_id = 1;
+    oneof ack_mode {
+        IndividualAck individual = 2;
+        CumulativeAck cumulative = 3;
+    }
+}
+
+message IndividualAck {
+    repeated string ack_ids = 1;          // Specific events by ack_id
+}
+
+message CumulativeAck {
+    int64 up_to_sequence_num = 1;         // All events <= this sequence
+    string topic = 2;                     // Required: sequence is per-topic
+}
+
+message ClientHeartbeat {
+    int64 timestamp = 1;
+    map<string, int64> subscription_watermarks = 2;
+}
+
+// ==================== Server -> Client ====================
+
+message ServerMessage {
+    oneof message {
+        EventEnvelope event = 1;
+        SubscriptionConfirm subscription_confirm = 2;
+        UnsubscriptionConfirm unsubscription_confirm = 3;
+        ServerHeartbeat heartbeat = 4;
+        ErrorMessage error = 5;
+        BackpressureSignal backpressure = 6;
+    }
+}
+
+message EventEnvelope {
+    string ack_id = 1;                    // Unique ID for acknowledgment
+    string subscription_id = 2;           // Which subscription
+    int64 sequence_num = 3;               // Monotonic within topic
+    EventData event = 4;                  // The actual event
+    google.protobuf.Timestamp published_at = 5;
+    int32 delivery_attempt = 6;           // Retry count (1 = first delivery)
+}
+
+// Field names match marie/messaging/events.py EventMessage exactly
+message EventData {
+    string id = 1;                        // UUID (globally unique)
+    string source = 2;                    // e.g., "gateway://scheduler"
+    string api_key = 3;                   // Tenant/topic
+    string jobid = 4;                     // Job ID (matches EventMessage.jobid)
+    string event = 5;                     // Event name (matches EventMessage.event)
+    string jobtag = 6;                    // Job tag
+    string status = 7;                    // INFO, SUCCESS, FAILURE
+    int64 timestamp = 8;                  // Unix timestamp
+    google.protobuf.Struct payload = 9;
+}
+
+message SubscriptionConfirm {
+    string subscription_id = 1;
+    repeated string topics = 2;
+    int64 replay_from = 3;                // Sequence number replay started from
+    int64 current_head = 4;               // Current topic head sequence
+}
+
+message UnsubscriptionConfirm {
+    string subscription_id = 1;
+}
+
+message ServerHeartbeat {
+    int64 timestamp = 1;
+    map<string, int64> topic_heads = 2;   // Current sequence per topic
+}
+
+message ErrorMessage {
+    string subscription_id = 1;
+    ErrorCode code = 2;
+    string message = 3;
+    map<string, string> details = 4;
+}
+
+enum ErrorCode {
+    ERROR_UNKNOWN = 0;
+    ERROR_INVALID_SUBSCRIPTION = 1;
+    ERROR_TOPIC_NOT_FOUND = 2;
+    ERROR_AUTHENTICATION_FAILED = 3;
+    ERROR_RATE_LIMITED = 4;
+    ERROR_INTERNAL = 5;
+}
+
+message BackpressureSignal {
+    string subscription_id = 1;
+    int32 recommended_delay_ms = 2;       // Suggested client-side delay
+    int64 pending_events = 3;             // Events awaiting ack
+}
+
+// ==================== Replay ====================
+
+message ReplayRequest {
+    string topic = 1;
+    int64 from_sequence_num = 2;          // Replay events with seq > this
+    int32 max_events = 3;
+}
+
+message ReplayResponse {
+    repeated EventEnvelope events = 1;
+    int64 topic_head = 2;                 // Current head sequence
+    bool has_more = 3;                    // More events available
+}

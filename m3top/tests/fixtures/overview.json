@@ -1,0 +1,91 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-07-29T17:30:00Z",
+  "windowSeconds": 300,
+  "target": {
+    "groupId": "claims-prod",
+    "name": "Claims Production",
+    "environment": "production",
+    "region": "us-central",
+    "gateway": { "id": "gw-claims-02", "name": "Claims gateway 02" }
+  },
+  "health": {
+    "state": "healthy",
+    "reasons": []
+  },
+  "kpis": {
+    "gatewayRequestsPerSecond": null,
+    "jobsCompletedPerSecond": null,
+    "jobFailureRate": null,
+    "gatewayP95LatencyMs": null,
+    "inflightRequests": 8,
+    "slotsUsed": 8,
+    "slotsTotal": 8,
+    "slotsAvailable": 0,
+    "ready": 4,
+    "backlog": 4,
+    "oldestReadySeconds": 18.5,
+    "schedulerRunning": true,
+    "schedulerPaused": false,
+    "completedPlansPerHour": 9.8,
+    "completedExecutorTasksPerHour": 724.3,
+    "planSuccessRatePct": 95.0,
+    "taskSuccessRatePct": 99.47
+  },
+  "executors": [
+    {
+      "id": "corr_indexing_executor@10.0.0.8:51001",
+      "name": "corr_indexing_executor/rep-2",
+      "logicalExecutor": "corr_indexing_executor",
+      "desiredState": "SERVING",
+      "actualState": "SERVING",
+      "heartbeatAt": "2026-07-29T17:29:57Z",
+      "state": "saturated",
+      "replicas": 1,
+      "readyReplicas": 1,
+      "inflight": 8,
+      "slotsUsed": 8,
+      "capacity": 8,
+      "available": 0,
+      "utilizationPct": 100,
+      "holders": 8,
+      "selectionCount": 42,
+      "addresses": ["10.0.0.8:51001"],
+      "capacityNotes": null,
+      "lastError": null
+    }
+  ],
+  "attention": [],
+  "sources": {
+    "capacity": {
+      "status": "ok",
+      "observedAt": "2026-07-29T17:30:00Z",
+      "latencyMs": 12.4,
+      "error": null
+    },
+    "deploymentStatus": {
+      "status": "ok",
+      "observedAt": "2026-07-29T17:30:00Z",
+      "latencyMs": 8.1,
+      "error": null
+    },
+    "scheduler": {
+      "status": "ok",
+      "observedAt": "2026-07-29T17:30:00Z",
+      "latencyMs": 18.0,
+      "error": null
+    },
+    "throughput": {
+      "status": "ok",
+      "observedAt": "2026-07-29T17:30:00Z",
+      "latencyMs": 24.0,
+      "error": null
+    },
+    "telemetry": {
+      "status": "unavailable",
+      "observedAt": "2026-07-29T17:30:00Z",
+      "latencyMs": 30.0,
+      "error": "Telemetry storage is unavailable"
+    }
+  }
+}

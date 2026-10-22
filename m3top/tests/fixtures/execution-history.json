@@ -1,0 +1,55 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-30T15:21:43Z",
+  "query_ms": 12.4,
+  "scope": {
+    "job_id": "06a68ba1-5890-7896-8000-30e4db21aeef",
+    "dag_id": "92a69f16-ceb6-7c75-8000-37d2d2acb56e"
+  },
+  "page": {
+    "limit": 50,
+    "offset": 0,
+    "total": 73,
+    "has_next": true
+  },
+  "items": [
+    {
+      "history_id": 912,
+      "job_id": "06a68ba1-5890-7896-8000-30e4db21aeef",
+      "queue": "corr_index",
+      "changed_at": "2026-07-30T15:21:41.819Z",
+      "operation": "UPDATE",
+      "status": "failed",
+      "worker_message": "Executor process exited before returning a result",
+      "run_attempt_id": "84f69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "executor": "corr_index/rep-2",
+      "runtime_name": "corr_indexing_executor",
+      "executor_host": "asp-gpu018",
+      "endpoint": "/document/index",
+      "error": {
+        "type": "WorkerRuntimeError",
+        "message": "Executor process exited before returning a result",
+        "file": "marie/serve/runtimes/worker.py",
+        "function": "process_task",
+        "line": "412"
+      }
+    },
+    {
+      "history_id": 911,
+      "job_id": "36bd9210-ceb6-7c75-8000-37d2d2acb56e",
+      "queue": "extract",
+      "changed_at": "2026-07-30T15:21:40.109Z",
+      "operation": "UPDATE",
+      "status": "running",
+      "worker_message": "Worker accepted the task",
+      "run_attempt_id": "75e69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "executor": "extract/rep-1",
+      "runtime_name": "extract_executor",
+      "executor_host": "asp-gpu037",
+      "endpoint": "/document/extract",
+      "error": null
+    }
+  ],
+  "raw_runtime_environment_suppressed": true,
+  "traceback_suppressed": true
+}

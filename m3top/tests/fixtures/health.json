@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-30T14:30:05Z",
+  "overall_state": "degraded",
+  "partial": false,
+  "dependencies": [
+    {
+      "name": "postgresql",
+      "state": "degraded",
+      "latency_ms": 34.0,
+      "observed_at": "2026-07-30T14:30:05Z",
+      "summary": "connection pool or database sessions are waiting",
+      "details": {
+        "schema_version": 80,
+        "pool_used": 18,
+        "pool_size": 20,
+        "pool_maximum": 20,
+        "pool_waiters": 4,
+        "active_sessions": 12,
+        "blocked_sessions": 2,
+        "oldest_transaction_seconds": 18.0
+      }
+    },
+    {
+      "name": "etcd",
+      "state": "degraded",
+      "latency_ms": null,
+      "observed_at": "2026-07-30T14:30:05Z",
+      "summary": "etcd client is reconnecting",
+      "details": {
+        "connection_state": "reconnecting",
+        "active_watches": 3,
+        "event_queue_size": 2,
+        "reconnect_attempts": 1,
+        "last_success_age_seconds": 8.0
+      }
+    },
+    {
+      "name": "discovery",
+      "state": "ok",
+      "latency_ms": null,
+      "observed_at": "2026-07-30T14:30:05Z",
+      "summary": "service discovery is ready",
+      "details": {
+        "control_plane_ready": true,
+        "registered": 4,
+        "ready": 4,
+        "unready": 0
+      }
+    },
+    {
+      "name": "gateway",
+      "state": "ok",
+      "latency_ms": null,
+      "observed_at": "2026-07-30T14:30:05Z",
+      "summary": "gateway control plane is ready",
+      "details": {
+        "gateway_instance_id": "gateway-2",
+        "control_plane_ready": true,
+        "scheduler_running": true,
+        "scheduler_paused": false,
+        "service_event_queue_size": 0,
+        "state_event_queue_size": 0
+      }
+    }
+  ]
+}

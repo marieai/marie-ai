@@ -1,0 +1,108 @@
+name: Release m3top
+
+on:
+  push:
+    tags:
+      - "m3top-v*"
+
+concurrency:
+  group: m3top-release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify release version
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#m3top-v}"
+          crate_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' m3top/Cargo.toml | head -n 1)"
+          if [[ "${version}" != "${crate_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match m3top crate version ${crate_version}" >&2
+            exit 1
+          fi
+
+      - name: Install Rust target
+        run: |
+          rustup toolchain install stable --profile minimal --no-self-update
+          rustup default stable
+          rustup target add "${{ matrix.target }}"
+          sudo apt-get update
+          sudo apt-get install --yes musl-tools
+
+      - name: Test
+        run: cargo test --manifest-path m3top/Cargo.toml --locked
+
+      - name: Build release binary
+        run: cargo build --manifest-path m3top/Cargo.toml --release --locked --target "${{ matrix.target }}"
+
+      - name: Package release
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#m3top-v}"
+          target="${{ matrix.target }}"
+          package="m3top-${version}-${target}"
+          mkdir -p "dist/${package}"
+          cp "m3top/target/${target}/release/m3top" "dist/${package}/"
+          cp m3top/README.md "dist/${package}/"
+          cp LICENSE "dist/${package}/"
+          tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+          cd dist
+          sha256sum "${package}.tar.gz" > "${package}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: m3top-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish Marie-AI release
+    needs: build
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" --repo "${RELEASE_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_REPOSITORY}@${GITHUB_REF_NAME} already exists" >&2
+            exit 1
+          fi
+
+          version="${GITHUB_REF_NAME#m3top-v}"
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${RELEASE_REPOSITORY}" \
+            --verify-tag \
+            --latest=false \
+            --title "m3top ${version}" \
+            --notes "Standalone m3top ${version} binaries built from ${RELEASE_REPOSITORY}@${GITHUB_SHA}. Install with scripts/install-m3top.sh from the Marie-AI repository."

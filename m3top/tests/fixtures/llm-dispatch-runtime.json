@@ -1,0 +1,300 @@
+{
+  "mode": "queued-dispatch",
+  "fabric_group_id": "claims-prod",
+  "observation": {
+    "observed_at_ms": 1790000000000,
+    "stale": false,
+    "stale_after_ms": 15000
+  },
+  "policy": {
+    "observed_generation": 4,
+    "desired_generation": 5,
+    "synchronized": false
+  },
+  "drr": {
+    "charged_cost": 120,
+    "refunded_cost": 8,
+    "committed_charge": 112
+  },
+  "runtime_summary": {
+    "registered_dispatchers": 2,
+    "running_dispatchers": 2,
+    "pending_request_count": 14,
+    "pending_request_sample_count": 3,
+    "inflight_request_count": 5,
+    "live_request_sample_limit": 50,
+    "metadata_available": true,
+    "sampling_available": true,
+    "execution_failures": 2,
+    "malformed_requests_dropped": 0,
+    "offline_producer_requests_dropped": 1,
+    "offline_producer_replies_dropped": 0
+  },
+  "pools": [
+    {
+      "pool_id": "document-small",
+      "display_name": "Small documents",
+      "enabled": true,
+      "scheduler_policy": "drr",
+      "quantum": 8,
+      "deficit": 3.5,
+      "inflight": 4,
+      "request_queue_depth": 12,
+      "oldest_ready_age_seconds": 41.2,
+      "head_cost_units": 2,
+      "min_concurrent": 2,
+      "max_concurrent": 6,
+      "max_burst_per_visit": 4,
+      "protected_slots": 2,
+      "borrowed_slots": 1,
+      "reserved_items": 4,
+      "reserved_bytes": 81920,
+      "waiting_reason": null,
+      "endpoint_group_id": "primary",
+      "accepted": 11,
+      "completed": 6,
+      "charged_cost": 100,
+      "refunded_cost": 8,
+      "committed_charge": 92,
+      "projection_pending": 1,
+      "state_counts": {"ready": 3, "claimed": 1, "running": 1},
+      "drain_references": {"postgres": 5, "valkey": 5, "total": 10},
+      "fabric_group_id": "claims-prod",
+      "gateway_id": "gateway-1"
+    },
+    {
+      "pool_id": "document-large",
+      "display_name": null,
+      "enabled": true,
+      "scheduler_policy": "drr",
+      "quantum": 2,
+      "deficit": 0,
+      "inflight": 1,
+      "request_queue_depth": 2,
+      "oldest_pending_age_seconds": 380,
+      "head_cost_units": 9,
+      "min_concurrent": 0,
+      "max_concurrent": 2,
+      "max_burst_per_visit": 1,
+      "waiting_reason": "insufficient_credits",
+      "endpoint_group_id": "primary",
+      "fabric_group_id": "claims-prod"
+    }
+  ],
+  "pool_count": 2,
+  "pools_truncated": false,
+  "endpoint_groups": [
+    {
+      "group_id": "primary",
+      "selected_replica_id": "vllm-a",
+      "fabric_group_id": "claims-prod",
+      "replicas": [
+        {
+          "replica_id": "vllm-a",
+          "enabled": true,
+          "circuit": "closed",
+          "execution_limit": 8,
+          "available_items": 3,
+          "reserved_items": 5,
+          "port": 8000
+        },
+        {
+          "replica_id": "vllm-b",
+          "enabled": true,
+          "circuit": "open",
+          "category": "connect_refused",
+          "execution_limit": 8,
+          "available_items": 0,
+          "next_probe": 1790000004000,
+          "port": 8001
+        }
+      ]
+    }
+  ],
+  "endpoint_group_count": 1,
+  "endpoint_groups_truncated": false,
+  "routing": {
+    "projection_pending_count": 2,
+    "matched": {"automatic": 9, "override": 1},
+    "rejected": {"routing_facts_missing": 2}
+  },
+  "recent_routes": [
+    {
+      "job_id": "job-1",
+      "work_unit_id": "work-1",
+      "effective_page_count": 4,
+      "pool_id": "document-small",
+      "routing_source": "automatic",
+      "projection_state": "projected"
+    }
+  ],
+  "recent_routes_truncated": false,
+  "live_requests": [
+    {
+      "request_id": "req-0001",
+      "attempt_id": "att-0001",
+      "pool_id": "document-small",
+      "model": "qwen2.5-vl-7b",
+      "lifecycle_stage": "executing",
+      "state_source": "dispatcher",
+      "endpoint_id": "vllm-a",
+      "admitted_at_ms": 1789999990000,
+      "expires_at_ms": 1790000090000,
+      "payload_bytes": 20480,
+      "cost": 2,
+      "execution_seq": 1,
+      "queue_wait_age_seconds": 1.4,
+      "inflight_age_seconds": 8.6,
+      "dispatcher_id": "gw-1:dispatcher-a",
+      "last_error": null
+    },
+    {
+      "request_id": "req-0002",
+      "pool_id": "document-large",
+      "model": "qwen2.5-vl-72b",
+      "lifecycle_stage": "retry_wait",
+      "state_source": "valkey",
+      "submitted_at": 1789999620.0,
+      "cost": 9,
+      "next_eligible": 1790000010000,
+      "queue_wait_age_seconds": 380,
+      "inflight_age_seconds": null,
+      "dispatcher_id": null,
+      "last_error": "connect_refused"
+    },
+    {
+      "request_id": "req-0003",
+      "pool_id": "document-small",
+      "model": "qwen2.5-vl-7b",
+      "lifecycle_stage": "ready",
+      "state_source": "store",
+      "admitted_at_ms": 1789999960000,
+      "cost": 2,
+      "queue_wait_age_seconds": 40,
+      "inflight_age_seconds": null,
+      "dispatcher_id": null
+    }
+  ],
+  "dispatchers": [
+    {
+      "dispatcher_id": "gw-1:dispatcher-a",
+      "mode": "queued-dispatch",
+      "sampling_available": true,
+      "fabric_group_id": "claims-prod",
+      "gateway_id": "gateway-1",
+      "pool_id": "document-small",
+      "role": "owner",
+      "enabled": true,
+      "running": true,
+      "draining": false,
+      "queue_configured": true,
+      "owner_generation": 7,
+      "config_generation": 3,
+      "policy_generation": 4,
+      "scheduler_policy": "drr",
+      "processed_batches": 420,
+      "processed_items": 1310,
+      "last_processed_at": 1789999998.5,
+      "last_batch_size": 4,
+      "execution_failures": 2,
+      "malformed_requests_dropped": 0,
+      "offline_producer_requests_dropped": 1,
+      "offline_producer_replies_dropped": 0,
+      "inflight_request_count": 5,
+      "total_concurrent_dispatch": 8,
+      "request_queue_depth": 14,
+      "last_error": "connect_refused",
+      "counters": {"claims": 1400, "releases": 1395},
+      "endpoints": {
+        "vllm-a": {"circuit": "closed", "execution_limit": 8, "available_items": 3, "reserved_items": 5},
+        "vllm-b": {"circuit": "open", "category": "connect_refused", "execution_limit": 8, "available_items": 0, "next_probe": 1790000004000}
+      }
+    },
+    {
+      "dispatcher_id": "gw-2:dispatcher-b",
+      "mode": "queued-dispatch",
+      "sampling_available": true,
+      "fabric_group_id": "claims-prod",
+      "gateway_id": "gateway-2",
+      "pool_id": "document-small",
+      "role": "standby",
+      "enabled": true,
+      "running": true,
+      "valkey_configured": true,
+      "processed_batches": 0,
+      "processed_items": 0,
+      "last_processed_at": null,
+      "last_batch_size": 0,
+      "execution_failures": 0,
+      "inflight_request_count": 0,
+      "request_queue_depth": 14,
+      "last_error": null
+    }
+  ],
+  "scheduler_config": {
+    "generation": 5,
+    "enabled": true,
+    "policy": "drr",
+    "total_concurrent_dispatch": 8,
+    "pools_truncated": false,
+    "endpoint_groups_truncated": false,
+    "pools": [
+      {
+        "pool_id": "document-small",
+        "enabled": true,
+        "quantum": 4,
+        "min_concurrent": 1,
+        "max_concurrent": 6,
+        "max_burst_per_visit": 2,
+        "execution_bytes": 67108864,
+        "endpoint_group_id": "primary",
+        "revision": "r1",
+        "admission": {
+          "priority": 10,
+          "accepting": true,
+          "match": {
+            "document.effective_page_count": {
+              "gte": 1,
+              "lte": 4
+            },
+            "workload.mode": {
+              "eq": "interactive"
+            }
+          }
+        }
+      },
+      {
+        "pool_id": "default",
+        "enabled": true,
+        "quantum": 1,
+        "min_concurrent": 0,
+        "max_concurrent": 8,
+        "max_burst_per_visit": null,
+        "execution_bytes": 67108864,
+        "endpoint_group_id": "primary",
+        "revision": "r1",
+        "admission": {
+          "priority": 1000000,
+          "accepting": true,
+          "match": {}
+        }
+      }
+    ],
+    "endpoint_groups": [
+      {
+        "group_id": "primary",
+        "revision": "r1",
+        "replicas": [
+          {
+            "replica_id": "vllm-a",
+            "enabled": true,
+            "address": "http://127.0.0.1:8000/v1",
+            "execution_limit": 8,
+            "execution_bytes": 67108864,
+            "call_timeout_seconds": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "schemaVersion": "1.0",
+  "generatedAt": "2026-07-29T21:00:00Z",
+  "windowSeconds": 300,
+  "state": "saturated",
+  "running": true,
+  "paused": false,
+  "gatewayInstanceId": "gateway-1:4450279b-b1d3-4d39-b3c5-39e8c7530760",
+  "leaseOwner": "gateway-1:fae67bd5-4c2e-4945-9e51-9c4fdaa20f2c",
+  "activeDags": 16,
+  "maxConcurrentDags": 16,
+  "knownQueues": ["extract"],
+  "uptimeSeconds": 2743.6,
+  "fetchCount": 6683,
+  "submissionCount": 40,
+  "eventQueueSize": 1,
+  "planningAvailable": true,
+  "frontierAvailable": true,
+  "frontierBatchSize": 1000,
+  "leaseTtlSeconds": 5,
+  "frontier": {
+    "dags": 16,
+    "jobs": 384,
+    "edges": 544,
+    "ready": 12,
+    "leased": 8,
+    "blocked": 121,
+    "readyAgeP50Seconds": 3.9,
+    "readyAgeP90Seconds": 11.0,
+    "readyAgeMaxSeconds": 12.2,
+    "unmetCount": 121,
+    "unmetMax": 5,
+    "unmetAverage": 1.4,
+    "slaTracked": 160,
+    "slaNoSla": 0,
+    "slaApproachingSoft": 2,
+    "slaSoftMissed": 1,
+    "slaHardMissed": 0,
+    "slaHighestBucket": 7
+  },
+  "selection": {
+    "sampleCount": 120,
+    "observedSeconds": 299.0,
+    "cyclesPerSecond": 0.4,
+    "selectedPerSecond": 3.1,
+    "candidates": 2020,
+    "requested": 980,
+    "selected": 927,
+    "latencyP50Ms": 2.4,
+    "latencyP95Ms": 8.6,
+    "latencyMaxMs": 21.0,
+    "lastAgeSeconds": 0.3,
+    "lastOutcome": "completed",
+    "lastReason": null,
+    "lastCandidateWindow": 1000,
+    "lastDispatchCapacity": 250,
+    "lastCandidates": 32,
+    "lastRequested": 8,
+    "lastSelected": 8
+  },
+  "dispatch": {
+    "pendingConfirmations": 8,
+    "confirmationLimit": 256,
+    "availableConfirmations": 248,
+    "utilizationPct": 3.125,
+    "counters": {
+      "run_lease_recovered_retry_total": 2
+    }
+  },
+  "executors": [
+    {
+      "name": "extract",
+      "state": "waiting",
+      "ready": 8,
+      "slotsUsed": 4,
+      "capacity": 4,
+      "available": 0,
+      "inflight": 4
+    },
+    {
+      "name": "classify",
+      "state": "ready",
+      "ready": 4,
+      "slotsUsed": 2,
+      "capacity": 4,
+      "available": 2,
+      "inflight": 2
+    }
+  ],
+  "queues": [
+    {
+      "name": "extract",
+      "jobs": {
+        "created": 414367,
+        "retry": 0,
+        "active": 9,
+        "completed": 190051,
+        "skipped": 0,
+        "expired": 0,
+        "cancelled": 48,
+        "failed": 13,
+        "all": 604488
+      },
+      "dags": {
+        "created": 17252,
+        "retry": 0,
+        "active": 16,
+        "completed": 7894,
+        "skipped": 0,
+        "expired": 0,
+        "cancelled": 0,
+        "failed": 9,
+        "all": 25171
+      }
+    }
+  ],
+  "sources": {
+    "scheduler": {
+      "status": "ok",
+      "observedAt": "2026-07-29T21:00:00Z",
+      "latencyMs": 18.0,
+      "error": null
+    },
+    "capacity": {
+      "status": "ok",
+      "observedAt": "2026-07-29T21:00:00Z",
+      "latencyMs": 4.0,
+      "error": null
+    }
+  }
+}
