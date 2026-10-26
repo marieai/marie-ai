@@ -20,6 +20,8 @@ from marie.auth.api_key_manager import APIKeyManager
 from marie.auth.auth_bearer import TokenBearer
 from marie.scheduler.llm_routing import admission_routing_metrics
 
+_DEBUG_SNAPSHOT_TIMEOUT_SECONDS = 3.0
+
 
 class RoutingPreviewRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -72,6 +74,42 @@ class RoutingOverrideRequest(BaseModel):
 
 class RoutingDiagnosticsUnavailable(RuntimeError):
     pass
+
+
+def _project_scheduler_debug(snapshot: dict[str, Any]) -> dict[str, Any]:
+    result = {
+        field: snapshot[field]
+        for field in (
+            'scheduler_info',
+            'timing_info',
+            'counters',
+            'queues',
+            'execution_planning',
+            'job_state_counts',
+            'dag_state_counts',
+            'selection',
+            'dispatch',
+            'active_dags',
+            'sla_monitoring',
+        )
+        if field in snapshot
+    }
+    for field in (
+        'job_state_counts_error',
+        'dag_state_counts_error',
+        'selection_error',
+    ):
+        if field in snapshot:
+            result[field] = 'scheduler_diagnostics_unavailable'
+    if 'frontier' in snapshot:
+        result['frontier'] = {
+            field: snapshot['frontier'][field]
+            for field in ('available', 'summary', 'batch_size', 'lease_ttl_seconds')
+            if field in snapshot['frontier']
+        }
+        if 'summary_error' in snapshot['frontier']:
+            result['frontier']['summary_error'] = 'scheduler_diagnostics_unavailable'
+    return result
 
 
 def _merge_runtime_diagnostics(
@@ -167,6 +205,7 @@ def add_runtime_routes(
     failure_report_reader: (
         Callable[[str, int], Awaitable[dict[str, Any] | None]] | None
     ) = None,
+    scheduler_debug: Callable[[], Awaitable[dict[str, Any]]] | None = None,
 ) -> None:
     async def authorize(
         fabric_group_id: str = Query(min_length=1, max_length=128),
@@ -233,21 +272,72 @@ def add_runtime_routes(
             )
         return selected
 
-    async def read(fabric_group_id: str, limit: int, *, debug: bool = False):
+    async def read(
+        fabric_group_id: str, limit: int, *, debug: bool = False
+    ) -> dict[str, Any] | JSONResponse:
         gateway = gateway_debug() if debug and gateway_debug is not None else None
         selected_repository = (
             policy_repository() if policy_repository is not None else None
         )
-        try:
-            snapshot = await read_operator_runtime_snapshot(
-                fabric_group_id=fabric_group_id,
-                limit=limit,
-                policy_repository=selected_repository,
+
+        async def read_scheduler() -> dict[str, Any] | None:
+            if not debug or scheduler_debug is None:
+                return None
+            snapshot = await asyncio.wait_for(
+                scheduler_debug(), timeout=_DEBUG_SNAPSHOT_TIMEOUT_SECONDS
             )
-        except registry.SnapshotUnavailable:
+            return _project_scheduler_debug(snapshot)
+
+        snapshot_read = read_operator_runtime_snapshot(
+            fabric_group_id=fabric_group_id,
+            limit=limit,
+            policy_repository=selected_repository,
+        )
+        scheduler, snapshot = await asyncio.gather(
+            read_scheduler(),
+            (
+                asyncio.wait_for(snapshot_read, timeout=_DEBUG_SNAPSHOT_TIMEOUT_SECONDS)
+                if debug
+                else snapshot_read
+            ),
+            return_exceptions=True,
+        )
+        scheduler_error = isinstance(scheduler, Exception)
+        if isinstance(scheduler, BaseException):
+            if not scheduler_error:
+                raise scheduler
+            scheduler = None
+        debug_result = {
+            **(scheduler or {}),
+            'fabric_group_id': fabric_group_id,
+            'gateway': gateway,
+            'scheduler_details_available': scheduler is not None,
+        }
+        if scheduler_error:
+            debug_result['scheduler_details_error'] = (
+                'scheduler_diagnostics_unavailable'
+            )
+        if isinstance(snapshot, BaseException):
+            if not isinstance(
+                snapshot,
+                (
+                    registry.SnapshotUnavailable,
+                    RoutingDiagnosticsUnavailable,
+                    TimeoutError,
+                ),
+            ):
+                raise snapshot
+            category = (
+                'routing_diagnostics_unavailable'
+                if isinstance(snapshot, RoutingDiagnosticsUnavailable)
+                else 'runtime_unavailable'
+            )
+            if debug and scheduler is not None:
+                debug_result['llm_dispatch_error'] = category
+                return {'status': 'OK', 'result': debug_result}
             content: dict[str, Any] = {
                 'status': 'error',
-                'category': 'runtime_unavailable',
+                'category': category,
                 'correlation_id': uuid4().hex,
             }
             if gateway is not None:
@@ -256,27 +346,7 @@ def add_runtime_routes(
                 status_code=503,
                 content=content,
             )
-        except RoutingDiagnosticsUnavailable:
-            content = {
-                'status': 'error',
-                'category': 'routing_diagnostics_unavailable',
-                'correlation_id': uuid4().hex,
-            }
-            if gateway is not None:
-                content['gateway'] = gateway
-            return JSONResponse(
-                status_code=503,
-                content=content,
-            )
-        result = (
-            {
-                'gateway': gateway,
-                'llm_dispatch': snapshot,
-                'scheduler_details_available': False,
-            }
-            if debug
-            else snapshot
-        )
+        result = {**debug_result, 'llm_dispatch': snapshot} if debug else snapshot
         return {'status': 'OK', 'result': result}
 
     @app.get('/api/llm-dispatch/runtime')

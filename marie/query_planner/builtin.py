@@ -5,6 +5,8 @@ from marie.query_planner.kb_indexing_planner import query_planner_kb_indexing
 from marie.query_planner.model import QueryPlannersConf
 from marie.query_planner.ocr_planner import PLAN_ID as EXTRACT_PLAN_ID
 from marie.query_planner.ocr_planner import query_planner_extract
+from marie.query_planner.schema_extract_planner import PLAN_ID as SCHEMA_EXTRACT_PLAN_ID
+from marie.query_planner.schema_extract_planner import query_planner_schema_extract
 
 
 def register_from_module(planner_module: str) -> None:
@@ -39,6 +41,7 @@ def register_all_known_planners(query_planners_conf: QueryPlannersConf):
 
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
     QueryPlanRegistry.register(KB_INDEXING_PLAN_ID, query_planner_kb_indexing)
+    QueryPlanRegistry.register(SCHEMA_EXTRACT_PLAN_ID, query_planner_schema_extract)
     result = QueryPlanRegistry.initialize_from_config(query_planners_conf)
 
     logger.info(f"Planner initialization results:")

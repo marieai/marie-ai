@@ -189,6 +189,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
     def extract(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
 
         job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
+        strict_result = (payload.get("op_params") or {}).get("strict_result") is True
 
         if len(docs) == 0:
             raise ValueError("Expected single document. No documents found")
@@ -230,6 +231,10 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
             route = self._route(local_path, file_type, parse_mode)
             if route == "unsupported":
+                if strict_result:
+                    raise ValueError(
+                        f"No semantic extraction or OCR provider supports {file_type}"
+                    )
                 return {
                     "status": "error",
                     "runtime_info": self.runtime_info,
@@ -332,6 +337,8 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                 )
 
                 if metadata is None:
+                    if strict_result:
+                        raise RuntimeError("OCR produced no metadata")
                     self.logger.warning(
                         f"Metadata is None, this can happen if no text was found"
                     )
@@ -369,6 +376,8 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                 return converted
             except BaseException as error:
                 self.logger.error(f"Extract error : {error}", exc_info=True)
+                if strict_result:
+                    raise
                 msg = "inference exception"
                 if self.show_error:
                     msg = (str(error),)
@@ -383,12 +392,14 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
     @staticmethod
     def _parse_mode(parameters: dict) -> Optional[str]:
-        """Read ``parse_mode`` from ``parameters["run_params"]`` (studio-sent,
-        nested) first, then a top-level ``parameters["parse_mode"]``."""
+        """Read run parameters, then a top-level override, then planner parameters."""
         run_params = parameters.get("run_params") or {}
         if "parse_mode" in run_params:
             return run_params["parse_mode"]
-        return parameters.get("parse_mode")
+        if "parse_mode" in parameters:
+            return parameters["parse_mode"]
+        op_params = (parameters.get("payload") or {}).get("op_params") or {}
+        return op_params.get("parse_mode")
 
     def _route(self, local_path: str, file_type: str, parse_mode: Optional[str]) -> str:
         """Refresh plugin capabilities once and route the detected input."""

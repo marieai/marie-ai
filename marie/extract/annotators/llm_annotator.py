@@ -73,6 +73,8 @@ class LLMAnnotator(DocumentAnnotator):
         annotator_conf: dict[str, Any],
         layout_conf: dict[str, Any],
         run_context: Optional["RunContext"] = None,
+        output_dir: str | None = None,
+        prompt_template: PromptTemplate | None = None,
         **kwargs,
     ):
         """
@@ -195,8 +197,9 @@ class LLMAnnotator(DocumentAnnotator):
             self.logger.info(f"Pass Models: {self.pass_models}")
 
         self.working_dir = working_dir
+        self._isolated_output = output_dir is not None
         self.output_dir = ensure_exists(
-            os.path.join(working_dir, "agent-output", self.name)
+            output_dir or os.path.join(working_dir, "agent-output", self.name)
         )
         self.frames_dir = os.path.join(working_dir, "frames")
         self.logger.info(f"Annotator output dir : {self.output_dir}")
@@ -226,12 +229,15 @@ class LLMAnnotator(DocumentAnnotator):
             )
 
         prompt_dir = kwargs.get("prompt_dir")
-        self.prompt_template: PromptTemplate = PromptTemplate.from_file_with_fallback(
-            self.prompt_path,
-            prompt_dir=prompt_dir,
-            layout_id=self.layout_id,
-            config_dir=__config_dir__,
-            name=f"{self.name}-prompt",
+        self.prompt_template: PromptTemplate = (
+            prompt_template
+            or PromptTemplate.from_file_with_fallback(
+                self.prompt_path,
+                prompt_dir=prompt_dir,
+                layout_id=self.layout_id,
+                config_dir=__config_dir__,
+                name=f"{self.name}-prompt",
+            )
         )
         self.prompt_text = self.prompt_template.source  # backward compat
         self.engine = route_llm_engine(self.model_name, self.multimodal)
@@ -268,6 +274,7 @@ class LLMAnnotator(DocumentAnnotator):
                 prompt_dir=prompt_dir,
                 layout_id=self.layout_id,
                 config_dir=__config_dir__,
+                defaults=self.prompt_template.defaults,
                 name=f"{self.name}-refine-prompt",
             )
             self.refine_prompt_text = self.refine_prompt_template.source
@@ -458,7 +465,7 @@ class LLMAnnotator(DocumentAnnotator):
             shutil.rmtree(scratch)
 
     def _scratch_root(self) -> str:
-        return os.path.join(self.working_dir, "agent-output", f".{self.name}-refine")
+        return os.path.join(os.path.dirname(self.output_dir), f".{self.name}-refine")
 
     def _run_root(self, run_id: str) -> str:
         return os.path.join(self._scratch_root(), "runs", run_id)
@@ -815,7 +822,11 @@ class LLMAnnotator(DocumentAnnotator):
         self, document: UnstructuredDocument, context_mgr: ContextProviderManager
     ) -> None:
         """Write context-provider debug info to the debug directory."""
-        debug_dir = ensure_exists(os.path.join(self.working_dir, "debug"))
+        debug_dir = ensure_exists(
+            os.path.join(
+                self.output_dir if self._isolated_output else self.working_dir, "debug"
+            )
+        )
         debug_context_path = os.path.join(debug_dir, f"{self.name}_context.json")
         units = context_mgr.get_processing_units(document)
 

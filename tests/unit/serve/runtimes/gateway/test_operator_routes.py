@@ -13,6 +13,160 @@ from marie.serve.runtimes.gateway.marie.llm_dispatch_runtime import (
 )
 
 
+@pytest.mark.parametrize('dispatch_available', [True, False])
+async def test_debug_includes_scheduler_after_authorization(
+    monkeypatch: pytest.MonkeyPatch, dispatch_available: bool
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    token = 'mas_' + 's' * 54
+    APIKeyManager.add_key(
+        dict(
+            name='scheduler-observer',
+            api_key=token,
+            scopes=['runtime-observability'],
+            allowed_fabrics=['a'],
+        )
+    )
+    scheduler = AsyncMock(
+        return_value={
+            'scheduler_info': {'running': True, 'paused': False},
+            'dispatch': {'pending_confirmations': 2, 'confirmation_limit': 4},
+            'job_state_counts_error': 'private database credentials',
+            'frontier': {'available': True, 'summary_error': 'private frontier error'},
+            'frontier_summary_error': 'private database credentials',
+            'unexpected_payload': 'private payload',
+        }
+    )
+    snapshot = AsyncMock(return_value={'fabric_group_id': 'a'})
+    if not dispatch_available:
+        snapshot.side_effect = registry.SnapshotUnavailable('private dispatch error')
+    monkeypatch.setattr(registry, 'read_runtime_snapshot', snapshot)
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a', scheduler_debug=scheduler)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        route = '/api/debug?fabric_group_id=a'
+        assert (await client.get(route)).status_code == 401
+        scheduler.assert_not_awaited()
+        headers = {'Authorization': f'Bearer {token}'}
+        response = await client.get('/api/debug?fabric_group_id=b', headers=headers)
+        assert response.status_code == 403
+        scheduler.assert_not_awaited()
+        response = await client.get(route, headers=headers)
+        assert response.status_code == 200
+        result = response.json()['result']
+        assert result['fabric_group_id'] == 'a'
+        assert result['scheduler_details_available'] is True
+        assert result['scheduler_info']['running'] is True
+        assert result['dispatch']['pending_confirmations'] == 2
+        assert result['job_state_counts_error'] == 'scheduler_diagnostics_unavailable'
+        assert (
+            result['frontier']['summary_error'] == 'scheduler_diagnostics_unavailable'
+        )
+        assert ('llm_dispatch' in result) is dispatch_available
+        assert 'private' not in response.text
+        scheduler.assert_awaited_once()
+        scheduler.reset_mock()
+        response = await client.get(
+            '/api/llm-dispatch/runtime?fabric_group_id=a', headers=headers
+        )
+        assert response.status_code == (200 if dispatch_available else 503)
+        scheduler.assert_not_awaited()
+
+
+async def test_debug_scheduler_failure_preserves_dispatch_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from marie.serve.runtimes.gateway.marie.operator_routes import add_runtime_routes
+
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    token = 'mas_' + 's' * 54
+    APIKeyManager.add_key(
+        dict(
+            name='scheduler-observer',
+            api_key=token,
+            scopes=['runtime-observability'],
+            allowed_fabrics=['a'],
+        )
+    )
+    monkeypatch.setattr(
+        registry,
+        'read_runtime_snapshot',
+        AsyncMock(return_value={'fabric_group_id': 'a'}),
+    )
+    scheduler = AsyncMock(side_effect=RuntimeError('private scheduler error'))
+    app = FastAPI()
+    add_runtime_routes(app, lambda: 'a', scheduler_debug=scheduler)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.get(
+            '/api/debug?fabric_group_id=a', headers={'Authorization': f'Bearer {token}'}
+        )
+    assert response.status_code == 200
+    result = response.json()['result']
+    assert result['scheduler_details_available'] is False
+    assert result['scheduler_details_error'] == 'scheduler_diagnostics_unavailable'
+    assert result['llm_dispatch']['fabric_group_id'] == 'a'
+    assert 'private scheduler error' not in response.text
+
+
+@pytest.mark.parametrize('stalled_component', ['scheduler', 'dispatch'])
+async def test_debug_preserves_healthy_component_when_other_times_out(
+    monkeypatch: pytest.MonkeyPatch, stalled_component: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from marie.serve.runtimes.gateway.marie import operator_routes
+
+    monkeypatch.setattr(operator_routes, '_DEBUG_SNAPSHOT_TIMEOUT_SECONDS', 0.01)
+    monkeypatch.setattr(APIKeyManager, '_keys', {})
+    token = 'mas_' + 's' * 54
+    APIKeyManager.add_key(
+        dict(
+            name='scheduler-observer',
+            api_key=token,
+            scopes=['runtime-observability'],
+            allowed_fabrics=['a'],
+        )
+    )
+    cancelled = asyncio.Event()
+
+    async def stalled(*_args: object, **_kwargs: object) -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    scheduler = AsyncMock(return_value={'scheduler_info': {'running': True}})
+    dispatch = AsyncMock(return_value={'fabric_group_id': 'a'})
+    if stalled_component == 'scheduler':
+        scheduler.side_effect = stalled
+    else:
+        dispatch.side_effect = stalled
+    monkeypatch.setattr(registry, 'read_runtime_snapshot', dispatch)
+    app = FastAPI()
+    operator_routes.add_runtime_routes(app, lambda: 'a', scheduler_debug=scheduler)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url='http://test'
+    ) as client:
+        response = await client.get(
+            '/api/debug?fabric_group_id=a', headers={'Authorization': f'Bearer {token}'}
+        )
+    assert response.status_code == 200
+    assert cancelled.is_set()
+    result = response.json()['result']
+    assert result['scheduler_details_available'] is (stalled_component != 'scheduler')
+    assert ('llm_dispatch' in result) is (stalled_component != 'dispatch')
+
+
 async def test_target_probe_authorizes_and_works_without_an_active_policy(monkeypatch):
     from unittest.mock import AsyncMock
 

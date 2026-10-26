@@ -364,6 +364,7 @@ class S3StorageHandler(PathHandler):
             logger.error(f"Unable to upload to bucket '{bucket}' : {e}")
             if not self.suppress_errors:
                 raise e
+            return False
         finally:
             if not file_like and hasattr(body, 'close'):
                 body.close()
