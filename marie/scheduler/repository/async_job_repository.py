@@ -53,7 +53,7 @@ from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-SCHEDULER_SCHEMA_VERSION = 96
+SCHEDULER_SCHEMA_VERSION = 97
 
 _WORK_INFO_COLUMNS = (
     "id, name, priority, state, retry_limit, start_after, "

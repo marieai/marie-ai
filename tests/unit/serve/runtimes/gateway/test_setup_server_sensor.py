@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -105,11 +106,13 @@ async def test_scheduler_schema_precedes_dependent_runtimes(monkeypatch):
     class LlmRuntime:
         enabled = False
         mode = 'direct-batch'
+        config = SimpleNamespace(fabric_group_id='staging')
 
         async def start(self):
             order.append("llm")
 
     def fake_setup_sensor_worker(_sensor_config, _db_config):
+        assert _sensor_config['fabric_group_id'] == 'staging'
         order.append("sensor")
 
     def fake_attach_sensor_worker_scheduler(_scheduler):

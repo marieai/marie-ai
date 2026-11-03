@@ -4,7 +4,6 @@ Key pattern: tenants/{tenant_id}/kb-indexes/{index_id}/sources/{source_id}/{file
 Run params come from the scheduler-owned resource workflow binding.
 """
 
-import os
 import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -15,6 +14,7 @@ from marie.sensors.definitions.data_sink.base import FileObject
 from marie.sensors.definitions.data_sink.s3_sensor import S3DataSinkSensor
 from marie.sensors.registry import register_sensor
 from marie.sensors.types import RunRequest, SensorResult, SensorType
+from marie.storage.runtime import system_storage_target
 
 if TYPE_CHECKING:
     from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
@@ -39,16 +39,19 @@ class KbDocumentSensor(S3DataSinkSensor):
 
     def __init__(self, sensor_data: Dict[str, Any]):
         config = dict(sensor_data.get("config", {}) or {})
-        if "bucket" not in config:
-            # bucket is environment-specific (spec A2): fall back to env,
-            # defaulting to "" so construction never fails on a missing
-            # bucket - callers that actually list objects need it set.
-            config["bucket"] = os.getenv("KB_SENSOR_BUCKET") or os.getenv(
-                "S3_BUCKET", ""
-            )
+        config['bucket'] = config.get('bucket') or ''
         sensor_data = {**sensor_data, "config": config}
         super().__init__(sensor_data)
         self.batch_mode = False
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            target = system_storage_target()
+            self.bucket = target.bucket
+            self.region = target.region
+            self.endpoint_url = target.endpoint_url
+            self._client = target.create_client()
+        return self._client
 
     async def load_binding(
         self, context: SensorEvaluationContext, index_id: str

@@ -18,11 +18,8 @@ from docarray import DocList
 from docarray.documents import TextDoc
 from fastapi import FastAPI, Request
 from grpc_health.v1.health_pb2 import HealthCheckResponse
-from marie.engine.llm_queue.registry import (
-    SnapshotUnavailable,
-    dispatch_runtime_live_state,
-    dispatch_runtime_snapshot,
-)
+from marie.engine.llm_queue.config import resolve_fabric_id
+from marie.engine.llm_queue.registry import SnapshotUnavailable
 from marie.instrumentation import set_span_input
 from marie.registry.model_registry import ModelRegistry
 from opentelemetry import trace
@@ -2496,9 +2493,14 @@ class MarieServerGateway(CompositeServer):
         await self.job_scheduler.start()
 
         await self._start_gateway_background_runtimes()
-        setup_sensor_worker(
-            self.args.get("sensors", {}), self.args.get("kv_store_kwargs", {})
-        )
+
+        sensor_config = dict(self.args.get("sensors") or {})
+        if sensor_config:
+            sensor_config['fabric_group_id'] = resolve_fabric_id(
+                sensor_config.get('fabric_group_id'),
+                self.llm_dispatch_runtime.config.fabric_group_id,
+            )
+        setup_sensor_worker(sensor_config, self.args.get("kv_store_kwargs", {}))
 
         attached = attach_sensor_worker_scheduler(self.job_scheduler)
         self.logger.info(

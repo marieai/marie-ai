@@ -157,6 +157,7 @@ dependencies = [
     "marie-wasm",
     "marie-mem0",
     "marie-mcp",
+    "boto3-stubs~=1.43.45",
 ]
 
 [project.optional-dependencies]
