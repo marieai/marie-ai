@@ -37,6 +37,11 @@ from marie.utils.asset_util import prepare_asset_directory, s3_asset_path
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.json import load_json_file
 
+_SCHEMA_PLACEHOLDER = re.compile(r'{{\s*EXTRACTOR_SCHEMA\s*}}')
+_SCHEMA_SECTION = (
+    'Return a JSON object that matches this JSON Schema:\n{{ EXTRACTOR_SCHEMA }}\n'
+)
+
 
 def _load_schema_definition(
     root_config_dir: str, layout: str, key: str
@@ -95,8 +100,13 @@ def _load_schema_definition(
         AttributeError,
     ) as exc:
         raise ValueError(f'Invalid saved output schema {schema_path}: {exc}') from exc
+    source = prompt.source
+    # The saved schema is the field definition, so the model always sees it,
+    # even when a prompt was written without the placeholder.
+    if not _SCHEMA_PLACEHOLDER.search(source):
+        source = f'{source.rstrip()}\n\n{_SCHEMA_SECTION}'
     prompt = PromptTemplate(
-        prompt.source,
+        source,
         file_path=prompt.file_path,
         name=prompt.name,
         defaults={'EXTRACTOR_SCHEMA': json.dumps(schema, ensure_ascii=False)},

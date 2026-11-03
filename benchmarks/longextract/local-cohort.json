@@ -1,0 +1,37 @@
+{
+  "dataset_revision": "d4ca332f72f6d3649ecd11b69445a8f4ef5fcb02",
+  "document_count": 5,
+  "max_document_pages": 30,
+  "documents": [
+    {
+      "id": "acs",
+      "label": "ACS sample",
+      "slug": "06_10_26_American_Community_Survey_ACS_5_year_estimates_f507236a_sampl",
+      "pages": 30
+    },
+    {
+      "id": "utility-sales",
+      "label": "EIA residential utility sales - Table 6",
+      "slug": "721d346e__table_6",
+      "pages": 22
+    },
+    {
+      "id": "gdp",
+      "label": "BEA GDP release",
+      "slug": "std__Bureau_of_Economic_Analysis_GDP_release_-_gdp3q22_2nd_merge",
+      "pages": 24
+    },
+    {
+      "id": "fda",
+      "label": "FDA Dexcom G7 K213919",
+      "slug": "4a20762e__K213919",
+      "pages": 25
+    },
+    {
+      "id": "language-census",
+      "label": "Language speakers and linguistic proficiency census tables",
+      "slug": "m1__Language_speakers_and_linguistic_proficiency_census_tables",
+      "pages": 26
+    }
+  ]
+}

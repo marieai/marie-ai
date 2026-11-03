@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from marie_longextract.agents.unit_extract import build_unit_task_contract
-
 from marie.query_planner import (
     ExecutorEndpointQueryDefinition,
     LlmQueryDefinition,
@@ -12,6 +10,7 @@ from marie.query_planner import (
     Query,
     QueryType,
 )
+from marie_longextract.agents.unit_extract import build_unit_task_contract
 
 MODEL_NAME = "qwen_3_instruct"
 
@@ -94,3 +93,51 @@ def build_extraction_subgraph(
         ),
     )
     return {"nodes": [annotator, parser], "end": parser}
+
+
+def build_source_headings_node(
+    planner_info: PlannerInfo,
+    node_id_factory: Callable[[PlannerInfo], str],
+    layout: str,
+    dependencies: list[str],
+    units: list[dict[str, Any]],
+) -> Query:
+    return Query(
+        task_id=node_id_factory(planner_info),
+        query_str="Resolve incoming source headings",
+        dependencies=dependencies,
+        node_type=QueryType.COMPUTE,
+        definition=LlmQueryDefinition(
+            model_name=MODEL_NAME,
+            endpoint="/annotator/llm",
+            params={
+                "layout": layout,
+                "key": "longextract-source-headings",
+                "extraction_units": [build_unit_task_contract(unit) for unit in units],
+            },
+        ),
+    )
+
+
+def build_source_titles_node(
+    planner_info: PlannerInfo,
+    node_id_factory: Callable[[PlannerInfo], str],
+    layout: str,
+    dependencies: list[str],
+    units: list[dict[str, Any]],
+) -> Query:
+    return Query(
+        task_id=node_id_factory(planner_info),
+        query_str='Resolve current-page source title attributes',
+        dependencies=dependencies,
+        node_type=QueryType.COMPUTE,
+        definition=LlmQueryDefinition(
+            model_name=MODEL_NAME,
+            endpoint='/annotator/llm',
+            params={
+                'layout': layout,
+                'key': 'longextract-source-titles',
+                'extraction_units': [build_unit_task_contract(unit) for unit in units],
+            },
+        ),
+    )

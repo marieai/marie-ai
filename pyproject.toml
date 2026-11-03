@@ -93,6 +93,7 @@ dependencies = [
     "Wand",
     "Cython",
     "jsons",
+    "jsonschema>=4.23.0,<5.0.0",
     "shapely",
     "psycopg[binary,pool]>=3.1.0",
     "pytest",

@@ -8,7 +8,7 @@ annotators:
     annotator_type: llm
     mode: per-page
     model_config:
-      model_name: qwen_v3_30b_instruct
+      model_name: qwen/qwen3.8-27b
       multimodal: true
       prompt_path: ./tables.j2
       system_prompt_text: >
@@ -23,6 +23,9 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      extra_body: &qwen_nonthinking
+        chat_template_kwargs:
+          enable_thinking: false
       repetition_recovery: &qwen_repetition_recovery
         temperature: 0.7
         top_p: 0.8
@@ -32,7 +35,7 @@ annotators:
       expect_output: json
       refine_passes: 1
       refine_prompt_path: ./tables-refine.j2
-      pass_models: [qwen_v3_30b_instruct]
+      pass_models: [qwen/qwen3.8-27b]
       pass_temperatures: [0.0]
       refinement_validation:
         require_same_units: true
@@ -44,7 +47,7 @@ annotators:
     annotator_type: llm
     mode: per-page
     model_config:
-      model_name: qwen_v3_30b_instruct
+      model_name: qwen/qwen3.8-27b
       multimodal: false
       prompt_path: ./longextract-aggregation-policy.j2
       system_prompt_text: >
@@ -54,9 +57,57 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
+        reasoning_effort: low
       repetition_recovery: *qwen_repetition_recovery
       expect_output: json
       mini_batch_size: 1
+    parser: noop
+    validators: []
+
+  longextract-source-titles:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      model_name: qwen/qwen3.8-27b
+      multimodal: false
+      prompt_path: ./longextract-source-titles.j2
+      system_prompt_text: >
+        Resolve schema-defined table title attributes separately with exact
+        current-page source citations. Return compact JSON without detail rows.
+      top_p: 1.0
+      temperature: 0.0
+      max_tokens: 8192
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
+        reasoning_effort: low
+      expect_output: json
+    parser: noop
+    validators: []
+
+  longextract-source-headings:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      model_name: qwen/qwen3.8-27b
+      multimodal: false
+      prompt_path: ./longextract-source-headings.j2
+      system_prompt_text: >
+        Resolve only schema-defined governing headings for page-opening detail
+        rows. Return compact JSON with exact source-page and line citations.
+      top_p: 1.0
+      frequency_penalty: 0
+      presence_penalty: 0
+      temperature: 0.0
+      max_tokens: 8192
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: true
+        reasoning_effort: low
+      expect_output: json
     parser: noop
     validators: []
 
@@ -64,27 +115,29 @@ annotators:
     annotator_type: llm
     mode: per-page
     model_config:
-      model_name: qwen_v3_30b_instruct
+      model_name: qwen/qwen3.8-27b
       multimodal: true
       prompt_path: ./longextract-unit-extract.j2
       system_prompt_text: >
         You are a deterministic document extraction annotator. Extract all
         requested schema units from the supplied document page and return valid
-        JSON. Account for every data-bearing row in the supplied table inventory.
+        JSON. Account for every schema-eligible data-bearing row in the supplied table inventory.
         Preserve source delimiters unless a field description explicitly removes
-        them. A data-bearing row must be emitted and cannot be treated only as a
-        carried heading. A current-of-total marker in the page text overrides a
+        them. Honor the schema's explicit row exclusions; excluded aggregate
+        headings may still supply context for eligible detail rows. A schema-eligible
+        data-bearing row must be emitted. A current-of-total marker in the page text overrides a
         contradictory table continuation hint.
       top_p: 1.0
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      extra_body: *qwen_nonthinking
       repetition_recovery: *qwen_repetition_recovery
       expect_output: json
-      max_tokens: 8192
+      max_tokens: 16384
       refine_passes: 1
       refine_prompt_path: ./longextract-unit-extract-refine.j2
-      pass_models: [qwen_v3_30b_instruct]
+      pass_models: [qwen/qwen3.8-27b]
       pass_temperatures: [0.0]
       refinement_validation:
         require_same_units: true
@@ -100,7 +153,7 @@ annotators:
     annotator_type: llm
     mode: per-page
     model_config:
-      model_name: qwen_v3_30b_instruct
+      model_name: qwen/qwen3.8-27b
       multimodal: false
       prompt_path: ./longextract-repair.j2
       system_prompt_text: >
@@ -110,6 +163,7 @@ annotators:
       frequency_penalty: 0
       presence_penalty: 0
       temperature: 0.0
+      extra_body: *qwen_nonthinking
       repetition_recovery: *qwen_repetition_recovery
       expect_output: json
       mini_batch_size: 1

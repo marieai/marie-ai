@@ -30,11 +30,11 @@ def test_annotator_config_references_prompt_assets() -> None:
 
     unit_config = annotators['longextract-unit-extract']['model_config']
     table_config = annotators['tables']['model_config']
-    assert table_config['model_name'] == 'qwen_v3_30b_instruct'
+    assert table_config['model_name'] == 'qwen/qwen3.8-27b'
     assert table_config['prompt_path'] == './tables.j2'
     assert table_config['refine_prompt_path'] == './tables-refine.j2'
     assert unit_config['refine_passes'] == 1
-    assert unit_config['pass_models'] == ['qwen_v3_30b_instruct']
+    assert unit_config['pass_models'] == ['qwen/qwen3.8-27b']
     assert unit_config['pass_temperatures'] == [0.0]
     assert table_config['refine_passes'] == 1
     assert annotators['longextract-unit-extract']['parser'] == 'noop'
@@ -67,6 +67,9 @@ def test_unit_prompts_declare_runtime_variables() -> None:
         'PAGE_TABLES_JSON',
         'DOCUMENT_METADATA_JSON',
         'OUTPUT_CONTRACT_JSON',
+        'PREVIOUS_PAGE_CONTEXT_JSON',
+        'INCOMING_SOURCE_HEADINGS_JSON',
+        'SOURCE_TITLE_ATTRIBUTES_JSON',
     }
     assert required.issubset(_variables('longextract-unit-extract.j2'))
     assert required | {'PREVIOUS_EXTRACTION'} <= _variables(
@@ -136,6 +139,9 @@ def test_unit_prompt_values_are_inserted_once() -> None:
             'PAGE_TABLES_JSON',
             'DOCUMENT_METADATA_JSON',
             'OUTPUT_CONTRACT_JSON',
+            'PREVIOUS_PAGE_CONTEXT_JSON',
+            'INCOMING_SOURCE_HEADINGS_JSON',
+            'SOURCE_TITLE_ATTRIBUTES_JSON',
         },
         'longextract-unit-extract-refine.j2': {
             'AGGREGATION_POLICY_JSON',
@@ -146,6 +152,9 @@ def test_unit_prompt_values_are_inserted_once() -> None:
             'DOCUMENT_METADATA_JSON',
             'OUTPUT_CONTRACT_JSON',
             'PREVIOUS_EXTRACTION',
+            'PREVIOUS_PAGE_CONTEXT_JSON',
+            'INCOMING_SOURCE_HEADINGS_JSON',
+            'SOURCE_TITLE_ATTRIBUTES_JSON',
         },
     }
     for name, variables in expected_variables.items():

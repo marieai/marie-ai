@@ -30,7 +30,7 @@ def main() -> None:
     parser.add_argument(
         '--api-key', default=os.environ.get('LXBENCH_REPAIR_API_KEY', 'EMPTY')
     )
-    parser.add_argument('--model', default='qwen_v3_30b_instruct')
+    parser.add_argument('--model', default='qwen/qwen3.8-27b')
     parser.add_argument('--request-timeout-seconds', type=float, default=300.0)
     parser.add_argument('--schema', required=True, type=Path)
     parser.add_argument('--ground-truth', required=True, type=Path)

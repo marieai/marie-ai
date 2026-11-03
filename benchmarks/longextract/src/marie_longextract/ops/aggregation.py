@@ -101,6 +101,22 @@ def aggregate_page_results(
             if is_continuation:
                 if active_unit is None:
                     if declared_unit is None:
+                        if record.get("rows") == []:
+                            normalized_source = copy.deepcopy(source)
+                            normalized_source["page_index"] = page_index
+                            trace.append(
+                                {
+                                    "action": "SKIP_EMPTY_CONTINUATION",
+                                    "file": filename,
+                                    "record_index": record_index,
+                                    "unit_name": None,
+                                    "source": normalized_source,
+                                    "row_count": 0,
+                                    "carry_fields": [],
+                                    "sequence_fields": [],
+                                }
+                            )
+                            continue
                         raise ValueError(
                             f"Orphan continuation at records[{record_index}] in {filename}"
                         )

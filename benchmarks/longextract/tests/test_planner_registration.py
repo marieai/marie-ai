@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import marie_longextract.planners.longextract_bench  # noqa: F401
+import pytest
 
 from marie.job.job_manager import generate_job_id
 from marie.query_planner import PlannerInfo, QueryPlanRegistry
@@ -25,6 +26,52 @@ def _schema() -> dict:
 
 def test_longextract_planner_registers() -> None:
     assert 'longextract_bench' in QueryPlanRegistry.list_planners()
+
+
+@pytest.mark.parametrize(
+    ('description', 'stage'),
+    [
+        ('The governing section heading for this row.', 'longextract-source-headings'),
+        ('The group printed in the table title.', 'longextract-source-titles'),
+    ],
+)
+def test_heading_schemas_resolve_source_context_before_unit_extraction(
+    monkeypatch,
+    description: str,
+    stage: str,
+) -> None:
+    schema = _schema()
+    schema['properties']['service_lines']['items']['properties']['code'][
+        'description'
+    ] = description
+    monkeypatch.setattr(
+        'marie_longextract.planners.longextract_bench.read_json', lambda _uri: schema
+    )
+    plan = QueryPlanRegistry.get('longextract_bench')(
+        PlannerInfo(
+            name='longextract_bench',
+            base_id=generate_job_id(),
+            metadata={
+                'content_type': 'application/pdf',
+                'benchmark': {
+                    'schema_uri': 's3://bucket/schema.json',
+                    'work_uri': 's3://bucket/work/',
+                    'output_uri': 's3://bucket/result.json',
+                },
+            },
+        )
+    )
+    nodes = {
+        node.definition.params['key']: node
+        for node in plan.nodes
+        if getattr(node.definition, 'endpoint', None) == '/annotator/llm'
+    }
+
+    assert nodes[stage].task_id in nodes['longextract-unit-extract'].dependencies
+    assert (
+        nodes[stage].definition.params['extraction_units']
+        == nodes['longextract-unit-extract'].definition.params['extraction_units']
+    )
 
 
 def test_longextract_planner_builds_existing_extraction_route(monkeypatch) -> None:

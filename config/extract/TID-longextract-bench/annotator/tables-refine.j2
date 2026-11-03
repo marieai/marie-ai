@@ -17,9 +17,21 @@ Verification rules:
   column as a table even when it has no drawn grid.
 - Evaluate continuation independently of header_present. A continuation may
   repeat its column headers.
-- Repeated column headers do not establish a new logical table. A later-page
-  indicator, table footer, or rows continuing without a new table title or
-  section is continuation evidence even when header_present is true.
+- Repeated column headers do not establish a new logical table. Continuation
+  means this page receives rows from the same logical table on a prior page.
+- A footer saying that the table continues describes the next page. It does not
+  prove an incoming continuation. A table-ending footer also does not establish
+  whether this page began a new table. Physical page numbers are not table IDs.
+- Compare the actual printed whole-table title or identifier with the prior
+  source context. A changed identifier establishes a new table; an unchanged
+  printed title and continuing rows support an incoming continuation. Do not
+  confuse a detector-generated name with a printed source title.
+- A printed title can end in "--Continues" or "--Table Ends" in the footer.
+  These suffixes describe outgoing flow, not incoming continuation. Remove
+  those suffixes when comparing whole-table identities. If the current table
+  number differs from the preceding printed table number, set is_continuation
+  to false even when the current title says "Continues". Quote both table
+  identifiers in continuation_rationale when prior source context is available.
 - Before returning, ignore the previous continuation decision and perform a
   mandatory continuation audit for every detected table. When a
   current-of-total marker belongs to the table, it governs the corrected
@@ -46,6 +58,15 @@ Verification rules:
   schema rather than a domain classification.
 - Every line_number must exist in the prepared page text. Never invent columns
   or tables.
+- Keep the inventory compact. In header_rows and rows, emit only line_number.
+  Do not emit found_at, reasoning, value, cell text, or per-line explanations,
+  even when they appear in the previous extraction.
+- Include each prepared-text line once per list, in ascending line-number order.
+  Keep every supported header and data-line anchor; never shorten the response
+  by dropping lines. Several prepared-text lines can belong to one visual row;
+  these anchors are not a count of logical table rows.
+- Keep continuation_rationale to one short evidence sentence, quoting the exact
+  current-of-total marker when present. Do not emit top-level reasoning.
 
 Return strict JSON only using this contract:
 {
@@ -61,20 +82,22 @@ Return strict JSON only using this contract:
         "continuation_rationale": "<brief evidence>"
       },
       "header_rows": [
-        {"line_number": 1, "found_at": "row 1", "reasoning": "<brief evidence>"}
+        {"line_number": 1}
       ],
       "rows": [
-        {"line_number": 2, "found_at": "row 2", "reasoning": "<brief evidence>"}
+        {"line_number": 2}
       ],
       "columns": ["<column label>"],
       "columns_inferred": false
     }
-  ],
-  "reasoning": {"steps": ["<brief check>"], "notes": ""}
+  ]
 }
 
 If the page contains no table, return:
-{"extractions": [], "reasoning": {"steps": [], "notes": ""}}
+{"extractions": []}
+
+Prior source context, for table identity only; do not inventory its rows:
+PREVIOUS_PAGE_CONTEXT_JSON
 
 Prepared page text:
 PAGE_TEXT

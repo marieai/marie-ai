@@ -1,0 +1,11 @@
+Extract the fields described by this JSON Schema from the current page:
+
+{{ EXTRACTOR_SCHEMA }}
+
+Use the configured property names and JSON types. Preserve decimal values and
+negative amounts. Return repeated items in their source order. Omit properties
+whose values are absent from this page. Return only the JSON object, without
+Markdown fences, confidence scores or bounding boxes.
+
+Page OCR:
+{{ OCR_TEXT }}

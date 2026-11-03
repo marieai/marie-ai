@@ -10,16 +10,55 @@ benchmark provider passes the source PDF as `metadata.uri`, its media type as
 `metadata.benchmark`.
 
 The planner emits the existing format-aware document extraction node, the
-shared `tables` annotator, a one-page schema aggregation-policy call, one
-LongExtract extraction call per page, and the existing result-parser endpoint.
+shared `tables` annotator, a one-page schema aggregation-policy call, an optional
+source-heading stage, an optional source-title stage, one LongExtract extraction call per page, and the existing
+result-parser endpoint.
 The external context provider supplies all schema units, the document-level
-policy, and current-page table hints to each page prompt. Outputs therefore use
+policy, bounded preceding-page source context, validated incoming headings and title attributes, and
+current-page table hints to each page prompt. Outputs therefore use
 page names such as `00001.json`, not table-style names such as `00001_t0.json`.
 
 The page prompt emits ordered records with an explicit continuation decision.
 The registered `longextract-aggregated` parser walks those records in page order
 and applies the schema-derived carry and sequence policy. It does not infer
 policy from field names or reinterpret the table hints supplied to the LLM.
+
+Before aggregation, the parser compares a promoted refinement with its saved
+initial pages using the recorded schema contract. If a refined page introduces
+more row-schema violations, the parser selects that page's untouched initial
+output and keeps the other valid refinements. It records the decision in
+`debug/longextract-refinement-selection.json` and preserves both raw passes.
+This check requires the saved refinement run and schema context; its report
+states when those inputs are unavailable or do not match the promoted output.
+
+## Verified five-document results
+
+The verified evaluation of `qwen/qwen3.8-27b` matched **4,064/4,064
+rows** across **127 pages**, with **99.3606% weighted leaf accuracy** and
+**zero output-schema errors in all five documents**.
+
+| Document | Pages | Leaf accuracy | Matched rows | Schema errors |
+| --- | ---: | ---: | ---: | ---: |
+| ACS | 30 | 96.9197% | 702 / 702 | 0 |
+| Utility sales | 22 | 99.9908% | 1,560 / 1,560 | 0 |
+| GDP | 24 | 99.9548% | 545 / 545 | 0 |
+| Language census | 26 | 100.0000% | 765 / 765 | 0 |
+| FDA | 25 | 99.3648% | 492 / 492 | 0 |
+| **Combined** | **127** | **99.3606%** | **4,064 / 4,064** | **0** |
+
+Row precision and recall are 100% for every document. FDA improved from
+91.0522% leaf accuracy and 156 schema errors after source-cited title attributes
+separated population, wear location, and sample count. All 25 FDA pages
+completed extraction and refinement, followed by an isolated page 14 retry.
+
+The other four saved predictions were independently regraded. Configurations,
+selected passes, and reused stages vary across documents. The existing
+`Validator 'tables' not found` runtime error remains an integration blocker;
+value-level mismatches also remain despite valid output schemas.
+
+See the [results report](docs/results.md) for metric definitions,
+before/after results, exact run locations, verification commands, and full-output
+artifact names. Large outputs remain in the adjacent benchmark harness checkout.
 
 ## Install
 
@@ -84,31 +123,80 @@ Run the actual Marie table, page-extraction, parser, and LongExtractBench grader
 path against page-aligned assets. Both table detection and page extraction send
 the page image and the prepared MarkItDown text to the multimodal model.
 
-The real LLM service must be running behind the Marie queue dispatcher. AIMock
-returns a canned `Sample Document` payload and cannot produce a valid score; the
-harness detects that payload and stops immediately.
+Configure the test endpoint in `benchmarks/longextract/.env`. For a new checkout,
+copy the example first, then edit `OPENAI_API_BASE` (including `/v1`) and
+`OPENAI_API_KEY`:
 
 ```bash
-cd ~/dev/marieai/longextract-bench
+cd ~/dev/marieai/marie-ai
+cp benchmarks/longextract/.env.example benchmarks/longextract/.env
+```
+
+The local `.env` file is ignored by Git. `tools/run-with-env.py` loads it before
+starting the benchmark command. File values override inherited environment
+variables, and `MARIE_SKIP_LOAD_ENV=true` prevents Marie's default environment
+loader from replacing them. Missing files or blank connection settings stop the
+command before it starts. Values use literal dotenv syntax, without variable
+interpolation. Use `--env-file /path/to/testing.env` before `--` to select another
+file; the default path works from any working directory.
+
+The example uses direct OpenAI-compatible requests with `LLM_QUEUE_ENABLED=false`.
+For local inference, `LLM_HTTP_READ_TIMEOUT_S=1800` allows 30 minutes per request,
+and `LLM_BATCH_TIMEOUT_S=7200` allows two hours per batch. Both values are seconds.
+The local cohort is listed in `local-cohort.json`: five complete documents with
+at most 30 pages each. The current selection contains 127 pages in total.
+The model name remains in the annotator YAML configuration. AIMock returns a
+canned `Sample Document` payload and cannot produce a valid score; the harness
+detects that payload and stops immediately.
+
+Table detection and refinement emit only `line_number` in `header_rows` and
+`rows`. The existing parser supplies line text and location labels. This keeps
+all source-line anchors without repeating per-line explanations; continuation
+evidence stays in the table-level `continuation_rationale`.
+
+Qwen3.8 thinking is configured per annotator. Table detection, page extraction,
+and evidence-backed JSON repair explicitly set
+`extra_body.chat_template_kwargs.enable_thinking=false`. The aggregation-policy
+compiler enables thinking with `extra_body.reasoning_effort=low` to interpret
+schema rules for carrying values and assigning sequences. Schemas with string
+fields explicitly described as headings also use low-effort thinking in the
+small `longextract-source-headings` call, capped at 8,192 output tokens. That
+stage cites complete lines on the preceding page; the provider validates every
+citation before supplying incoming headings to extraction. Current-page
+headings end that incoming scope. Schemas without heading fields skip the stage.
+Fields explicitly described as coming from table titles use the small
+`longextract-source-titles` call with low-effort thinking and an 8,192-token cap.
+It separates requested attributes for each printed title, including wrapped
+titles. Joined source text blocks keep wrapped phrases readable while citations
+retain the original line boundaries. The provider validates the current-page line range, complete source
+quote, field types, and source support before supplying those attributes to
+extraction and refinement. Schemas without title fields skip this stage.
+The provider also corrects a contradictory incoming-continuation hint when a
+single unambiguous printed table identifier changes; table counters and ambiguous
+layouts remain subject to the table evidence. The ordered aggregation
+parser remains deterministic. Page extraction keeps a 16,384-token output cap.
+The server's total context must also fit the input prompt and image; a
+32,768-token context does not provide 32,768 output tokens in addition to those
+inputs. Each benchmark run freezes its own configuration so a change to thinking
+mode does not alter an in-progress comparison.
+
+```bash
+cd ~/dev/marieai/marie-ai
 
 GENERATOR_DIR=~/.marie/generators/your-generator-id
 DOCUMENT_SLUG=your-dataset-document-slug
 DATASET_REVISION=your-dataset-revision
-DATASET_DIR=.hf_cache/datasets--micro1-inc--longextract-bench-50/snapshots/$DATASET_REVISION/$DOCUMENT_SLUG
+BENCHMARK_REPO=~/dev/marieai/longextract-bench
+DATASET_DIR=$BENCHMARK_REPO/.hf_cache/datasets--micro1-inc--longextract-bench-50/snapshots/$DATASET_REVISION/$DOCUMENT_SLUG
 
-export OPENAI_API_KEY=queue-only
-export OPENAI_API_BASE=http://127.0.0.1:1/v1
-export LLM_QUEUE_ENABLED=true
-export LLM_QUEUE_VALKEY_URL=redis://127.0.0.1:6379/0
-export LLM_QUEUE_POOL_ID=document-small
-
-python -m longextract_bench.marie_pipeline_eval \
+.venv/bin/python benchmarks/longextract/tools/run-with-env.py -- \
+  .venv/bin/python -m longextract_bench.marie_pipeline_eval \
   --asset-dir "$GENERATOR_DIR" \
   --metadata "$GENERATOR_DIR/$DOCUMENT_SLUG.meta.json" \
   --schema "$DATASET_DIR/schema.json" \
   --ground-truth "$DATASET_DIR/ground_truth.json" \
-  --out-dir runs/prompt-eval/your-run-name \
-  --config-root /mnt/data/marie-ai/config/extract
+  --out-dir "$BENCHMARK_REPO/runs/prompt-eval/your-run-name" \
+  --config-root config/extract
 ```
 
 Use a fresh output directory after changing prompts or models. Add `--resume`
@@ -142,7 +230,7 @@ python benchmarks/longextract/tools/evaluate-agent-repair.py \
   --record-index 0 \
   --api-base "$REPAIR_API_BASE" \
   --request-timeout-seconds 300 \
-  --model qwen_v3_30b_instruct \
+  --model qwen/qwen3.8-27b \
   --schema "$DATASET_DIR/schema.json" \
   --ground-truth "$DATASET_DIR/ground_truth.json"
 ```
@@ -201,7 +289,7 @@ python benchmarks/longextract/tools/evaluate-agent-leaves.py \
   --fields program_group,section_heading,percent_value,percent_margin_of_error \
   --api-base "$REPAIR_API_BASE" \
   --request-timeout-seconds 300 \
-  --model qwen_v3_30b_instruct \
+  --model qwen/qwen3.8-27b \
   --schema "$DATASET_DIR/schema.json" \
   --ground-truth "$DATASET_DIR/ground_truth.json"
 ```
@@ -251,9 +339,12 @@ config/extract/TID-longextract_bench/mapper.yml
 
 - `agent-output/longextract-unit-extract/<page>.json`: page-scoped ordered records
 - `agent-output/longextract-aggregation-policy/00001.json`: schema-derived parser policy
+- `agent-output/longextract-source-headings/<page>.json`: optional incoming headings with preceding-page source citations
+- `agent-output/longextract-source-titles/<page>.json`: optional current-page title attributes with exact source citations
 - `agent-output/longextract-aggregated/00001.json`: schema-shaped aggregate
 - `agent-output/longextract-aggregated/trace.md`: continuation decision trace
 - `parsed-result/longextract-result.json`: parser-stage schema-shaped result
+- `debug/longextract-refinement-selection.json`: schema validation and page-pass selection audit
 - `work/stitched-result.json`: future verified merge artifact
 - `work/verification-findings.json`: shape and coverage findings
 - `work/repaired-result.json`: verifier-scoped repair output

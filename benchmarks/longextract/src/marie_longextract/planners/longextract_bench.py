@@ -2,15 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from marie_longextract.ops.schema import build_extraction_units
-from marie_longextract.planners import PLAN_ID
-from marie_longextract.planners.query_subgraphs import (
-    build_aggregation_policy_node,
-    build_extraction_subgraph,
-    build_table_context_node,
-)
-from marie_longextract.tools.artifacts import read_json, require_benchmark_metadata
-
 from marie.job.job_manager import increment_uuid7str
 from marie.query_planner import (
     ExecutorEndpointQueryDefinition,
@@ -21,6 +12,18 @@ from marie.query_planner import (
     QueryType,
     register_query_plan,
 )
+from marie_longextract.ops.schema import build_extraction_units
+from marie_longextract.ops.source_headings import heading_units
+from marie_longextract.ops.source_titles import title_units
+from marie_longextract.planners import PLAN_ID
+from marie_longextract.planners.query_subgraphs import (
+    build_aggregation_policy_node,
+    build_extraction_subgraph,
+    build_source_headings_node,
+    build_source_titles_node,
+    build_table_context_node,
+)
+from marie_longextract.tools.artifacts import read_json, require_benchmark_metadata
 
 LAYOUT_ID = "longextract-bench"
 
@@ -75,11 +78,35 @@ def query_planner_longextract_bench(
         dependencies=[prepare.task_id],
         units=units,
     )
+    source_headings = (
+        build_source_headings_node(
+            planner_info=planner_info,
+            node_id_factory=_node_id,
+            layout=LAYOUT_ID,
+            dependencies=[prepare.task_id],
+            units=units,
+        )
+        if heading_units(units)
+        else None
+    )
+    source_titles = (
+        build_source_titles_node(
+            planner_info=planner_info,
+            node_id_factory=_node_id,
+            layout=LAYOUT_ID,
+            dependencies=[prepare.task_id],
+            units=units,
+        )
+        if title_units(units)
+        else None
+    )
     extraction = build_extraction_subgraph(
         planner_info=planner_info,
         node_id_factory=_node_id,
         layout=LAYOUT_ID,
-        dependencies=[tables.task_id, aggregation_policy.task_id],
+        dependencies=[tables.task_id, aggregation_policy.task_id]
+        + ([source_headings.task_id] if source_headings else [])
+        + ([source_titles.task_id] if source_titles else []),
         units=units,
     )
     end = Query(
@@ -95,6 +122,8 @@ def query_planner_longextract_bench(
             prepare,
             tables,
             aggregation_policy,
+            *([source_headings] if source_headings else []),
+            *([source_titles] if source_titles else []),
             *extraction["nodes"],
             end,
         ]
