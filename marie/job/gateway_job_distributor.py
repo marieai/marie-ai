@@ -28,6 +28,14 @@ MOCK_EXECUTOR_PARAMETER_KEYS = (
 # top-level executor parameters (e.g. VectorStoreExecutor.embed_and_store
 # requires a top-level source_id).
 IDENTITY_PARAMETER_KEYS = (
+    'input_ref',
+    'upstream',
+    'index_id',
+    'item_id',
+    'kb_indexing_dag_id',
+    'kb_attempt_id',
+    'owner_type',
+    'owner_id',
     "source_id",
     "index_name",
     "tenant_id",

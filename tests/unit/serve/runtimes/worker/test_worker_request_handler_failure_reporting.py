@@ -19,6 +19,38 @@ class RecordingJobInfoClient:
         )
 
 
+async def test_success_persists_a_bounded_typed_output_for_workflow_handoff():
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MarieLogger('test-successful-output')
+    handler._deployment = 'worker-one'
+    handler._job_info_client = RecordingJobInfoClient()
+    handler._sem_untrack = lambda *_args, **_kwargs: True
+    handler._request_attributes = lambda _requests: {'source': 'test'}
+    handler._schedule_deployment_ready_after_terminal = lambda **_kwargs: None
+    handler.is_dry_run = lambda _requests: False
+    output = {'games': [{'id': 'one', 'moves': ['e4']}]}
+    await handler._record_successful_job('job-one', [], {}, return_data=output)
+    result = handler._job_info_client.calls[0]['kwargs']['jobinfo_replace_kwargs']['runtime_env']['output']
+    assert result == output
+
+
+async def test_extraction_handoff_persists_the_reference_without_repeating_document_content():
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MarieLogger('test-extraction-output')
+    handler._deployment = 'worker-one'
+    handler._job_info_client = RecordingJobInfoClient()
+    handler._sem_untrack = lambda *_args, **_kwargs: True
+    handler._request_attributes = lambda _requests: {}
+    handler._schedule_deployment_ready_after_terminal = lambda **_kwargs: None
+    handler.is_dry_run = lambda _requests: False
+    reference = {'kind': 'extraction', 'ref_id': 'output', 'ref_type': 'document', 'sha256': 'a' * 64}
+    await handler._record_successful_job('job-one', [], {}, return_data={
+        'status': 'succeeded', 'input_ref': reference, 'metadata': {'ocr': 'large saved output'},
+    })
+    output = handler._job_info_client.calls[0]['kwargs']['jobinfo_replace_kwargs']['runtime_env']['output']
+    assert output == {'input_ref': reference}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("return_data", "expected_type", "expected_message"),

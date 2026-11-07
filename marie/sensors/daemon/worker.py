@@ -17,11 +17,13 @@ Integration:
 """
 
 import asyncio
+import hashlib
+import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from marie.logging_core.logger import MarieLogger
 from marie.sensors.config import SensorSettings
@@ -52,10 +54,19 @@ _ENVELOPE_KEYS = (
     "index_id",
     "index_name",
     "source_id",
+    'item_id',
+    'kb_indexing_dag_id',
+    'kb_attempt_id',
+    'owner_type',
+    'owner_id',
     "run_params",
     'storage_ref',
     'remote_source',
     'fabric_group_id',
+    'organization_id',
+    'workspace_id',
+    'input_ref',
+    'upstream',
 )
 
 
@@ -67,12 +78,24 @@ def sensor_targets_fabric(sensor: Dict[str, Any], fabric_group_id: str | None) -
     return not target or target == fabric_group_id
 
 
+def sensor_configuration_digest(sensor: dict[str, Any]) -> str:
+    value = [
+        sensor.get('config') or {},
+        sensor.get('target_job_name'),
+        sensor.get('target_dag_id'),
+    ]
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
 def build_work_info(
     run_request: RunRequest,
     sensor_id: str,
     sensor_name: str,
     job_name: str,
     dag_id: Optional[str],
+    reserved_id: str | None = None,
 ) -> "WorkInfo":
     """Build a WorkInfo for a sensor-triggered job submission.
 
@@ -84,7 +107,18 @@ def build_work_info(
     from marie.scheduler.state import WorkState
 
     now = datetime.now(timezone.utc)
+    item_execution_id = None
+    if (run_request.run_config or {}).get('ref_type') == 'kb_item':
+        from marie.kb.item_state import item_indexing_run
+
+        _, item_execution_id = item_indexing_run(run_request.run_config)
     return WorkInfo(
+        id=item_execution_id
+        or (
+            str(uuid5(NAMESPACE_URL, f"marie:sensor:{sensor_id}:{run_request.run_key}"))
+            if run_request.run_key
+            else (reserved_id or str(uuid4()))
+        ),
         name=job_name,
         dag_id=dag_id,
         priority=run_request.priority,
@@ -95,6 +129,9 @@ def build_work_info(
         retry_limit=3,
         retry_delay=2,
         retry_backoff=True,
+        policy='allow_duplicate'
+        if run_request.tags.get('trigger') == 'run_status'
+        else None,
         start_after=now,
         expire_in_seconds=0,
         keep_until=now + timedelta(days=2),
@@ -112,13 +149,22 @@ def build_job_data(
     metadata["planner"] = rc.get("planner", run_request.job_name)
     if "project_id" not in metadata and "tenant_id" in rc:
         metadata["project_id"] = rc["tenant_id"]
+    submission_sensor_id = sensor_id
+    if rc.get('ref_type') == 'kb_item':
+        from marie.kb.item_state import item_indexing_run
+
+        scope, _ = item_indexing_run(rc)
+        submission_sensor_id = str(
+            uuid5(NAMESPACE_URL, f'marie:kb-item:{scope.values()}')
+        )
     return {
         "run_config": rc,
         "metadata": metadata,
-        "sensor_id": sensor_id,
+        **run_request.tags,
+        "sensor_id": submission_sensor_id,
+        'source_sensor_id': sensor_id,
         "sensor_name": sensor_name,
         "run_key": run_request.run_key,
-        **run_request.tags,
     }
 
 
@@ -383,23 +429,27 @@ class SensorWorker:
 
         logger.debug(f"Evaluating {len(sensors)} active sensors")
 
-        for sensor in sensors[: self._settings.max_sensors_per_cycle]:
+        eligible = [sensor for sensor in sensors if self._should_evaluate(sensor)]
+        limit = self._settings.max_sensors_per_cycle
+        concurrency = self._settings.max_concurrent_evaluations
+
+        async def evaluate(sensor: dict[str, Any]) -> None:
             if self._shutdown_event.is_set():
-                break
-
-            # Check minimum interval
-            if not self._should_evaluate(sensor):
-                continue
-
+                return
             try:
                 await self._evaluate_sensor_with_tick(sensor)
                 self._stats["sensors_evaluated"] += 1
-            except Exception as e:
-                logger.error(
-                    f"Error evaluating sensor {sensor.get('name')}: {e}",
-                    exc_info=True,
-                )
+            except Exception:
+                logger.exception(f"Error evaluating sensor {sensor.get('name')}")
                 self._stats["errors"] += 1
+
+        for offset in range(0, min(len(eligible), limit), concurrency):
+            await asyncio.gather(
+                *(
+                    evaluate(sensor)
+                    for sensor in eligible[offset : min(offset + concurrency, limit)]
+                )
+            )
 
     def _should_evaluate(self, sensor: Dict[str, Any]) -> bool:
         """Check if sensor should be evaluated based on minimum interval."""
@@ -417,6 +467,80 @@ class SensorWorker:
         return elapsed >= min_interval
 
     async def _evaluate_sensor_with_tick(self, sensor: Dict[str, Any]) -> None:
+        async with self._storage.sensor_lock(sensor['id']) as acquired:
+            if not acquired:
+                return
+            current = await self._storage.get_sensor(sensor['id'])
+            if (
+                not current
+                or current['status'] != 'active'
+                or not sensor_targets_fabric(current, self._fabric_group_id)
+            ):
+                return
+            if current.get('config', {}).get('kbSourceId') or current.get(
+                'config', {}
+            ).get('kbIndexId'):
+                await self._evaluate_locked_sensor(current)
+                return
+            pending = await self._storage.get_pending_tick(current['id'])
+            if pending:
+                digest = (pending.get('trigger_payload') or {}).get(
+                    'configuration_digest'
+                )
+                if digest and digest != sensor_configuration_digest(current):
+                    # Reconcile accepted work without submitting stale configuration.
+                    accepted_ids = []
+                    for request_data, reserved_id in zip(
+                        pending.get('run_requests') or [],
+                        pending.get('reserved_run_ids') or [],
+                        strict=True,
+                    ):
+                        request = RunRequest.from_dict(request_data)
+                        receipt = (
+                            await self._storage.get_run_key_job(
+                                current['id'], request.run_key
+                            )
+                            if request.run_key
+                            else None
+                        )
+                        if not receipt:
+                            if not self._job_scheduler:
+                                raise RuntimeError(
+                                    'Scheduler unavailable to reconcile changed configuration'
+                                )
+                            state = await self._job_scheduler.get_sensor_job_state(
+                                reserved_id, current['id'], request.run_key, None
+                            )
+                            if state is not None:
+                                receipt = reserved_id
+                                if request.run_key:
+                                    await self._storage.record_run_key(
+                                        current['id'], request.run_key, receipt
+                                    )
+                        if receipt:
+                            accepted_ids.append(receipt)
+                    await self._storage.record_tick(
+                        sensor_id=current['id'],
+                        status=TickStatus.SKIPPED,
+                        tick_id=pending['id'],
+                        skip_reason='Configuration changed before admission completed',
+                        run_ids=accepted_ids,
+                        expected_updated_at=current.get('updated_at'),
+                    )
+                    return
+                await self._recover_tick(
+                    {
+                        **pending,
+                        'sensor_name': current['name'],
+                        'target_job_name': current.get('target_job_name'),
+                        'target_dag_id': current.get('target_dag_id'),
+                        'sensor_updated_at': current.get('updated_at'),
+                    }
+                )
+                return
+            await self._evaluate_locked_sensor(current)
+
+    async def _evaluate_locked_sensor(self, sensor: Dict[str, Any]) -> None:
         """
         Evaluate a single sensor and record a tick.
 
@@ -435,6 +559,34 @@ class SensorWorker:
         tick_id = None
 
         try:
+            if sensor.get('config', {}).get('kbSourceId') or sensor.get(
+                'config', {}
+            ).get('kbIndexId'):
+                raise RuntimeError(
+                    'Datasource execution is not ready; F10b target admission is required'
+                )
+            if sensor_type == SensorType.SCHEDULE and sensor.get('last_run_key'):
+                previous_id = await self._storage.get_run_key_job(
+                    sensor_id, sensor['last_run_key']
+                )
+                if previous_id:
+                    if not self._job_scheduler:
+                        raise RuntimeError(
+                            'No job scheduler available for sensor admission'
+                        )
+                    state = await self._job_scheduler.get_sensor_job_state(
+                        previous_id,
+                        sensor_id,
+                        sensor['last_run_key'],
+                        None,
+                    )
+                    if state in ('created', 'retry', 'active'):
+                        await self._storage.record_tick(
+                            sensor_id=sensor_id,
+                            status=TickStatus.SKIPPED,
+                            skip_reason='Previous scheduled job is pending or running',
+                        )
+                        return
             # Build evaluation context
             context = await self._build_context(sensor)
 
@@ -451,6 +603,7 @@ class SensorWorker:
             for request in result.run_requests:
                 target = (
                     sensor.get('config', {}).get('fabric_group_id')
+                    or request.run_config.get('fabric_group_id')
                     or self._fabric_group_id
                 )
                 if target:
@@ -459,21 +612,41 @@ class SensorWorker:
             # Process result
             if result.has_run_requests():
                 # Create STARTED tick before job submission
+                reserved = [
+                    build_work_info(
+                        rr,
+                        sensor_id,
+                        sensor_name,
+                        rr.job_name or sensor.get("target_job_name"),
+                        rr.dag_id or sensor.get("target_dag_id"),
+                    ).id
+                    for rr in result.run_requests
+                ]
                 tick_id = await self._storage.create_tick(
                     sensor_id=sensor_id,
                     status=TickStatus.STARTED,
                     run_requests=[rr.to_dict() for rr in result.run_requests],
-                    reserved_run_ids=[str(uuid4()) for _ in result.run_requests],
+                    reserved_run_ids=reserved,
+                    cursor=result.cursor,
+                    trigger_payload={
+                        "configuration_digest": sensor_configuration_digest(sensor)
+                    },
                 )
 
                 # Submit jobs
-                for run_request in result.run_requests:
-                    job_id = await self._submit_run_request(sensor, run_request)
+                for run_request, reserved_id in zip(
+                    result.run_requests, reserved, strict=True
+                ):
+                    job_id = await self._submit_run_request(
+                        sensor, run_request, reserved_id
+                    )
                     if job_id:
                         run_ids.append(job_id)
                         self._stats["jobs_submitted"] += 1
 
-                status = TickStatus.SUCCESS
+                status = TickStatus.SUCCESS if run_ids else TickStatus.SKIPPED
+                if not run_ids:
+                    skip_reason = 'Items changed before admission'
             elif result.skip_reason:
                 status = TickStatus.SKIPPED
                 skip_reason = result.skip_reason.message
@@ -509,12 +682,9 @@ class SensorWorker:
             error_message=error_message,
             duration_ms=duration_ms,
             tick_id=tick_id,
+            expected_updated_at=sensor.get("updated_at"),
         )
         self._stats["ticks_recorded"] += 1
-
-        # Update cursor on success/skipped
-        if cursor and status != TickStatus.FAILED:
-            await self._storage.set_cursor(sensor_id, cursor)
 
     async def _build_context(self, sensor: Dict[str, Any]) -> SensorEvaluationContext:
         """Build evaluation context for a sensor."""
@@ -532,7 +702,7 @@ class SensorWorker:
             config=sensor.get("config", {}),
             target_job_name=sensor.get("target_job_name"),
             target_dag_id=sensor.get("target_dag_id"),
-            resources=self._resources,
+            resources={**self._resources, "postgres_pool": self._storage},
             logger=MarieLogger(f"sensor.{sensor.get('name')}"),
         )
 
@@ -555,68 +725,84 @@ class SensorWorker:
         self, sensor: Dict[str, Any], cursor: Optional[str]
     ) -> List[Dict[str, Any]]:
         """Load completed jobs for run_status sensor evaluation."""
-        # This would query the job table for recently completed jobs
-        # For now, return empty list - actual implementation depends on
-        # how the job scheduler exposes this data
-        if self._job_scheduler:
-            # TODO: Implement job completion query
-            pass
-        return []
+        return await self._storage.get_completed_workflows(
+            sensor, limit=self._settings.max_events_per_tick
+        )
 
     async def _submit_run_request(
-        self, sensor: Dict[str, Any], run_request: RunRequest
-    ) -> Optional[str]:
-        """
-        Submit a job from a run request.
+        self,
+        sensor: Dict[str, Any],
+        run_request: RunRequest,
+        reserved_id: str | None = None,
+    ) -> str | None:
+        sensor_id = sensor['id']
+        job_name = run_request.job_name or sensor.get('target_job_name')
+        dag_id = run_request.dag_id or sensor.get('target_dag_id')
+        if not job_name:
+            raise ValueError('Sensor has no target job queue configured')
+        item_store = None
+        item_scope = None
+        item_execution = None
+        if (run_request.run_config or {}).get('ref_type') == 'kb_item':
+            from marie.kb.item_state import KbItemStore, item_indexing_run
 
-        Checks idempotency via run_key before submission.
-        """
-        sensor_id = sensor.get("id")
-        sensor_name = sensor.get("name", "unknown")
-
-        # Check idempotency
-        if run_request.run_key:
-            if await self._storage.has_run_key(sensor_id, run_request.run_key):
-                logger.debug(f"Skipping duplicate run_key: {run_request.run_key}")
+            item_scope, item_execution = item_indexing_run(run_request.run_config)
+            item_store = KbItemStore(self._storage.pool)
+            current = await item_store.get(item_scope)
+            if (
+                current is None
+                or current['state'] == 'removed'
+                or str(current['indexing_dag_id']) != item_execution
+            ):
                 return None
-
-        # Determine target job name
-        job_name = run_request.job_name or sensor.get("target_job_name")
-        dag_id = run_request.dag_id or sensor.get("target_dag_id")
-
-        if not job_name and not dag_id:
-            logger.warning(f"Sensor {sensor_name} has no target job or DAG configured")
-            return None
-
-        # Submit job via scheduler
-        if self._job_scheduler:
-            try:
-                work_info = build_work_info(
-                    run_request, sensor_id, sensor_name, job_name, dag_id
-                )
-
-                # Use scheduler's submit method
-                job_id = await self._job_scheduler.submit_job(work_info)
-
-                # Record run_key for idempotency
-                if run_request.run_key:
-                    await self._storage.record_run_key(
-                        sensor_id, run_request.run_key, job_id
+            if current.get('input_ref') != run_request.run_config.get('input_ref'):
+                return None
+            if str(current['indexed_dag_id']) == item_execution:
+                return item_execution
+            if current['state'] != 'pending':
+                return None
+        if run_request.run_key:
+            receipt = await self._storage.get_run_key_job(
+                sensor_id, run_request.run_key
+            )
+            if receipt:
+                if item_store is not None:
+                    state = (
+                        await self._job_scheduler.get_sensor_job_state(
+                            receipt,
+                            build_job_data(
+                                run_request, sensor_id, sensor.get('name', '')
+                            )['sensor_id'],
+                            run_request.run_key,
+                            job_name,
+                        )
+                        if self._job_scheduler is not None
+                        else None
                     )
-
-                logger.info(
-                    f"Sensor {sensor_name} triggered job {job_id} "
-                    f"(run_key: {run_request.run_key})"
-                )
-                return job_id
-
-            except Exception as e:
-                logger.error(f"Failed to submit job from sensor {sensor_name}: {e}")
-                raise
-
-        else:
-            logger.warning("No job scheduler available for job submission")
-            return None
+                    if receipt != item_execution or state is None:
+                        message = 'KB scheduler receipt is unavailable; retry the item explicitly'
+                        await item_store.fail(item_scope, item_execution, message)
+                        raise RuntimeError(message)
+                    await item_store.mark_admitted(item_scope, item_execution)
+                return receipt
+        if not self._job_scheduler:
+            raise RuntimeError('No job scheduler available for sensor admission')
+        work_info = build_work_info(
+            run_request,
+            sensor_id,
+            sensor.get('name', ''),
+            job_name,
+            dag_id,
+            reserved_id,
+        )
+        job_id = await self._job_scheduler.submit_sensor_job(work_info)
+        if job_id != work_info.id:
+            raise RuntimeError('Scheduler did not confirm durable sensor admission')
+        if run_request.run_key:
+            await self._storage.record_run_key(sensor_id, run_request.run_key, job_id)
+        if item_store is not None:
+            await item_store.mark_admitted(item_scope, item_execution)
+        return job_id
 
     # =========================================================================
     # CRASH RECOVERY
@@ -642,7 +828,9 @@ class SensorWorker:
         logger.info(f"Found {len(started_ticks)} stuck STARTED ticks to recover")
 
         for tick in started_ticks:
-            await self._recover_tick(tick)
+            sensor = await self._storage.get_sensor(tick['sensor_id'])
+            if sensor and sensor_targets_fabric(sensor, self._fabric_group_id):
+                await self._evaluate_sensor_with_tick(sensor)
 
     async def _recover_tick(self, tick: Dict[str, Any]) -> None:
         """
@@ -666,46 +854,41 @@ class SensorWorker:
         reserved_run_ids = tick.get("reserved_run_ids", [])
         existing_run_ids = tick.get("run_ids", [])
 
-        # Find runs that weren't submitted
         new_run_ids = list(existing_run_ids)
-
-        for i, run_request_data in enumerate(run_requests):
-            run_request = RunRequest.from_dict(run_request_data)
-
-            # Check if this run was already submitted
-            if run_request.run_key:
-                if await self._storage.has_run_key(sensor_id, run_request.run_key):
-                    continue
-
-            # Get the reserved run ID
+        errors = []
+        for i, data in enumerate(run_requests):
+            request = RunRequest.from_dict(data)
             reserved_id = reserved_run_ids[i] if i < len(reserved_run_ids) else None
-
-            # Submit the job
-            # Build minimal sensor dict for submission
             sensor = {
-                "id": sensor_id,
-                "name": sensor_name,
-                "target_job_name": tick.get("target_job_name"),
-                "target_dag_id": tick.get("target_dag_id"),
+                'id': sensor_id,
+                'name': sensor_name,
+                'target_job_name': tick.get('target_job_name'),
+                'target_dag_id': tick.get('target_dag_id'),
             }
-
             try:
-                job_id = await self._submit_run_request(sensor, run_request)
-                if job_id:
+                job_id = await self._submit_run_request(sensor, request, reserved_id)
+                if job_id and job_id not in new_run_ids:
                     new_run_ids.append(job_id)
-            except Exception as e:
-                logger.error(f"Failed to recover run request: {e}")
-
-        # Update the tick to SUCCESS or FAILED
-        status = TickStatus.SUCCESS if new_run_ids else TickStatus.FAILED
-        error_message = None if new_run_ids else "Recovery failed - no jobs submitted"
-
+            except Exception as error:
+                errors.append(str(error))
+        status = (
+            TickStatus.FAILED
+            if errors or not run_requests
+            else TickStatus.SUCCESS
+            if new_run_ids
+            else TickStatus.SKIPPED
+        )
         await self._storage.record_tick(
             sensor_id=sensor_id,
             status=status,
+            cursor=tick.get('cursor') if status == TickStatus.SUCCESS else None,
             run_ids=new_run_ids,
-            error_message=error_message,
+            error_message='; '.join(errors) or None,
+            skip_reason='Items changed before admission'
+            if status == TickStatus.SKIPPED
+            else None,
             tick_id=tick_id,
+            expected_updated_at=tick.get("sensor_updated_at"),
         )
 
         logger.info(

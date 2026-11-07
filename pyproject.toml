@@ -45,6 +45,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "croniter>=6,<7",
     "pybind11",
     "numpy==2.3.5",
     "protobuf>=5.29.0,<6.0.0",

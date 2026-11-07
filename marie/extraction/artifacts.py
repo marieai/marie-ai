@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 from marie.extraction.models import ExtractionSuccess
+from marie.utils.json import to_json
 
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 SUPPORTED_MEDIA_TYPES = frozenset({"text/markdown", "application/json"})
+
+
+def saved_extraction_reference(
+    ref_id: str, ref_type: str, metadata: dict[str, Any]
+) -> dict[str, str]:
+    """Describe the metadata already persisted by the extraction asset writer."""
+    return {
+        'kind': 'extraction',
+        'ref_id': ref_id,
+        'ref_type': ref_type,
+        'sha256': hashlib.sha256(to_json(metadata).encode('utf-8')).hexdigest(),
+    }
 
 
 def read_extraction_artifact(result: ExtractionSuccess, output_root: str) -> str:

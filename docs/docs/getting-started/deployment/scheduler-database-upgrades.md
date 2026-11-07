@@ -46,6 +46,130 @@ then all `schema/lease/*.sql` files, followed by
 `schema/monitoring/throughput_analysis.sql` and `cron_job_init.sql`. A count of
 top-level schema files alone does not prove that the bundle is complete.
 
+## Prepare the current KB indexing path
+
+The KB feature worktree adds `schema/094_kb_item_state.sql` and the matching
+Studio migration `20261105_kb_item_state`. They define the same flat current-item
+guard in `marie_scheduler`; deploy matching AI and Studio revisions and SQL
+bundles together. Updating a mounted SQL directory does not apply a migration.
+Use the existing backup and migration procedure before starting the new workers.
+
+Workflow-fed KB items also require `schema/098_kb_workflow_inputs.sql` and Studio
+migration `20261106_kb_workflow_inputs`. The migration stores the saved input
+reference, installs the completion sensor, and retains completion receipts while
+the corresponding scheduler history can still be replayed. Keep these revisions
+together; starting the new sensor code against the older schema is unsupported.
+
+For submissions with a configured extraction workflow, registration waits for
+that workflow's saved output. The completion sensor submits one ordinary
+`kb_index_content` DAG for each linked KB. That planner indexes saved extraction
+or captured plain text/Markdown and has no extraction node. Its node retries use
+the normal DAG mechanism. `kb_indexing` remains the workflow for original
+documents that still need extraction. Domain records require a compatible
+indexing workflow; the document workflow rejects unsupported input formats.
+
+The source binding honors the template's published fabrics when configured and
+pins the accepted source fabric for later refreshes. Changing fabric requires an
+explicit binding transition rather than matching another execution by URI alone.
+
+This implementation requires Studio's KB records, the scheduler and the managed
+PostgreSQL vector store to share one database. The final output replacement locks
+the current item and its actual scheduler execution in that database. A Studio
+metadata mapping does not authorize a write in a different database; separate
+database handoff is not supported by this path.
+The managed vector table is `kb_vectors` in this slice. A different executor
+`table_name` is rejected at startup; configurable store profiles remain in F15.
+
+Studio registers each authorized document before the native KB/submission sensor
+can schedule it. Existing S3 objects do not register themselves. The **Re-index** action
+starts a fresh indexing DAG; automatic node retries remain owned by the scheduler. The
+previous completed output remains searchable while a refresh runs or fails.
+Removing a document or submission link withdraws its indexed output before
+cleanup. If cleanup fails, retry removal once the runtime is available; retain
+the original and pending state until cleanup is confirmed.
+For a legacy document without runtime registration, removal returns a conflict
+before setting pending state. Re-index to register it, or complete its
+legacy migration first. Existing unqualified output is not assumed absent.
+
+The guarded vector view serves only registered, completed, currently eligible
+items. It does not adopt existing unqualified vector rows. Existing KBs require
+the rebuild/migration and real vector-profile qualification described by F04b
+and F15 in the KB feature plan before activation. The isolated lifecycle SQL
+tests do not qualify an embedding model, a production migration or live search.
+
+## Prepare optional PostgreSQL full-text retrieval
+
+The text pilot adds `schema/099_kb_text_index.sql` and matching Studio migration
+`20261106_kb_text_index`. They create `marie_scheduler.kb_text_section`, its GIN
+search index and a current-result view joined to the existing item guard. The
+scheduler schema revision is 99. Deploy matching source, SQL mounts and Studio
+migrations together through the backup/upgrade procedure; copying SQL files does
+not migrate the database. Do not edit historical migrations.
+
+Choose **Full-text search** in the Studio KB editor to save
+`retrievalBackend: postgresql_text`. Existing KBs default to `pgvector`. A populated
+KB cannot switch stores without a separate rebuild. Studio, the scheduler and
+managed text output must share a database. The existing KB executor deployment
+handles `/index_text`, `/text_search`, `/open_text`, `/delete_text_item` and
+`/delete_text_index`; no extra service or model is needed for these text operations.
+
+The saved backend is frozen into each indexing attempt. Both `kb_indexing` and
+`kb_index_content` select the text endpoint when configured; the latter reads
+saved content without repeating extraction. The completion sensor still submits
+one ordinary indexing DAG per linked KB. Input is captured plain text/Markdown or
+the existing saved extraction metadata, with SHA-256 verification. Query ranking
+uses PostgreSQL English full-text search, not BM25 or vector similarity.
+
+Each text item is replaced completely in the checked completion transaction;
+failed refresh retains previous eligible output. Removal withdraws delivery
+before bounded cleanup. Citations carry exact item/section/attempt/digest and
+character offsets. Studio checks current document ownership before and after
+source reads; the executor resolves only stored references and verifies the saved
+bytes and current row again. Missing or changed bytes return explicit outcomes.
+For extraction output this opens the saved text, not a PDF/TIFF page viewer.
+
+The pilot accepts at most 32 MiB per saved input, 100–8000 characters per section,
+at most 10,000 sections and 16 MiB of prepared section text. Overlap must be
+smaller than section size. Oversized expansion fails before replacing current
+output; reduce overlap or split the saved input. Source reads are bounded and
+close the S3 body even on failure.
+
+Local fixture qualification covers PostgreSQL, disposable S3, scheduler handoff
+and internal preview UI. Serving to tenants still requires F04a/audit-12 evidence;
+legacy adoption requires F04b. This does not qualify real vector models, plugin
+acquisition, code/structured-record adapters or deployed gateway capacity.
+
+## Upgrade KB DAG field names
+
+Schema `100_kb_indexing_dag_names.sql` and Studio migration
+`20261106_kb_workflow_run_names` rename the KB pointers without changing their UUIDs:
+
+| Field | Meaning |
+| --- | --- |
+| `indexing_dag_id` | Requested indexing DAG, previously `attempt_id`. |
+| `indexed_dag_id` | DAG whose output committed to the index, previously `completed_attempt_id`. |
+
+Text sections and source citations use `indexed_dag_id`; Studio document mappings
+use `kbItem.indexingDagId`. The existing indexed output stays searchable while a
+new indexing DAG runs or fails. Successful replacement updates `indexed_dag_id` in
+the same transaction as the output, including a valid empty replacement.
+
+Apply the additive Studio migrations **before starting the matching gateway and
+workers**. Then deploy the matching numbered runtime SQL bundle through schema
+100. Historical Studio migrations remain unchanged; the runtime's schema 099
+keeps an upgraded existing view during SQL replay, and schema 100 installs its
+current definition. Run matching code/schema revisions together.
+
+New KB job metadata uses `kb_indexing_dag_id`. Previously queued jobs with
+`kb_attempt_id` and existing vector output with that metadata remain readable;
+new vector output records `kb_indexed_dag_id`. Scheduler `run_attempt_id`, leases,
+retry counts, backoff and automatic retry behavior are unchanged.
+
+Studio's `reindexDocument` and `reindexFailed` actions start new indexing DAGs.
+They replace the misleading `retryDocument` / `retryFailed` operation names and
+record `reindex` audit events. Historical `retry` audit events retain their label.
+Request-refresh buttons still use **Retry**.
+
 ## Export backups through Docker
 
 A graphical database client may report that `/usr/bin/pg_dump` is missing because

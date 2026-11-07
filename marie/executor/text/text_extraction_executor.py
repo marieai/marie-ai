@@ -29,6 +29,7 @@ from marie.extraction import (
     read_extraction_artifact,
     write_extraction_metadata,
 )
+from marie.extraction.artifacts import saved_extraction_reference
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
 from marie.logging_core.predefined import default_logger as logger
@@ -353,6 +354,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                 del frames
                 del regions
 
+                input_ref = saved_extraction_reference(ref_id, ref_type, metadata)
                 self.persist(
                     ref_id=ref_id,
                     ref_type=ref_type,
@@ -371,6 +373,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
                     "status": "succeeded",
                     "runtime_info": self.runtime_info,
                     "metadata": metadata,
+                    'input_ref': input_ref,
                 }
                 converted = safely_encoded(lambda x: x)(response)
                 return converted
@@ -516,6 +519,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
         metadata = build_extraction_metadata(content, result)
         write_extraction_metadata(ref_id, ref_type, metadata)
+        input_ref = saved_extraction_reference(ref_id, ref_type, metadata)
         self.persist(
             ref_id=ref_id,
             ref_type=ref_type,
@@ -533,6 +537,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             "status": "succeeded",
             "runtime_info": self.runtime_info,
             "metadata": metadata,
+            'input_ref': input_ref,
         }
         return safely_encoded(lambda x: x)(response)
 

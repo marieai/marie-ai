@@ -374,9 +374,24 @@ class S3StorageHandler(PathHandler):
         self,
         path: str,
         suppress_errors: bool = False,
+        max_bytes: int | None = None,
         **kwargs: Any,
     ) -> bytes | None:
         s = S3Url(path)
+        if max_bytes is not None:
+            if max_bytes < 0:
+                raise ValueError('Read limit must be nonnegative')
+            response = self.s3.meta.client.get_object(Bucket=s.bucket, Key=s.key)
+            body = response['Body']
+            try:
+                if response.get('ContentLength', 0) > max_bytes:
+                    raise ValueError('Saved content exceeds the supported artifact size')
+                payload = body.read(max_bytes + 1)
+                if len(payload) > max_bytes:
+                    raise ValueError('Saved content exceeds the supported artifact size')
+                return payload
+            finally:
+                body.close()
         try:
             bytes_buffer = io.BytesIO()
             self.s3.Bucket(s.bucket).download_fileobj(s.key, bytes_buffer, Config=config)

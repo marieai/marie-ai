@@ -11,6 +11,20 @@ from marie.extraction.models import ExtractionSuccess, parse_extraction_result
 from marie.extraction.result_adapter import build_extraction_metadata
 
 
+def test_saved_extraction_reference_matches_the_existing_metadata_bytes(tmp_path):
+    from marie.extraction import artifacts
+    from marie.utils.json import store_json_object
+    factory = getattr(artifacts, 'saved_extraction_reference', None)
+    assert callable(factory)
+    metadata = {'ocr': [{'lines': [{'text': 'saved content'}]}], 'extraction': {'format': 'pdf'}}
+    path = tmp_path / 'output.meta.json'
+    store_json_object(metadata, str(path))
+    reference = factory('output', 'document', metadata)
+    assert reference['kind'] == 'extraction'
+    assert reference['ref_id'] == 'output'
+    assert reference['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _result(path: Path, data: bytes, **artifact_overrides) -> ExtractionSuccess:
     artifact = {
         "path": str(path),

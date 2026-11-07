@@ -53,178 +53,101 @@ def _sensor(**config_overrides):
     )
 
 
-@pytest.mark.asyncio
-async def test_run_request_shape():
-    sensor = _sensor()
-    obj = FileObject(
-        key=KEY, size=10, last_modified=datetime.now(timezone.utc), etag="x"
-    )
-    binding = {
-        "workflow_name": "kb_indexing",
-        "run_params": {"parse_mode": "agent", "multimodal": True},
+def registered_item():
+    return {
+        'tenant_id': TENANT,
+        'index_id': INDEX_BOUND,
+        'source_id': SOURCE,
+        'item_id': 'opaque:document',
+        'indexing_dag_id': UUID('99999999-9999-4999-8999-999999999999'),
+        'owner_type': 'kb_document',
+        'owner_id': 'document',
+        'uri': 's3://registered/report.pdf',
+        'run_params': {'parse_mode': 'agent', 'multimodal': True},
     }
-    pool = AsyncMock()
-    pool.fetchrow.return_value = binding
-
-    rr = await sensor.build_run_request(_context(pool), obj, bucket="marie")
-
-    assert rr.job_name == "kb_indexing"
-    assert rr.run_key == f"kb_indexing:22222222-2222-4222-8222-222222222222:{KEY}"
-    rc = rr.run_config
-    assert rc["uri"] == f"s3://marie/{KEY}"
-    assert rc["ref_id"] == KEY
-    assert rc["ref_type"] == "kb_document"
-    assert rc["project_id"] == rc["tenant_id"]
-    assert rc["index_name"] == rc["index_id"]
-    assert rc["run_params"] == binding["run_params"]
 
 
 @pytest.mark.asyncio
-async def test_missing_binding_skips():
+async def test_run_request_uses_registered_identity_and_attempt_artifacts():
     sensor = _sensor()
     obj = FileObject(
-        key=KEY, size=10, last_modified=datetime.now(timezone.utc), etag="x"
+        key=KEY, size=10, last_modified=datetime.now(timezone.utc), etag='x'
     )
+    pool = AsyncMock()
+    pool.fetchrow.return_value = item = registered_item()
+    rr = await sensor.build_run_request(_context(pool), obj, bucket='marie')
+    assert rr.job_name == 'kb_indexing'
+    rc = rr.run_config
+    assert rc['uri'] == item['uri']
+    assert rc['ref_id'] != KEY
+    assert rc['ref_id'].endswith(str(item['indexing_dag_id']))
+    assert rc['ref_type'] == 'kb_item'
+    assert rc['item_id'] == item['item_id']
+    assert rc['index_name'] == rc['index_id']
+    assert rc['run_params'] == item['run_params']
+
+
+@pytest.mark.asyncio
+async def test_unregistered_object_does_not_become_a_run():
     pool = AsyncMock()
     pool.fetchrow.return_value = None
-
-    assert await sensor.build_run_request(_context(pool), obj, bucket="marie") is None
+    obj = FileObject(
+        key=KEY, size=1, last_modified=datetime.now(timezone.utc), etag='x'
+    )
+    assert (
+        await _sensor().build_run_request(_context(pool), obj, bucket='marie') is None
+    )
 
 
 def test_non_kb_key_ignored():
-    assert KB_KEY_RE.match("tenants/t1/submissions/s1/file.pdf") is None
+    assert KB_KEY_RE.match(NON_KB_KEY) is None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('bucket', ['', 'stale-bucket'])
-async def test_system_poll_resolves_bucket_endpoint_region_and_credentials_together(monkeypatch, bucket):
-    for name, value in {
-        'S3_STORAGE_BUCKET_NAME': 'system-bucket',
-        'S3_ENDPOINT_URL': 'http://system-storage.invalid',
-        'S3_REGION': 'eu-west-1',
-        'S3_ACCESS_KEY_ID': 'synthetic-system-access',
-        'S3_SECRET_ACCESS_KEY': 'synthetic-system-secret',
-    }.items():
-        monkeypatch.setenv(name, value)
-    recorded_kwargs = {}
-
-    class Client:
-        def get_paginator(self, name):
-            return self
-
-        def paginate(self, **kwargs):
-            assert kwargs['Bucket'] == 'system-bucket'
-            return [{'Contents': [{
-                'Key': KEY, 'Size': 10, 'LastModified': datetime.now(timezone.utc),
-            }]}]
-
-    def fake_client(service_name, **kwargs):
-        recorded_kwargs.update(kwargs)
-        return Client()
-
-    monkeypatch.setattr('boto3.client', fake_client)
+async def test_saved_runtime_uri_wins_over_stale_sensor_storage_config(bucket):
     pool = AsyncMock()
-    pool.fetchrow.return_value = {'workflow_name': 'kb_indexing', 'run_params': {}}
-
-    sensor = _sensor(
-        bucket=bucket, region='ap-southeast-2', endpoint_url='http://stale.invalid',
-        aws_access_key_id='synthetic-stale-access',
-        aws_secret_access_key='synthetic-stale-secret',
-    )
-    result = await sensor.evaluate(_context(pool))
-
-    assert recorded_kwargs['region_name'] == 'eu-west-1'
-    assert recorded_kwargs['endpoint_url'] == 'http://system-storage.invalid'
-    assert recorded_kwargs['aws_access_key_id'] == 'synthetic-system-access'
-    assert recorded_kwargs['aws_secret_access_key'] == 'synthetic-system-secret'
-    assert result.run_requests[0].run_config['uri'] == f's3://system-bucket/{KEY}'
+    pool.fetch.return_value = [registered_item()]
+    sensor = _sensor(bucket=bucket, endpoint_url='http://stale.invalid')
+    with patch(
+        'boto3.client', side_effect=AssertionError('No S3 scanning for membership')
+    ):
+        result = await sensor.evaluate(_context(pool))
+    assert result.run_requests[0].run_config['uri'] == 's3://registered/report.pdf'
 
 
 @pytest.mark.asyncio
-async def test_evaluate_holds_cursor_at_recoverable_skip_minimum():
-    """Non-KB key advances past; unbound KB key holds the cursor at its own
-    timestamp (not the max) so it gets re-listed and retried next tick."""
-    sensor = _sensor()
-    t0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    t1 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    t2 = datetime(2026, 1, 3, tzinfo=timezone.utc)
-
-    non_kb = FileObject(key=NON_KB_KEY, size=1, last_modified=t0, etag="x")
-    unbound = FileObject(key=UNBOUND_KEY, size=1, last_modified=t1, etag="x")
-    bound = FileObject(key=BOUND_KEY, size=1, last_modified=t2, etag="x")
-    binding = {"workflow_name": "kb_indexing", "run_params": {}}
-
-    def _load_binding(_context, index_id):
-        return binding if index_id == INDEX_BOUND else None
-
-    with (
-        patch.object(
-            sensor, "list_objects", new=AsyncMock(return_value=[non_kb, unbound, bound])
-        ),
-        patch.object(sensor, "load_binding", side_effect=_load_binding),
-    ):
-        result = await sensor.evaluate(_context())
-
+async def test_cursor_does_not_hide_registered_pending_work():
+    pool = AsyncMock()
+    pool.fetch.return_value = [registered_item()]
+    context = _context(pool)
+    context.cursor = '2099-01-01T00:00:00+00:00'
+    result = await _sensor().evaluate(context)
     assert len(result.run_requests) == 1
-    assert result.run_requests[0].run_config["index_id"] == INDEX_BOUND
-    assert result.cursor == t1.isoformat()
+    assert result.cursor == context.cursor
 
 
 @pytest.mark.asyncio
-async def test_evaluate_all_bound_advances_cursor_to_max():
-    sensor = _sensor()
-    t1 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    t2 = datetime(2026, 1, 3, tzinfo=timezone.utc)
-
-    obj1 = FileObject(key=BOUND_KEY, size=1, last_modified=t1, etag="x")
-    obj2 = FileObject(key=BOUND_KEY_2, size=1, last_modified=t2, etag="x")
-    binding = {"workflow_name": "kb_indexing", "run_params": {}}
-
-    with (
-        patch.object(sensor, "list_objects", new=AsyncMock(return_value=[obj1, obj2])),
-        patch.object(sensor, "load_binding", return_value=binding) as load_binding,
-    ):
-        result = await sensor.evaluate(_context())
-
-    assert len(result.run_requests) == 2
-    assert result.cursor == t2.isoformat()
-    assert load_binding.await_count == 1
+async def test_evaluate_requires_runtime_pool():
+    with pytest.raises(RuntimeError, match='Sensor PostgreSQL pool'):
+        await _sensor().evaluate(_context())
 
 
 @pytest.mark.asyncio
-async def test_evaluate_missing_shared_pool_raises():
-    sensor = _sensor()
-    obj = FileObject(
-        key=BOUND_KEY,
-        size=1,
-        last_modified=datetime(2026, 1, 2, tzinfo=timezone.utc),
-        etag="x",
-    )
-
-    with patch.object(sensor, "list_objects", new=AsyncMock(return_value=[obj])):
-        with pytest.raises(RuntimeError, match="Sensor PostgreSQL pool"):
-            await sensor.evaluate(_context())
-
-
-@pytest.mark.asyncio
-async def test_load_binding_uses_shared_pool():
-    sensor = _sensor()
+async def test_empty_pending_set_skips_without_moving_cursor():
     pool = AsyncMock()
-    pool.fetchrow.return_value = None
-
-    await sensor.load_binding(_context(pool), INDEX_BOUND)
-
-    pool.fetchrow.assert_awaited_once()
-    query, index_id = pool.fetchrow.call_args.args
-    assert "FROM marie_scheduler.resource_workflow_binding" in query
-    assert "resource_type = 'kb_index'" in query
-    assert "$1" in query
-    assert index_id == UUID(INDEX_BOUND)
+    pool.fetch.return_value = []
+    context = _context(pool)
+    result = await _sensor().evaluate(context)
+    assert not result.run_requests
+    assert result.cursor == context.cursor
 
 
 @pytest.mark.asyncio
-async def test_load_binding_requires_shared_pool():
-    sensor = _sensor()
-
-    with pytest.raises(RuntimeError, match="Sensor PostgreSQL pool"):
-        await sensor.load_binding(_context(), INDEX_BOUND)
+async def test_pending_query_is_bounded():
+    pool = AsyncMock()
+    pool.fetch.return_value = []
+    await _sensor(max_files_per_tick=12).evaluate(_context(pool))
+    assert pool.fetch.await_args.args[-1] == 12
+    with pytest.raises(ValueError, match='between'):
+        await _sensor(max_files_per_tick=1001).evaluate(_context(pool))

@@ -15,14 +15,18 @@ Key features:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Union
 
+from psycopg import Error as PostgresError
 from pydantic import PrivateAttr
 
 from marie._core.schema import BaseNode, TextNode
+from marie.kb.item_state import KbItemScope, KbItemStore
 from marie.logging_core.logger import MarieLogger
 from marie.storage.pgvector.utils import from_db, to_db
 from marie.vector_stores.types import (
@@ -82,6 +86,7 @@ class PGVectorStore(BasePydanticVectorStore):
     embedding_dim: int = (
         1024  # Matryoshka dim; pgvector HNSW caps at 2000, so 2048 needs halfvec
     )
+    guarded: bool = False
 
     # Performance settings
     hnsw_m: int = 16  # HNSW M parameter (connections per node)
@@ -113,6 +118,213 @@ class PGVectorStore(BasePydanticVectorStore):
     def client(self) -> Any:
         """Get the psycopg 3 connection pool."""
         return self._pool
+
+    @property
+    def read_table(self) -> str:
+        return f'{self.table_name}_current' if self.guarded else self.table_name
+
+    async def initialize_current_view(self) -> None:
+        """Expose only completed, active item output on managed KB reads."""
+        if not re.fullmatch(
+            r'[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)?', self.table_name
+        ):
+            raise ValueError('Invalid vector table name')
+        await self._ensure_pool()
+        await self._pool.execute(
+            f'''CREATE OR REPLACE VIEW {self.table_name}_current AS
+                SELECT v.* FROM {self.table_name} v
+                JOIN marie_scheduler.kb_item_state item
+                  ON item.index_id::text=v.index_name
+                 AND item.source_id=v.source_id AND item.item_id=v.ref_doc_id
+                 AND item.indexed_dag_id::text=COALESCE(v.metadata->>'kb_indexed_dag_id',v.metadata->>'kb_attempt_id')
+                WHERE item.state <> 'removed' AND item.indexed_dag_id IS NOT NULL
+                  AND item.backend='pgvector' AND item.store_name='{self.table_name}' '''
+        )
+
+    async def replace_item_nodes(
+        self,
+        scope: KbItemScope,
+        indexing_dag_id: str,
+        nodes: List[Dict[str, Any]],
+        *,
+        content_digest: str | None = None,
+        job_id: str | None = None,
+        run_attempt_id: str | None = None,
+        run_owner: str | None = None,
+    ) -> int:
+        """Replace one item's prepared vector output and completion atomically."""
+        await self._ensure_pool()
+        if not self._initialized:
+            await self.initialize()
+        records = []
+        seen = set()
+        for node in nodes:
+            local_id = str(node['node_id'])
+            if local_id in seen:
+                raise ValueError('Duplicate record ID in replacement')
+            seen.add(local_id)
+            node_id = hashlib.sha256(
+                json.dumps([*map(str, scope.values()), local_id]).encode()
+            ).hexdigest()
+            metadata = {
+                **node.get('metadata', {}),
+                'kb_indexed_dag_id': indexing_dag_id,
+                'kb_record_id': local_id,
+            }
+            records.append(
+                (
+                    node_id,
+                    scope.index_id,
+                    scope.source_id,
+                    scope.item_id,
+                    node.get('content'),
+                    node.get('node_type', 'text'),
+                    json.dumps(metadata),
+                    to_db(node['embedding'], dim=self.embedding_dim),
+                )
+            )
+        async with KbItemStore(self._pool).write(
+            scope,
+            indexing_dag_id,
+            record_count=len(records),
+            content_digest=content_digest,
+            backend='pgvector',
+            store_name=self.table_name,
+            job_id=job_id,
+            run_attempt_id=run_attempt_id,
+            run_owner=run_owner,
+        ) as conn:
+            await conn.execute(
+                f'DELETE FROM {self.table_name} WHERE index_name=$1 AND source_id=$2 AND ref_doc_id=$3',
+                scope.index_id,
+                scope.source_id,
+                scope.item_id,
+            )
+            await conn.executemany(
+                f'''INSERT INTO {self.table_name}
+                    (node_id,index_name,source_id,ref_doc_id,content,node_type,metadata,embedding)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8)''',
+                records,
+            )
+        return len(records)
+
+    async def delete_item(self, scope: KbItemScope) -> int:
+        """Withdraw the item before retryable, exactly scoped output cleanup."""
+        await self._ensure_pool()
+        items = KbItemStore(self._pool)
+        removed = await items.remove(
+            scope, backend='pgvector', store_name=self.table_name
+        )
+        try:
+            async with self._pool.acquire() as conn:
+                async with conn.transaction():
+                    result = await conn.execute(
+                        f'DELETE FROM {self.table_name} WHERE index_name=$1 AND source_id=$2 AND ref_doc_id=$3',
+                        scope.index_id,
+                        scope.source_id,
+                        scope.item_id,
+                    )
+                    await conn.execute(
+                        '''UPDATE marie_scheduler.kb_item_state SET cleanup_state='complete',error=NULL
+                           WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND item_id=$4
+                             AND state='removed' AND indexing_dag_id=$5''',
+                        *scope.values(),
+                        removed['indexing_dag_id'],
+                    )
+                    return int(result.split()[-1])
+        except PostgresError as error:
+            await self._pool.execute(
+                '''UPDATE marie_scheduler.kb_item_state SET cleanup_state='error',error=$6
+                   WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND item_id=$4
+                     AND state='removed' AND indexing_dag_id=$5''',
+                *scope.values(),
+                removed['indexing_dag_id'],
+                str(error),
+            )
+            raise
+
+    async def delete_scope(
+        self, tenant_id: str, index_id: str, source_id: str | None = None
+    ) -> int:
+        """Withdraw every admitted item in one authorized index/source scope."""
+        from uuid import UUID
+
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                unsupported = await conn.fetchval(
+                    '''SELECT 1 FROM marie_scheduler.kb_item_state
+                       WHERE tenant_id=$1 AND index_id=$2 AND ($3::text IS NULL OR source_id=$3)
+                         AND (backend <> 'pgvector' OR store_name IS DISTINCT FROM $4)
+                         AND (state <> 'removed' OR cleanup_state <> 'complete') LIMIT 1''',
+                    UUID(tenant_id),
+                    UUID(index_id),
+                    source_id,
+                    self.table_name,
+                )
+                if unsupported:
+                    raise PermissionError(
+                        'KB scope contains output owned by an unsupported backend'
+                    )
+                rows = await conn.fetch(
+                    '''UPDATE marie_scheduler.kb_item_state
+                       SET state='removed',
+                           cleanup_state=CASE WHEN state='removed' THEN cleanup_state ELSE 'pending' END,
+                           updated_at=clock_timestamp()
+                       WHERE tenant_id=$1 AND index_id=$2 AND ($3::text IS NULL OR source_id=$3)
+                         AND backend='pgvector' AND store_name=$4
+                         AND (state <> 'removed' OR cleanup_state <> 'complete')
+                       RETURNING source_id,item_id''',
+                    UUID(tenant_id),
+                    UUID(index_id),
+                    source_id,
+                    self.table_name,
+                )
+        count = 0
+        for offset in range(0, len(rows), 500):
+            count += await self._cleanup_removed_batch(
+                tenant_id, index_id, rows[offset : offset + 500]
+            )
+        return count
+
+    async def _cleanup_removed_batch(
+        self, tenant_id: str, index_id: str, items: list[dict[str, Any]]
+    ) -> int:
+        source_ids = [item['source_id'] for item in items]
+        item_ids = [item['item_id'] for item in items]
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                count = await conn.fetchval(
+                    f'''WITH deleted AS (
+                        DELETE FROM {self.table_name} v
+                        USING unnest($3::text[],$4::text[]) withdrawn(source_id,item_id)
+                        WHERE v.index_name=$2::uuid::text AND v.source_id=withdrawn.source_id
+                          AND v.ref_doc_id=withdrawn.item_id
+                          AND EXISTS (SELECT 1 FROM marie_scheduler.kb_item_state k
+                            WHERE k.tenant_id=$1::uuid AND k.index_id=$2::uuid
+                              AND k.source_id=withdrawn.source_id AND k.item_id=withdrawn.item_id
+                              AND k.state='removed' AND k.backend='pgvector' AND k.store_name=$5)
+                        RETURNING 1
+                    ) SELECT count(*) FROM deleted''',
+                    tenant_id,
+                    index_id,
+                    source_ids,
+                    item_ids,
+                    self.table_name,
+                )
+                await conn.execute(
+                    '''UPDATE marie_scheduler.kb_item_state SET cleanup_state='complete',error=NULL,
+                           updated_at=clock_timestamp()
+                       WHERE tenant_id=$1::uuid AND index_id=$2::uuid AND state='removed'
+                         AND backend='pgvector' AND store_name=$5
+                         AND (source_id,item_id) IN (SELECT * FROM unnest($3::text[],$4::text[]))''',
+                    tenant_id,
+                    index_id,
+                    source_ids,
+                    item_ids,
+                    self.table_name,
+                )
+                return count
 
     async def _ensure_pool(self) -> None:
         """Ensure connection pool is created."""
@@ -214,6 +426,8 @@ class PGVectorStore(BasePydanticVectorStore):
 
             logger.info(f"Initialized PGVectorStore table: {self.table_name}")
 
+        if self.guarded:
+            await self.initialize_current_view()
         self._initialized = True
 
     # -------------------------------------------------------------------------
@@ -247,6 +461,10 @@ class PGVectorStore(BasePydanticVectorStore):
         Returns:
             List of inserted node IDs.
         """
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         if not nodes:
             return []
 
@@ -328,6 +546,10 @@ class PGVectorStore(BasePydanticVectorStore):
 
     async def adelete(self, ref_doc_id: str, **delete_kwargs: Any) -> None:
         """Delete nodes by ref_doc_id asynchronously."""
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute(
@@ -431,7 +653,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata,
                        1 - (embedding <=> $1) as similarity
-                FROM {self.table_name}
+                FROM {self.read_table}
                 WHERE {where_sql}
                 ORDER BY embedding <=> $1
                 LIMIT ${top_k_idx}
@@ -597,6 +819,10 @@ class PGVectorStore(BasePydanticVectorStore):
         Returns:
             Database UUID of inserted row.
         """
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         await self._ensure_pool()
 
         if not self._initialized:
@@ -680,7 +906,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata,
                        1 - (embedding <=> $1) as similarity
-                FROM {self.table_name}
+                FROM {self.read_table}
                 WHERE {where_sql}
                 ORDER BY embedding <=> $1
                 LIMIT $2
@@ -702,6 +928,10 @@ class PGVectorStore(BasePydanticVectorStore):
         Returns:
             Number of deleted rows.
         """
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             if index_name:
@@ -728,6 +958,10 @@ class PGVectorStore(BasePydanticVectorStore):
         Returns:
             Number of deleted rows.
         """
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute(
@@ -756,7 +990,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 rows = await conn.fetch(
                     f"""
                     SELECT node_type, COUNT(*) as count
-                    FROM {self.table_name}
+                    FROM {self.read_table}
                     WHERE source_id = $1 AND index_name = $2
                     GROUP BY node_type
                     """,
@@ -767,7 +1001,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 rows = await conn.fetch(
                     f"""
                     SELECT node_type, COUNT(*) as count
-                    FROM {self.table_name}
+                    FROM {self.read_table}
                     WHERE source_id = $1
                     GROUP BY node_type
                     """,
@@ -796,7 +1030,7 @@ class PGVectorStore(BasePydanticVectorStore):
             type_rows = await conn.fetch(
                 f"""
                 SELECT node_type, COUNT(*) as count
-                FROM {self.table_name}
+                FROM {self.read_table}
                 WHERE index_name = $1
                 GROUP BY node_type
                 """,
@@ -807,7 +1041,7 @@ class PGVectorStore(BasePydanticVectorStore):
             source_rows = await conn.fetch(
                 f"""
                 SELECT source_id, COUNT(*) as count
-                FROM {self.table_name}
+                FROM {self.read_table}
                 WHERE index_name = $1
                 GROUP BY source_id
                 """,
@@ -899,7 +1133,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 f"""
                 SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata
-                FROM {self.table_name}
+                FROM {self.read_table}
                 WHERE {where_sql}
                 ORDER BY created_at DESC
                 """,
@@ -953,6 +1187,10 @@ class PGVectorStore(BasePydanticVectorStore):
             filters: Optional metadata filters for deletion.
             **delete_kwargs: Additional arguments (e.g., source_id, index_name).
         """
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         await self._ensure_pool()
 
         where_clauses = []
@@ -1008,6 +1246,10 @@ class PGVectorStore(BasePydanticVectorStore):
 
     async def aclear(self) -> None:
         """Asynchronously clear all nodes from vector store."""
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute(f"TRUNCATE TABLE {self.table_name}")
@@ -1041,6 +1283,10 @@ class PGVectorStore(BasePydanticVectorStore):
         Returns:
             Total number of nodes inserted.
         """
+        if self.guarded:
+            raise PermissionError(
+                'Managed KB operations require a scoped item/attempt operation'
+            )
         await self._ensure_pool()
 
         if not self._initialized:
@@ -1158,7 +1404,7 @@ class PGVectorStore(BasePydanticVectorStore):
                            node_type, metadata,
                            1 - (embedding <=> $1) as similarity,
                            ROW_NUMBER() OVER (ORDER BY embedding <=> $1) as rank
-                    FROM {self.table_name}
+                    FROM {self.read_table}
                     WHERE {where_sql}
                     ORDER BY embedding <=> $1
                     LIMIT $2
@@ -1184,7 +1430,7 @@ class PGVectorStore(BasePydanticVectorStore):
                                    plainto_tsquery('english', $1)
                                ) DESC
                            ) as rank
-                    FROM {self.table_name}
+                    FROM {self.read_table}
                     WHERE {where_sql}
                       AND to_tsvector('english', COALESCE(content, '')) @@
                           plainto_tsquery('english', $1)
@@ -1303,7 +1549,7 @@ class PGVectorStore(BasePydanticVectorStore):
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"SELECT COUNT(*) as count FROM {self.table_name} WHERE {where_sql}",
+                f"SELECT COUNT(*) as count FROM {self.read_table} WHERE {where_sql}",
                 *params,
             )
 

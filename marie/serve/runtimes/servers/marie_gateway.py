@@ -1835,6 +1835,9 @@ class MarieServerGateway(CompositeServer):
         now = datetime.now(timezone.utc)
         submission_model = JobSubmissionModel(**message)
         metadata = submission_model.metadata
+        fabric_group_id = self.llm_dispatch_runtime.config.fabric_group_id
+        if fabric_group_id:
+            metadata['fabric_group_id'] = fabric_group_id
         project_id = metadata.get("project_id", None)
         ref_type = metadata.get("ref_type", None)
         ref_id = metadata.get("ref_id", None)

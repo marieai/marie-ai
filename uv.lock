@@ -736,6 +736,18 @@ toml = [
 ]
 
 [[package]]
+name = "croniter"
+version = "6.2.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/37/57/2e2a65aee2a70483cb28e2b7e15a072d00a523207593b44400d4717bb100/croniter-6.2.4.tar.gz", hash = "sha256:fc124f751b1b04805c2a04b061898b436b45ab2320b045e1e052ea895de65189", size = 166267, upload-time = "2026-07-10T09:52:59.955Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/ba/d678e5bd329646ca51d3c92addbc77804e86d21f4b6b6a027218e6abb010/croniter-6.2.4-py3-none-any.whl", hash = "sha256:8ef3d544107a5c05a150a2d78f8bf5a8eb9c5c4d93405a736b824109574e3f4d", size = 46677, upload-time = "2026-07-10T09:52:58.425Z" },
+]
+
+[[package]]
 name = "cross-web"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1082,9 +1094,9 @@ requires-dist = [
     { name = "flake8", marker = "extra == 'dev'", specifier = "==3.8.1" },
     { name = "flake8-bugbear", marker = "extra == 'dev'" },
     { name = "flake8-comprehensions", marker = "extra == 'dev'" },
-    { name = "fvcore", specifier = ">=0.1.5" },
+    { name = "fvcore", specifier = ">=0.1.5,<0.1.6" },
     { name = "hydra-core", specifier = ">=1.1" },
-    { name = "iopath", specifier = ">=0.1.7" },
+    { name = "iopath", specifier = ">=0.1.7,<0.1.10" },
     { name = "isort", marker = "extra == 'dev'", specifier = "==4.3.21" },
     { name = "matplotlib" },
     { name = "omegaconf", specifier = ">=2.1,<2.4" },
@@ -2486,6 +2498,7 @@ dependencies = [
     { name = "clickhouse-driver" },
     { name = "cloudpickle" },
     { name = "colorcet" },
+    { name = "croniter" },
     { name = "cython" },
     { name = "dataclasses-json" },
     { name = "deprecated" },
@@ -2735,6 +2748,7 @@ requires-dist = [
     { name = "clickhouse-driver", specifier = "==0.2.10" },
     { name = "cloudpickle" },
     { name = "colorcet" },
+    { name = "croniter", specifier = ">=6,<7" },
     { name = "cython" },
     { name = "dataclasses-json" },
     { name = "deprecated" },

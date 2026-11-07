@@ -17,6 +17,7 @@ Runtime parameters (provided at job submission, NOT at plan creation):
 """
 
 from marie.job.job_manager import generate_job_id, increment_uuid7str
+from marie.kb.content import document_content_reference
 from marie.query_planner.base import (
     ExecutorEndpointQueryDefinition,
     NoopQueryDefinition,
@@ -48,6 +49,7 @@ def query_planner_kb_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
 
     metadata = planner_info.metadata or {}
     run_params = metadata.get("run_params", {})
+    text_backend = run_params.get('retrieval_backend') == 'postgresql_text'
 
     nodes = []
 
@@ -110,11 +112,13 @@ def query_planner_kb_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     # Runtime params (source_id, index_name, ref_id, etc.) provided at job submission
     embed_node = Query(
         task_id=f"{increment_uuid7str(base_id, planner_info.current_id)}",
-        query_str=f"{planner_info.current_id}: EMBED and STORE",
+        query_str=f"{planner_info.current_id}: {'INDEX text' if text_backend else 'EMBED and STORE'}",
         dependencies=[extract_node.task_id],
         node_type=QueryType.COMPUTE,
         definition=ExecutorEndpointQueryDefinition(
-            endpoint="vector_store_executor://embed_and_store",
+            endpoint='vector_store_executor://index_text'
+            if text_backend
+            else 'vector_store_executor://embed_and_store',
             params={
                 "layout": layout,
                 **(
@@ -150,6 +154,19 @@ def query_planner_kb_indexing(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     nodes.append(end_node)
 
     return QueryPlan(nodes=nodes)
+
+
+def query_planner_kb_index_content(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+    """Index saved extraction or supported captured text without running extraction."""
+    if planner_info.metadata is not None:
+        document_content_reference(planner_info.metadata.get('input_ref'))
+    plan = query_planner_kb_indexing(planner_info)
+    extract = plan.nodes[1]
+    embed = plan.nodes[2]
+    embed.dependencies = list(extract.dependencies)
+    embed.definition.params['input_mode'] = 'saved_content'
+    plan.nodes.remove(extract)
+    return plan
 
 
 if __name__ == "__main__":

@@ -53,7 +53,7 @@ from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-SCHEDULER_SCHEMA_VERSION = 97
+SCHEDULER_SCHEMA_VERSION = 100
 
 _WORK_INFO_COLUMNS = (
     "id, name, priority, state, retry_limit, start_after, "
@@ -1894,6 +1894,31 @@ class AsyncJobRepository:
                 )
         return dag_row[1], [(str(row[0]), row[1]) for row in rows]
 
+    async def get_sensor_job_state(
+        self, dag_id: str, sensor_id: str, run_key: str | None, queue: str | None
+    ) -> str | None:
+        """Confirm an occurrence against the durable DAG and all of its children."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"""SELECT d.state::text, (%s::text IS NULL OR d.submission_name = %s)
+                    AND EXISTS (SELECT 1 FROM {DEFAULT_SCHEMA}.job j WHERE j.dag_id=d.id)
+                    AND NOT EXISTS (SELECT 1 FROM {DEFAULT_SCHEMA}.job j WHERE j.dag_id=d.id
+                        AND (j.name IS DISTINCT FROM d.submission_name
+                            OR j.data->>'sensor_id' IS DISTINCT FROM %s
+                            OR j.data->>'run_key' IS DISTINCT FROM %s))
+                    FROM {DEFAULT_SCHEMA}.dag d WHERE d.id=%s::uuid""",
+                queue,
+                queue,
+                sensor_id,
+                run_key,
+                dag_id,
+            )
+        if row is None:
+            return None
+        if not row[1]:
+            raise ValueError('Sensor submission ID belongs to a different occurrence')
+        return row[0]
+
     async def get_dag_queue_identity(
         self, dag_id: str
     ) -> tuple[str | None, bool] | None:
@@ -2944,6 +2969,11 @@ class AsyncJobRepository:
                 await conn.execute(
                     insert_job_search_documents(DEFAULT_SCHEMA),
                     Jsonb([asdict(document) for document in search_documents]),
+                )
+                from marie.kb.item_state import bind_upstream_input
+
+                await bind_upstream_input(
+                    conn, dag_id, metadata, planner or work_info.name
                 )
                 if route_records:
                     inserted = await conn.fetch(

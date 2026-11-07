@@ -206,7 +206,7 @@ class SubmissionStorage(PostgresqlMixin):
                     indexing_error = %s,
                     indexed_at = CASE WHEN %s = 'indexed' THEN NOW() ELSE indexed_at END,
                     updated_at = NOW()
-                WHERE id = %s
+                WHERE id = %s AND indexing_status IS DISTINCT FROM 'removing'
                 """,
                 (status, error, status, document_id),
                 connection=conn,

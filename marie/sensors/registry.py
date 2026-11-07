@@ -135,6 +135,7 @@ def register_all_sensors() -> None:
     from marie.sensors.definitions import (
         event_sensor,
         kb_document_sensor,
+        kb_workflow_sensor,
         manual_sensor,
         polling_sensor,
         run_status_sensor,

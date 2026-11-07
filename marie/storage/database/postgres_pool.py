@@ -266,7 +266,8 @@ class AsyncPostgresConnection:
             legacy_query = query
             query, _ = _normalize(legacy_query, rows[0])
             rows = [_normalize(legacy_query, row)[1] for row in rows]
-        await self._connection.executemany(query, rows)
+        async with self._connection.cursor() as cursor:
+            await cursor.executemany(query, rows)
         scheduler_trace(
             "postgres_operation",
             operation="executemany",

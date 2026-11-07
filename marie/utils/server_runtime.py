@@ -267,7 +267,8 @@ async def _init_sensor_storage(db_config: Optional[Dict[str, Any]] = None) -> No
         from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
 
         pool = AsyncPostgresConnectionPool()
-        await pool.initialize(db_config)
+        # Commit reservations before crossing into the scheduler event loop.
+        await pool.initialize(db_config, autocommit=True)
         schema = db_config.get("schema", "marie_scheduler")
         storage = PostgreSQLSensorStorage.initialize(pool, schema)
         _sensor_storage_pool = pool
@@ -286,8 +287,7 @@ class _CrossLoopJobScheduler:
     and friends are loop-bound, so the scheduler can't be called directly
     from the worker's loop).
 
-    Only implements `submit_job` -- worker.py duck-types the scheduler and
-    only ever calls that method.
+    Admission and durable receipt reads stay on the gateway event loop.
     """
 
     def __init__(self, job_scheduler: Any, gateway_loop: asyncio.AbstractEventLoop):
@@ -302,6 +302,21 @@ class _CrossLoopJobScheduler:
             self._job_scheduler.submit_job(work_info), self._gateway_loop
         )
         return await asyncio.wrap_future(concurrent_future, loop=_sensor_worker_loop)
+
+    async def submit_sensor_job(self, work_info: Any) -> str:
+        future = asyncio.run_coroutine_threadsafe(
+            self._job_scheduler.submit_sensor_job(work_info), self._gateway_loop
+        )
+        return await asyncio.wrap_future(future)
+
+    async def get_sensor_job_state(
+        self, dag_id: str, sensor_id: str, run_key: str | None, queue: str | None
+    ) -> str | None:
+        future = asyncio.run_coroutine_threadsafe(
+            self._job_scheduler.get_sensor_job_state(dag_id, sensor_id, run_key, queue),
+            self._gateway_loop,
+        )
+        return await asyncio.wrap_future(future)
 
 
 def attach_sensor_worker_scheduler(job_scheduler: Any) -> bool:

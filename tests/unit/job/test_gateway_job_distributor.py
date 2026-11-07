@@ -4,6 +4,26 @@ from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 
 
+async def test_build_payload_preserves_typed_upstream_and_content_reference():
+    reference = {'kind': 'extraction', 'ref_id': 'upstream', 'ref_type': 'document'}
+    upstream = {'output': {'records': [{'moves': ['e4']}]}}
+    info = JobInfo(status=JobStatus.PENDING, entrypoint='vector_store_executor://embed_and_store', metadata={
+        'metadata': {'uri': 's3://fixture/one.pdf', 'input_ref': reference, 'upstream': upstream},
+    })
+    parameters, _ = await GatewayJobDistributor()._build_payload('job', info)
+    assert parameters['input_ref'] == reference
+    assert parameters['upstream'] == upstream
+
+
+async def test_build_payload_preserves_registered_item_identity() -> None:
+    identity = dict(index_id='index', item_id='opaque:one', kb_indexing_dag_id='attempt', owner_type='record', owner_id='one')
+    info = JobInfo(status=JobStatus.PENDING, entrypoint='vector_store_executor://embed_and_store', metadata={
+        'metadata': {'uri': 's3://fixture/one.pdf', **identity},
+    })
+    parameters, _ = await GatewayJobDistributor()._build_payload('job', info)
+    assert {key: parameters.get(key) for key in identity} == identity
+
+
 async def test_build_payload_passes_mock_failure_controls_to_executor_parameters() -> (
     None
 ):

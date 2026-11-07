@@ -897,7 +897,7 @@ class WorkerRequestHandler:
                     )
                 else:
                     await self._record_successful_job(
-                        job_id, requests, additional_metadata
+                        job_id, requests, additional_metadata, return_data=return_data
                     )
 
                 self.logger.info(
@@ -1788,6 +1788,7 @@ class WorkerRequestHandler:
         job_id: str,
         requests: List["DataRequest"],
         metadata_attributes: Optional[Dict],
+        return_data: Any = None,
     ):
         if self.is_dry_run(requests):
             self.logger.debug(
@@ -1837,12 +1838,24 @@ class WorkerRequestHandler:
                     deployment=self._deployment,
                     status=JobStatus.SUCCEEDED.value,
                 )
+                runtime_env = {'attributes': request_attributes}
+                if isinstance(return_data, (dict, list)):
+                    reference = (
+                        return_data.get('input_ref')
+                        if isinstance(return_data, dict)
+                        else None
+                    )
+                    if (
+                        isinstance(reference, dict)
+                        and reference.get('kind') == 'extraction'
+                    ):
+                        runtime_env['output'] = {'input_ref': reference}
+                    else:
+                        runtime_env['output'] = return_data
                 await self._job_info_client.put_status(
                     job_id,
                     JobStatus.SUCCEEDED,
-                    jobinfo_replace_kwargs={
-                        "runtime_env": {"attributes": request_attributes}
-                    },
+                    jobinfo_replace_kwargs={'runtime_env': runtime_env},
                 )
                 scheduler_trace(
                     "executor_success_recorded",

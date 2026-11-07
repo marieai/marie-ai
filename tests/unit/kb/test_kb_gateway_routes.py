@@ -16,6 +16,8 @@ from marie.kb.gateway_routes import _extract_result, register_kb_routes
 from marie.proto import jina_pb2
 
 AUTH = {"Authorization": "Bearer test-token"}
+TENANT = '10000000-0000-4000-8000-000000000001'
+SCOPE = {'tenant_id': TENANT, 'index_name': 'idx1'}
 
 KB_PATHS = [
     "/api/v1/kb/search",
@@ -24,6 +26,8 @@ KB_PATHS = [
     "/api/v1/kb/source_stats",
     "/api/v1/kb/delete_source",
     "/api/v1/kb/delete_index",
+    '/api/v1/kb/delete_item',
+    '/api/v1/kb/item_status',
 ]
 
 
@@ -59,14 +63,14 @@ def test_all_routes_mounted_in_openapi():
 
 def test_unconfigured_returns_503():
     client = _client(streamer=None, kb_config=None)
-    r = client.post("/api/v1/kb/search", json={"query": "x"}, headers=AUTH)
+    r = client.post("/api/v1/kb/search", json={**SCOPE, "query": "x"}, headers=AUTH)
     assert r.status_code == 503
     assert r.json()["status"] == "error"
 
 
 def test_missing_auth_rejected():
     client = _client(streamer=_streamer_returning({"results": []}))
-    r = client.post("/api/v1/kb/search", json={"query": "x"})
+    r = client.post("/api/v1/kb/search", json={**SCOPE, "query": "x"})
     assert r.status_code == 401
 
 
@@ -89,6 +93,34 @@ def test_delete_source_requires_source_id():
     assert r.status_code == 400
 
 
+def test_source_delete_cannot_omit_its_tenant_and_index_scope():
+    client = _client(streamer=_streamer_returning({'deleted_count': 0}))
+    result = client.post(
+        '/api/v1/kb/delete_source', json={'source_id': 'source'}, headers=AUTH
+    )
+    assert result.status_code == 400
+
+
+def test_exact_item_delete_forwards_all_identity_fields():
+    streamer = _streamer_returning({'item_id': 'item', 'state': 'removed'})
+    result = _client(streamer=streamer).post(
+        '/api/v1/kb/delete_item',
+        json={
+            **SCOPE,
+            'tenant_id': TENANT,
+            'index_id': 'index',
+            'index_name': 'index',
+            'source_id': 'source',
+            'item_id': 'item',
+        },
+        headers=AUTH,
+    )
+    assert result.status_code == 200
+    request = streamer.process_single_data.await_args.kwargs['request']
+    assert request.header.exec_endpoint == '/delete_item'
+    assert dict(request.parameters)['item_id'] == 'item'
+
+
 def test_search_forwards_to_configured_executor_and_unwraps_results():
     rows = [{"id": "n1", "content": "hello chunk", "score": 0.9}]
     streamer = _streamer_returning({"results": rows, "count": 1})
@@ -96,7 +128,7 @@ def test_search_forwards_to_configured_executor_and_unwraps_results():
 
     r = client.post(
         "/api/v1/kb/search",
-        json={"query": "hello", "index_name": "idx1", "top_k": 3},
+        json={**SCOPE, "query": "hello", "index_name": "idx1", "top_k": 3},
         headers=AUTH,
     )
 
@@ -118,7 +150,7 @@ def test_hybrid_search_forwards_alpha():
     client = _client(streamer=streamer)
     r = client.post(
         "/api/v1/kb/hybrid_search",
-        json={"query": "hello", "alpha": 0.7},
+        json={**SCOPE, "query": "hello", "alpha": 0.7},
         headers=AUTH,
     )
     assert r.status_code == 200
@@ -132,7 +164,7 @@ def test_stats_payload_passed_through_whole():
     streamer = _streamer_returning(payload)
     client = _client(streamer=streamer)
     r = client.post(
-        "/api/v1/kb/index_stats", json={"index_name": "idx1"}, headers=AUTH
+        "/api/v1/kb/index_stats", json={**SCOPE, "index_name": "idx1"}, headers=AUTH
     )
     assert r.status_code == 200
     assert r.json()["result"] == payload
@@ -145,7 +177,7 @@ def test_executor_error_status_surfaces_as_502_not_ok():
     streamer = _streamer_returning({}, status=status)
     client = _client(streamer=streamer)
 
-    r = client.post("/api/v1/kb/search", json={"query": "x"}, headers=AUTH)
+    r = client.post("/api/v1/kb/search", json={**SCOPE, "query": "x"}, headers=AUTH)
     assert r.status_code == 502
     assert r.json()["status"] == "error"
     assert "deployment unavailable" in r.json()["message"]
@@ -155,7 +187,7 @@ def test_streamer_exception_surfaces_as_502():
     streamer = MagicMock()
     streamer.process_single_data = AsyncMock(side_effect=RuntimeError("boom"))
     client = _client(streamer=streamer)
-    r = client.post("/api/v1/kb/search", json={"query": "x"}, headers=AUTH)
+    r = client.post("/api/v1/kb/search", json={**SCOPE, "query": "x"}, headers=AUTH)
     assert r.status_code == 502
     assert "boom" in r.json()["message"]
 
@@ -167,14 +199,38 @@ def test_missing_payload_surfaces_as_502():
     streamer = MagicMock()
     streamer.process_single_data = AsyncMock(return_value=response)
     client = _client(streamer=streamer)
-    r = client.post("/api/v1/kb/search", json={"query": "x"}, headers=AUTH)
+    r = client.post("/api/v1/kb/search", json={**SCOPE, "query": "x"}, headers=AUTH)
     assert r.status_code == 502
     assert "no payload" in r.json()["message"]
 
 
 def test_extract_result_shapes():
-    assert _extract_result(
-        {"__results__": {"dep/rep-0": {"results": [1]}}}
-    ) == {"results": [1]}
+    assert _extract_result({"__results__": {"dep/rep-0": {"results": [1]}}}) == {
+        "results": [1]
+    }
     assert _extract_result({}) is None
     assert _extract_result(None) is None
+
+
+@pytest.mark.parametrize(
+    'action', ['text_search', 'open_text', 'delete_text_item', 'delete_text_index']
+)
+def test_text_endpoints_require_auth_and_forward_exact_identity(action):
+    fields = {
+        **SCOPE,
+        'index_id': '20000000-0000-4000-8000-000000000001',
+        'source_id': 'source',
+        'item_id': 'item',
+        'section_id': 'section',
+        'indexed_dag_id': 'attempt',
+        'source_digest': 'digest',
+        'query': 'coverage',
+    }
+    streamer = _streamer_returning({'outcome': 'ready'})
+    client = _client(streamer=streamer)
+    assert client.post(f'/api/v1/kb/{action}', json=fields).status_code == 401
+    response = client.post(f'/api/v1/kb/{action}', json=fields, headers=AUTH)
+    assert response.status_code == 200
+    forwarded = streamer.process_single_data.call_args.kwargs['request']
+    for key, value in fields.items():
+        assert forwarded.parameters[key] == value

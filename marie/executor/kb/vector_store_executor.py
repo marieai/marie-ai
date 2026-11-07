@@ -17,11 +17,13 @@ Usage in workflow:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import tempfile
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
+from uuid import UUID
 
 from docarray import DocList
 from docarray.documents import TextDoc
@@ -33,12 +35,28 @@ from marie.executor.kb.chunking import (
     chunk_text,
 )
 from marie.executor.marie_executor import MarieExecutor
+from marie.kb.content import (
+    document_content_reference,
+    flatten_ocr_pages,
+    load_document_text,
+)
+from marie.kb.item_state import (
+    KbItemScope,
+    KbItemStore,
+    StaleIndexingRun,
+    item_indexing_run,
+    item_run_parameters,
+    scheduler_execution,
+)
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import initialize_device_settings
 from marie.rag.models import SourceCitation
 from marie.runtime import Executor, requests
 from marie.storage import StorageManager
 from marie.utils.asset_util import s3_asset_path, split_filename
+
+if TYPE_CHECKING:
+    from marie.kb.text import TextIndexStore
 
 logger = MarieLogger("marie.executor.kb.vector_store_executor").logger
 
@@ -139,6 +157,10 @@ class VectorStoreExecutor(MarieExecutor):
             batch_size: Batch size for embedding operations.
             **kwargs: Additional MarieExecutor arguments.
         """
+        if table_name != 'kb_vectors':
+            raise ValueError(
+                'Managed KB indexing requires table_name=kb_vectors; other table names are not supported'
+            )
         super().__init__(**kwargs)
         self.logger = MarieLogger(self.__class__.__name__).logger
         self.logger.info(f"Initializing VectorStoreExecutor")
@@ -179,35 +201,282 @@ class VectorStoreExecutor(MarieExecutor):
         self._vector_store = None
         self._embeddings = None
         self._initialized = False
+        self._text_store = None
+        self._text_store_lock = asyncio.Lock()
 
-    async def _ensure_initialized(self) -> None:
-        """Lazily initialize vector store and embeddings."""
-        if self._initialized:
+    async def _ensure_text_store(self) -> TextIndexStore:
+        if self._text_store is None:
+            async with self._text_store_lock:
+                if self._text_store is None:
+                    from marie.kb.text import TextIndexStore
+                    from marie.storage.database.postgres_pool import (
+                        AsyncPostgresConnectionPool,
+                    )
+
+                    pool = AsyncPostgresConnectionPool()
+                    await pool.initialize_dsn(
+                        self._connection_string, min_size=1, max_size=10
+                    )
+                    self._text_store = TextIndexStore(pool)
+        return self._text_store
+
+    @requests(on='/index_text')
+    async def index_text(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any], **kwargs
+    ) -> DocList[TextDoc]:
+        store = await self._ensure_text_store()
+        scope, indexing_dag_id = item_indexing_run(parameters)
+        item = await KbItemStore(store.pool).get(scope)
+        if (
+            not item
+            or item['state'] == 'removed'
+            or str(item['indexing_dag_id']) != indexing_dag_id
+        ):
+            raise StaleIndexingRun('KB text indexing DAG changed or was removed')
+        if (item['backend'], item['store_name']) != (
+            'postgresql_text',
+            'kb_text_section',
+        ):
+            raise PermissionError('KB item belongs to another backend')
+        if parameters.get('input_ref') != item.get('input_ref'):
+            raise StaleIndexingRun('Saved content does not match the registered input')
+        if str(item['indexed_dag_id']) == indexing_dag_id:
+            return docs
+        execution = scheduler_execution(parameters)
+        canonical = item_run_parameters(item)
+        reference = item.get('input_ref')
+        input_mode = ((parameters.get('payload') or {}).get('op_params') or {}).get(
+            'input_mode'
+        )
+        if input_mode == 'saved_content' and reference is None:
+            raise ValueError(
+                'Saved content workflow requires a registered input reference'
+            )
+        if reference is None:
+            reference = {
+                'kind': 'extraction',
+                'ref_id': canonical['ref_id'],
+                'ref_type': canonical['ref_type'],
+            }
+        text, reference = await asyncio.to_thread(load_document_text, reference)
+        await store.replace(
+            scope,
+            indexing_dag_id,
+            text,
+            reference,
+            chunk_size=int(_run_param(canonical, 'chunk_size', DEFAULT_CHUNK_SIZE)),
+            chunk_overlap=int(
+                _run_param(canonical, 'chunk_overlap', DEFAULT_CHUNK_OVERLAP)
+            ),
+            **execution,
+        )
+        return docs
+
+    @requests(on='/text_search')
+    async def text_search(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any], **kwargs
+    ) -> Dict[str, Any]:
+        tenant, index = self._index_scope(parameters)
+        store = await self._ensure_text_store()
+        return {
+            'results': await store.search(
+                tenant,
+                index,
+                parameters.get('query', ''),
+                top_k=int(parameters.get('top_k', 10)),
+            )
+        }
+
+    @requests(on='/open_text')
+    async def open_text(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any], **kwargs
+    ) -> Dict[str, Any]:
+        from botocore.exceptions import ClientError
+
+        scope = self._item_scope(parameters)
+        store = await self._ensure_text_store()
+        section = await store.passage(
+            scope,
+            parameters['section_id'],
+            parameters['indexed_dag_id'],
+            parameters['source_digest'],
+        )
+        if section is None:
+            return {
+                'outcome': 'unavailable',
+                'message': 'This passage is no longer available. Run the search again.',
+            }
+        try:
+            text, _ = await asyncio.to_thread(load_document_text, section['input_ref'])
+        except (FileNotFoundError, OSError, ClientError):
+            return {
+                'outcome': 'unavailable',
+                'message': 'The saved source is unavailable.',
+            }
+        except (ValueError, UnicodeError):
+            return {
+                'outcome': 'changed',
+                'message': 'The saved source changed. Refresh the document and run the search again.',
+            }
+        current = await store.passage(
+            scope,
+            parameters['section_id'],
+            parameters['indexed_dag_id'],
+            parameters['source_digest'],
+        )
+        if current is None:
+            return {
+                'outcome': 'unavailable',
+                'message': 'This passage changed while it was opening. Run the search again.',
+            }
+        start, end = section['start_offset'], section['end_offset']
+        if text[start:end] != section['content']:
+            return {
+                'outcome': 'changed',
+                'message': 'The saved passage no longer matches the indexed text.',
+            }
+        return {
+            'outcome': 'ready',
+            'text': text[max(0, start - 300) : min(len(text), end + 300)],
+            'passage': section['content'],
+            'start_offset': start,
+            'end_offset': end,
+            'source_digest': section['source_digest'],
+        }
+
+    @requests(on='/delete_text_item')
+    async def delete_text_item(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any], **kwargs
+    ) -> Dict[str, Any]:
+        store = await self._ensure_text_store()
+        count = await store.delete_item(self._item_scope(parameters))
+        return {'cleanup_state': 'complete', 'deleted_count': count}
+
+    @requests(on='/delete_text_index')
+    async def delete_text_index(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any], **kwargs
+    ) -> Dict[str, Any]:
+        tenant, index = self._index_scope(parameters)
+        store = await self._ensure_text_store()
+        return {
+            'cleanup_state': 'complete',
+            'deleted_count': await store.delete_index(tenant, index),
+        }
+
+    async def _ensure_store(self) -> None:
+        if self._vector_store is not None:
             return
-
-        self.logger.info("Initializing vector store and embeddings...")
-
-        # Initialize embeddings
-        from marie.embeddings import setup_embeddings
-
-        self._embeddings = setup_embeddings(self._embedding_config)
-
-        # Initialize vector store
         from marie.vector_stores.pgvector import PGVectorStore
 
         self._vector_store = PGVectorStore(
             connection_string=self._connection_string,
             table_name=self._table_name,
             embedding_dim=self._embedding_dim,
+            guarded=True,
         )
         await self._vector_store.initialize()
 
+    async def _ensure_initialized(self) -> None:
+        """Lazily initialize vector store and embeddings."""
+        await self._ensure_store()
+        if self._initialized:
+            return
+        from marie.embeddings import setup_embeddings
+
+        self._embeddings = setup_embeddings(self._embedding_config)
         self._initialized = True
         self.logger.info(
             f"VectorStoreExecutor initialized: embeddings={self._embeddings.__class__.__name__}, "
             f"model={self._embedding_model}, "
             f"dim={self._embedding_dim}, table={self._table_name}"
         )
+
+    @staticmethod
+    def _index_scope(parameters: Dict[str, Any]) -> tuple[str, str]:
+        try:
+            tenant_id = UUID(parameters['tenant_id'])
+            index_id = UUID(parameters.get('index_id') or parameters['index_name'])
+            if (
+                parameters.get('index_name')
+                and UUID(parameters['index_name']) != index_id
+            ):
+                raise ValueError('Conflicting index names')
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            raise ValueError('KB tenant and index scope are required') from error
+        return str(tenant_id), str(index_id)
+
+    async def _require_index_scope(self, parameters: Dict[str, Any]) -> str:
+        await self._ensure_store()
+        if self._vector_store.guarded is not True:
+            return parameters.get('index_name', 'default')
+        tenant_id, index_id = self._index_scope(parameters)
+        row = await self._vector_store.client.fetchrow(
+            '''SELECT 1 FROM marie_scheduler.kb_item_state
+               WHERE tenant_id=$1 AND index_id=$2 AND backend='pgvector' AND store_name=$3 LIMIT 1''',
+            UUID(tenant_id),
+            UUID(index_id),
+            self._table_name,
+        )
+        if row is None:
+            raise PermissionError('KB index is not registered for this backend')
+        parameters['index_name'] = str(index_id)
+        return str(index_id)
+
+    @staticmethod
+    def _item_scope(parameters: Dict[str, Any]) -> KbItemScope:
+        try:
+            source_id, item_id = parameters['source_id'], parameters['item_id']
+            if (
+                not isinstance(source_id, str)
+                or not isinstance(item_id, str)
+                or not source_id
+                or not item_id
+            ):
+                raise ValueError('Incomplete item identity')
+            return KbItemScope(
+                *VectorStoreExecutor._index_scope(parameters),
+                source_id,
+                item_id,
+            )
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            raise ValueError('Complete KB item scope is required') from error
+
+    @requests(on='/delete_item')
+    async def delete_item(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any], **kwargs
+    ) -> Dict[str, Any]:
+        await self._ensure_store()
+        scope = self._item_scope(parameters)
+        count = await self._vector_store.delete_item(scope)
+        return {
+            'item_id': scope.item_id,
+            'state': 'removed',
+            'cleanup_state': 'complete',
+            'deleted_count': count,
+        }
+
+    @requests(on='/item_status')
+    async def item_status(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any], **kwargs
+    ) -> Dict[str, Any]:
+        self._index_scope(parameters)
+        scope = self._item_scope(parameters)
+        store = await self._ensure_text_store()
+        item = await KbItemStore(store.pool).get(scope)
+        if item is None:
+            raise ValueError('KB item is not registered')
+        return {
+            key: str(item[key]) if isinstance(item[key], UUID) else item[key]
+            for key in (
+                'item_id',
+                'state',
+                'indexing_dag_id',
+                'indexed_dag_id',
+                'record_count',
+                'cleanup_state',
+                'error',
+            )
+        }
 
     @requests(on="/embed_and_store")
     async def embed_and_store(
@@ -246,6 +515,9 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Input docs (passthrough for pipeline chaining).
         """
+        await self._ensure_store()
+        if self._vector_store.guarded is True or parameters.get('item_id'):
+            return await self._embed_current_item(docs, parameters)
         await self._ensure_initialized()
 
         source_id = parameters.get("source_id")
@@ -285,8 +557,7 @@ class VectorStoreExecutor(MarieExecutor):
             )
             if not chunks:
                 raise ValueError(
-                    f"Extraction output for ref_id={ref_id} produced no "
-                    "chunkable text"
+                    f"Extraction output for ref_id={ref_id} produced no chunkable text"
                 )
 
             multimodal = bool(_run_param(parameters, "multimodal", False))
@@ -393,8 +664,140 @@ class VectorStoreExecutor(MarieExecutor):
 
         return docs
 
+    async def _embed_current_item(
+        self, docs: DocList[TextDoc], parameters: Dict[str, Any]
+    ) -> DocList[TextDoc]:
+        scope, indexing_dag_id = item_indexing_run(parameters)
+        item = await KbItemStore(self._vector_store.client).get(scope)
+        if (
+            item is None
+            or item['state'] == 'removed'
+            or str(item['indexing_dag_id']) != indexing_dag_id
+        ):
+            raise StaleIndexingRun('KB item indexing DAG changed or was removed')
+        if (item['backend'], item['store_name']) != ('pgvector', self._table_name):
+            raise PermissionError('KB item backend does not match this executor')
+        if parameters.get('input_ref') != item.get('input_ref'):
+            raise StaleIndexingRun(
+                'Saved content reference does not match the registered input'
+            )
+        saved = (
+            document_content_reference(item['input_ref'])
+            if item.get('input_ref') is not None
+            else None
+        )
+        input_mode = ((parameters.get('payload') or {}).get('op_params') or {}).get(
+            'input_mode'
+        )
+        if input_mode == 'saved_content' and saved is None:
+            raise ValueError(
+                'The saved content workflow requires a registered input reference'
+            )
+        if str(item.get('indexed_dag_id')) == indexing_dag_id:
+            return docs
+        execution = scheduler_execution(parameters)
+        parameters = item_run_parameters(item)
+        await self._ensure_initialized()
+        if not docs:
+            raise ValueError('Complete KB item output is required')
+
+        if saved is None and any(_has_usable_text(doc) for doc in docs):
+            if not all(_has_usable_text(doc) for doc in docs):
+                raise ValueError('Incomplete text output for KB item')
+            texts = [doc.text for doc in docs]
+            embeddings = self._embeddings.embed_text(texts, is_query=False)
+            if len(embeddings) != len(texts):
+                raise RuntimeError('Incomplete embedding batch for KB item')
+            nodes = [
+                {
+                    'node_id': str(index),
+                    'content': text,
+                    'embedding': embedding.tolist(),
+                    'node_type': 'text',
+                    'metadata': {},
+                }
+                for index, (text, embedding) in enumerate(zip(texts, embeddings))
+            ]
+        else:
+            ref_id, ref_type = parameters['ref_id'], parameters['ref_type']
+            if saved and saved['kind'] == 'text':
+                text = await asyncio.to_thread(self._read_saved_text, saved)
+                pages = [(0, 0, len(text))]
+                if _run_param(parameters, 'multimodal', False):
+                    raise ValueError(
+                        'Saved text has no page images for multimodal indexing'
+                    )
+            elif saved:
+                ref_id, ref_type = saved['ref_id'], saved['ref_type']
+                text, pages = await asyncio.to_thread(
+                    self._resolve_extraction_output,
+                    ref_id,
+                    ref_type,
+                    saved.get('sha256'),
+                )
+            else:
+                text, pages = await asyncio.to_thread(
+                    self._resolve_extraction_output, ref_id, ref_type
+                )
+            chunks = chunk_text(
+                text,
+                chunk_size=int(
+                    _run_param(parameters, 'chunk_size', DEFAULT_CHUNK_SIZE)
+                ),
+                chunk_overlap=int(
+                    _run_param(parameters, 'chunk_overlap', DEFAULT_CHUNK_OVERLAP)
+                ),
+            )
+            if not chunks:
+                raise ValueError('KB item extraction produced no usable text')
+            nodes = await self._prepare_text_nodes(chunks, pages, ref_id)
+            if _run_param(parameters, 'multimodal', False):
+                if not self._embeddings.supports_image_embeddings:
+                    raise ValueError('Multimodal indexing requires image embeddings')
+                images = await asyncio.to_thread(
+                    self._resolve_page_image_uris,
+                    ref_id,
+                    ref_type,
+                    *((saved.get('sha256'),) if saved else ()),
+                )
+                if len(images) != len(pages):
+                    raise ValueError(
+                        'Complete page images are required for multimodal KB output'
+                    )
+                nodes.extend(
+                    await self._prepare_image_nodes(images, text, pages, ref_id)
+                )
+
+        digest = hashlib.sha256(
+            json.dumps(
+                [
+                    {
+                        'content': node['content'],
+                        'node_type': node['node_type'],
+                        'metadata': node['metadata'],
+                    }
+                    for node in nodes
+                ],
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        for node in nodes:
+            node['metadata'].update(
+                artifact_digest=digest,
+                artifact_ref=(saved.get('ref_id') or saved.get('uri'))
+                if saved
+                else parameters['ref_id'],
+                source_uri=item['uri'],
+                owner_type=item['owner_type'],
+                owner_id=item['owner_id'],
+            )
+        await self._vector_store.replace_item_nodes(
+            scope, indexing_dag_id, nodes, content_digest=digest, **execution
+        )
+        return docs
+
     def _resolve_extraction_output(
-        self, ref_id: str, ref_type: str
+        self, ref_id: str, ref_type: str, expected_digest: str | None = None
     ) -> Tuple[str, List[Tuple[int, int, int]]]:
         """Read the extraction output TextExtractionExecutor persisted for
         ref_id/ref_type and flatten it to plain text with page offsets.
@@ -411,7 +814,9 @@ class VectorStoreExecutor(MarieExecutor):
         f"{ref_id}.meta.json", which mis-resolves when ref_id is a
         slash-containing S3 key, as it is for KB documents).
         """
-        metadata, uri = self._read_extraction_metadata(ref_id, ref_type)
+        metadata, uri = self._read_extraction_metadata(
+            ref_id, ref_type, expected_digest
+        )
 
         ocr_results = metadata.get("ocr")
         if not ocr_results:
@@ -424,7 +829,7 @@ class VectorStoreExecutor(MarieExecutor):
 
     @staticmethod
     def _read_extraction_metadata(
-        ref_id: str, ref_type: str
+        ref_id: str, ref_type: str, expected_digest: str | None = None
     ) -> Tuple[Dict[str, Any], str]:
         filename, _, _ = split_filename(ref_id)
         uri = f"{s3_asset_path(ref_id, ref_type)}/{filename}.meta.json"
@@ -443,6 +848,14 @@ class VectorStoreExecutor(MarieExecutor):
             )
 
         raw = StorageManager.read(uri)
+        payload = raw.encode('utf-8') if isinstance(raw, str) else raw
+        if (
+            expected_digest is not None
+            and hashlib.sha256(payload).hexdigest() != expected_digest
+        ):
+            raise ValueError(
+                'Saved extraction content changed after the upstream workflow completed'
+            )
         try:
             return json.loads(raw), uri
         except json.JSONDecodeError as e:
@@ -450,8 +863,12 @@ class VectorStoreExecutor(MarieExecutor):
                 f"Extraction output at {uri} is not valid JSON: {e}"
             ) from e
 
-    def _resolve_page_image_uris(self, ref_id: str, ref_type: str) -> List[str]:
-        metadata, uri = self._read_extraction_metadata(ref_id, ref_type)
+    def _resolve_page_image_uris(
+        self, ref_id: str, ref_type: str, expected_digest: str | None = None
+    ) -> List[str]:
+        metadata, uri = self._read_extraction_metadata(
+            ref_id, ref_type, expected_digest
+        )
         asset_root = f"{s3_asset_path(ref_id, ref_type).rstrip('/')}/"
         assets = metadata.get("assets") or []
 
@@ -475,6 +892,16 @@ class VectorStoreExecutor(MarieExecutor):
         return page_images
 
     @staticmethod
+    def _read_saved_text(reference: Dict[str, Any]) -> str:
+        raw = StorageManager.read(reference['uri'])
+        payload = raw.encode('utf-8') if isinstance(raw, str) else raw
+        if len(payload) > 32 * 1024 * 1024:
+            raise ValueError('Saved text exceeds the supported artifact size')
+        if hashlib.sha256(payload).hexdigest() != reference['sha256']:
+            raise ValueError('Saved text content changed after capture')
+        return payload.decode('utf-8')
+
+    @staticmethod
     def _flatten_ocr_pages(
         ocr_results: List[Dict[str, Any]],
     ) -> Tuple[str, List[Tuple[int, int, int]]]:
@@ -482,20 +909,7 @@ class VectorStoreExecutor(MarieExecutor):
         TextExtractionExecutor.persist() uses for asset tracking) and return
         (full_text, page_ranges), where page_ranges holds
         (page_index, start, end) character offsets into full_text."""
-        parts: List[str] = []
-        page_ranges: List[Tuple[int, int, int]] = []
-        cursor = 0
-        for page_idx, page_result in enumerate(ocr_results):
-            lines = page_result.get("lines") or []
-            page_text = "\n".join(line["text"] for line in lines if "text" in line)
-            if parts:
-                parts.append("\n")
-                cursor += 1
-            start = cursor
-            parts.append(page_text)
-            cursor += len(page_text)
-            page_ranges.append((page_idx, start, cursor))
-        return "".join(parts), page_ranges
+        return flatten_ocr_pages(ocr_results)
 
     @staticmethod
     def _page_for_offset(
@@ -515,8 +929,19 @@ class VectorStoreExecutor(MarieExecutor):
         source_id: str,
         index_name: str,
     ) -> int:
-        """Embed chunk texts and batch-insert them as text nodes, ref'd to
-        the source document (ref_doc_id = ref_id)."""
+        nodes = await self._prepare_text_nodes(chunks, page_ranges, ref_id)
+        return await self._vector_store.add_nodes_batch(
+            nodes=nodes,
+            source_id=source_id,
+            index_name=index_name,
+        )
+
+    async def _prepare_text_nodes(
+        self,
+        chunks: List[TextChunk],
+        page_ranges: List[Tuple[int, int, int]],
+        ref_id: str,
+    ) -> List[Dict[str, Any]]:
         texts = [c.text for c in chunks]
         embeddings = self._embeddings.embed_text(texts, is_query=False)
         if len(embeddings) != len(texts):
@@ -527,7 +952,11 @@ class VectorStoreExecutor(MarieExecutor):
 
         nodes = []
         for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            metadata: Dict[str, Any] = {"chunk_index": idx}
+            metadata: Dict[str, Any] = {
+                "chunk_index": idx,
+                'start': chunk.start,
+                'end': chunk.end,
+            }
             page = self._page_for_offset(page_ranges, chunk.start)
             if page is not None:
                 metadata["page"] = page
@@ -543,11 +972,7 @@ class VectorStoreExecutor(MarieExecutor):
                 }
             )
 
-        return await self._vector_store.add_nodes_batch(
-            nodes=nodes,
-            source_id=source_id,
-            index_name=index_name,
-        )
+        return nodes
 
     async def _embed_and_store_images(
         self,
@@ -558,10 +983,26 @@ class VectorStoreExecutor(MarieExecutor):
         source_id: str,
         index_name: str,
     ) -> int:
+        nodes = await self._prepare_image_nodes(
+            image_uris, full_text, page_ranges, ref_id
+        )
+        return await self._vector_store.add_nodes_batch(
+            nodes=nodes,
+            source_id=source_id,
+            index_name=index_name,
+        )
+
+    async def _prepare_image_nodes(
+        self,
+        image_uris: List[str],
+        full_text: str,
+        page_ranges: List[Tuple[int, int, int]],
+        ref_id: str,
+    ) -> List[Dict[str, Any]]:
         page_text = {
             page: full_text[start:end].strip() for page, start, end in page_ranges
         }
-        stored_count = 0
+        prepared = []
 
         for batch_start in range(0, len(image_uris), self._batch_size):
             batch_uris = image_uris[batch_start : batch_start + self._batch_size]
@@ -603,18 +1044,20 @@ class VectorStoreExecutor(MarieExecutor):
                             "metadata": {
                                 "page": page,
                                 "image_url": image_uri,
+                                'image_digest': self._file_digest(local_paths[offset]),
                             },
                             "ref_doc_id": ref_id,
                         }
                     )
 
-                stored_count += await self._vector_store.add_nodes_batch(
-                    nodes=nodes,
-                    source_id=source_id,
-                    index_name=index_name,
-                )
+                prepared.extend(nodes)
 
-        return stored_count
+        return prepared
+
+    @staticmethod
+    def _file_digest(path: str) -> str:
+        with open(path, 'rb') as stream:
+            return hashlib.file_digest(stream, 'sha256').hexdigest()
 
     async def _update_submission_status(
         self,
@@ -702,6 +1145,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             DocList of matching documents with similarity scores in metadata.
         """
+        await self._require_index_scope(parameters)
         await self._ensure_initialized()
 
         # Get query
@@ -805,6 +1249,7 @@ class VectorStoreExecutor(MarieExecutor):
                 - results: List of result dictionaries
                 - citations: List of SourceCitation objects
         """
+        await self._require_index_scope(parameters)
         await self._ensure_initialized()
 
         # Get query
@@ -875,6 +1320,21 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with deleted count.
         """
+        await self._ensure_store()
+        if self._vector_store.guarded is True:
+            tenant_id, index_id = self._index_scope(parameters)
+            source_id = parameters.get('source_id')
+            if not source_id:
+                raise ValueError('source_id is required')
+            count = await self._vector_store.delete_scope(
+                tenant_id, index_id, source_id
+            )
+            return {
+                'deleted_count': count,
+                'source_id': source_id,
+                'index_name': index_id,
+                'cleanup_state': 'complete',
+            }
         await self._ensure_initialized()
 
         source_id = parameters.get("source_id")
@@ -912,7 +1372,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with node counts by type.
         """
-        await self._ensure_initialized()
+        await self._require_index_scope(parameters)
 
         source_id = parameters.get("source_id")
         if not source_id:
@@ -941,7 +1401,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with node counts by type and source.
         """
-        await self._ensure_initialized()
+        await self._require_index_scope(parameters)
 
         index_name = parameters.get("index_name")
         if not index_name:
@@ -968,6 +1428,15 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with deleted count.
         """
+        await self._ensure_store()
+        if self._vector_store.guarded is True:
+            tenant_id, index_id = self._index_scope(parameters)
+            count = await self._vector_store.delete_scope(tenant_id, index_id)
+            return {
+                'deleted_count': count,
+                'index_name': index_id,
+                'cleanup_state': 'complete',
+            }
         await self._ensure_initialized()
 
         index_name = parameters.get("index_name")
@@ -1007,6 +1476,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             DocList of matching documents with combined scores.
         """
+        await self._require_index_scope(parameters)
         await self._ensure_initialized()
 
         query = parameters.get("query")
@@ -1081,6 +1551,17 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with ingestion count.
         """
+        await self._ensure_store()
+        if self._vector_store.guarded is True or parameters.get('item_id'):
+            texts = parameters.get('texts') or []
+            await self._embed_current_item(
+                DocList[TextDoc]([TextDoc(text=text) for text in texts]), parameters
+            )
+            return {
+                'count': len(texts),
+                'source_id': parameters['source_id'],
+                'index_name': parameters['index_id'],
+            }
         await self._ensure_initialized()
 
         source_id = parameters.get("source_id")
@@ -1149,7 +1630,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             DocList of matching nodes.
         """
-        await self._ensure_initialized()
+        await self._require_index_scope(parameters)
 
         node_ids = parameters.get("node_ids", [])
         if not node_ids:
@@ -1189,7 +1670,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with deletion status.
         """
-        await self._ensure_initialized()
+        await self._require_index_scope(parameters)
 
         node_ids = parameters.get("node_ids", [])
         if not node_ids:
@@ -1220,7 +1701,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with node count.
         """
-        await self._ensure_initialized()
+        await self._require_index_scope(parameters)
 
         index_name = parameters.get("index_name")
         source_id = parameters.get("source_id")
@@ -1258,6 +1739,13 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             Dictionary with status.
         """
+        await self._ensure_store()
+        if self._vector_store.guarded is True:
+            tenant_id, index_id = self._index_scope(parameters)
+            if parameters.get('confirm') is not True:
+                raise ValueError('Set confirm=True to clear this index')
+            count = await self._vector_store.delete_scope(tenant_id, index_id)
+            return {'cleared': True, 'index_name': index_id, 'deleted_count': count}
         await self._ensure_initialized()
 
         confirm = parameters.get("confirm", False)
@@ -1273,4 +1761,6 @@ class VectorStoreExecutor(MarieExecutor):
         """Close executor resources."""
         if self._vector_store:
             await self._vector_store.close()
+        if self._text_store:
+            await self._text_store.pool.close()
         self.logger.info("VectorStoreExecutor closed")

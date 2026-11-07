@@ -24,8 +24,9 @@ class _FakeConnectionPool:
         self.pool = _FakePool()
         self.__class__.instances.append(self)
 
-    async def initialize(self, config):
+    async def initialize(self, config, *, autocommit=False):
         self.config = config
+        self.autocommit = autocommit
 
     async def close(self):
         await self.pool.close()
@@ -95,6 +96,7 @@ def test_init_sensor_storage_wires_pool_and_schema(monkeypatch):
     assert len(_FakeConnectionPool.instances) == 1
     call = _FakeConnectionPool.instances[0].config
     assert call == db_config
+    assert _FakeConnectionPool.instances[0].autocommit is True
 
     fake_pool = _FakeConnectionPool.instances[0]
     assert initialize_calls == [(fake_pool, "marie_scheduler")]
@@ -170,7 +172,7 @@ def test_init_sensor_storage_logs_and_swallows_errors(monkeypatch, caplog):
     server_runtime._sensor_worker = fake_worker
 
     class _FailingPool(_FakeConnectionPool):
-        async def initialize(self, config):
+        async def initialize(self, config, *, autocommit=False):
             raise RuntimeError("connection refused")
 
     monkeypatch.setattr(
@@ -217,6 +219,13 @@ class _FakeGatewayScheduler:
 
     def __init__(self):
         self.executed_on_loop = None
+
+    async def submit_sensor_job(self, work_info):
+        return await self.submit_job(work_info)
+
+    async def get_sensor_job_state(self, *args):
+        self.executed_on_loop = asyncio.get_running_loop()
+        return "created"
 
     async def submit_job(self, work_info):
         self.executed_on_loop = asyncio.get_running_loop()
@@ -286,6 +295,19 @@ def test_attach_sensor_worker_scheduler_bridges_two_real_loops():
             adapter.submit_job("work-1"), worker_loop
         ).result(timeout=5)
 
+        assert (
+            asyncio.run_coroutine_threadsafe(
+                adapter.submit_sensor_job("work-2"), worker_loop
+            ).result(timeout=5)
+            == "job-for-work-2"
+        )
+        assert (
+            asyncio.run_coroutine_threadsafe(
+                adapter.get_sensor_job_state("job", "sensor", "key", "queue"),
+                worker_loop,
+            ).result(timeout=5)
+            == "created"
+        )
         assert result == "job-for-work-1"
         assert fake_scheduler.executed_on_loop is gateway_loop
     finally:

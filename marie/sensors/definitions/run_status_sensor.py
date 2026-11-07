@@ -5,6 +5,7 @@ Run status sensors monitor job completion and trigger follow-up jobs
 based on the completion status of monitored jobs.
 """
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
@@ -13,6 +14,26 @@ from marie.sensors.definitions.base import BaseSensor
 from marie.sensors.exceptions import SensorConfigError
 from marie.sensors.registry import register_sensor
 from marie.sensors.types import RunRequest, SensorResult, SensorType
+
+
+def normalize_run_status_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(config)
+    aliases = {
+        'monitored_job_names': ('watchJobNames', 'watch_job_names'),
+        'monitored_dag_ids': ('watchDagIds', 'watch_dag_ids'),
+        'status_types': ('triggerOnStatuses', 'trigger_on_statuses'),
+        'pipeline_mode': ('pipelineMode',),
+        'target_planner': ('targetPlanner',),
+        'run_config': ('runConfig',),
+    }
+    for canonical, alternatives in aliases.items():
+        for alias in alternatives:
+            if alias in normalized:
+                value = normalized.pop(alias)
+                if canonical in normalized and normalized[canonical] != value:
+                    raise SensorConfigError(f'Conflicting {canonical} configuration')
+                normalized[canonical] = value
+    return normalized
 
 
 @register_sensor(SensorType.RUN_STATUS)
@@ -62,6 +83,7 @@ class RunStatusSensor(BaseSensor):
 
     def __init__(self, sensor_data: Dict[str, Any]):
         super().__init__(sensor_data)
+        self.config = normalize_run_status_config(self.config)
         self.monitored_job_names: List[str] = self.get_config_value(
             "monitored_job_names", []
         )
@@ -74,6 +96,8 @@ class RunStatusSensor(BaseSensor):
         self.require_all: bool = self.get_config_value("require_all", False)
         self.pipeline_mode: bool = self.get_config_value("pipeline_mode", False)
         self.include_output: bool = self.get_config_value("include_output", True)
+        self.target_planner = self.get_config_value('target_planner')
+        self.source_scope = self.get_config_value('source_scope', {})
 
         # Normalize status types
         self.normalized_statuses: Set[str] = {
@@ -117,6 +141,8 @@ class RunStatusSensor(BaseSensor):
         matching = []
 
         for job in jobs:
+            if not self._matches_scope(job):
+                continue
             # Check status
             job_status = job.get("state") or job.get("status")
             normalized_status = self.STATUS_MAPPING.get(job_status, job_status)
@@ -142,6 +168,20 @@ class RunStatusSensor(BaseSensor):
             matching.append(job)
 
         return matching
+
+    def _matches_scope(self, job: Dict[str, Any]) -> bool:
+        metadata = (job.get('data') or {}).get('metadata') or {}
+        projects = self.source_scope.get('project_ids')
+        project = metadata.get('project_id') or job.get('project_id')
+        if projects is not None and project not in projects:
+            return False
+        for key in ('organization_id', 'workspace_id', 'fabric_group_id'):
+            expected = self.source_scope.get(key)
+            actual = metadata.get(key)
+            if expected and actual != expected:
+                if key == 'fabric_group_id' or actual is not None or projects is None:
+                    return False
+        return True
 
     def _matches_pattern(self, name: str, pattern: str) -> bool:
         """
@@ -170,14 +210,57 @@ class RunStatusSensor(BaseSensor):
             job_name = job.get("name", "unknown")
             job_status = job.get("state") or job.get("status")
 
-            run_key = self.build_run_key("run_status", self.sensor_id, job_id)
+            completion_id = job.get('completion_id') or job_id
+            run_key = self.build_run_key("run_status", self.sensor_id, completion_id)
 
-            run_config = {
-                "trigger_job_id": job_id,
-                "trigger_job_name": job_name,
-                "trigger_job_status": job_status,
-                "trigger_dag_id": job.get("dag_id"),
-            }
+            run_config = {}
+            if self.pipeline_mode:
+                source = deepcopy((job.get('data') or {}).get('metadata') or {})
+                for key in (
+                    'planner',
+                    'on',
+                    'op_params',
+                    'job_id',
+                    'dag_id',
+                    'node_task_id',
+                    'run_owner',
+                    'run_attempt_id',
+                ):
+                    source.pop(key, None)
+                run_config.update(source)
+                run_config['upstream'] = {
+                    'dag_id': job.get('dag_id') or job_id,
+                    'completion_id': str(completion_id),
+                    'metadata': deepcopy((job.get('data') or {}).get('metadata') or {}),
+                    'output': deepcopy(job.get('output')),
+                    'outputs': deepcopy(job.get('outputs', [])),
+                }
+            overrides = deepcopy(self.get_config_value('run_config', {}))
+            for key in (
+                'project_id',
+                'tenant_id',
+                'organization_id',
+                'workspace_id',
+                'fabric_group_id',
+            ):
+                if (
+                    key in overrides
+                    and key in run_config
+                    and overrides[key] != run_config[key]
+                ):
+                    raise SensorConfigError(
+                        f'Pipeline cannot override source scope: {key}'
+                    )
+            run_config.update(overrides)
+            run_config.update(
+                {
+                    "trigger_job_id": job_id,
+                    "trigger_job_name": job_name,
+                    "trigger_job_status": job_status,
+                    "trigger_dag_id": job.get("dag_id"),
+                }
+            )
+            run_config['planner'] = self.target_planner or self.target_job_name
 
             # Include job output if configured
             if self.include_output:
@@ -306,6 +389,10 @@ class RunStatusSensor(BaseSensor):
             raise SensorConfigError(
                 "Run status sensor requires either 'monitored_job_names' "
                 "or 'monitored_dag_ids' configuration"
+            )
+        if self.require_all:
+            raise SensorConfigError(
+                'Run Status workflow fan-in requires an explicit correlation contract'
             )
 
         valid_statuses = set(self.STATUS_MAPPING.keys())

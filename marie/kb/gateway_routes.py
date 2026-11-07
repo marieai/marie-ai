@@ -38,12 +38,32 @@ _logger = MarieLogger('marie.kb.gateway_routes').logger
 
 #: action name → (executor endpoint, required body fields)
 _KB_ACTIONS: Dict[str, tuple[str, tuple[str, ...]]] = {
-    "search": ("/search", ("query",)),
-    "hybrid_search": ("/hybrid_search", ("query",)),
-    "index_stats": ("/index_stats", ("index_name",)),
-    "source_stats": ("/source_stats", ("source_id",)),
-    "delete_source": ("/delete_source", ("source_id",)),
-    "delete_index": ("/delete_index", ("index_name",)),
+    "search": ("/search", ("query", "tenant_id", "index_name")),
+    "hybrid_search": ("/hybrid_search", ("query", "tenant_id", "index_name")),
+    "index_stats": ("/index_stats", ("index_name", "tenant_id")),
+    "source_stats": ("/source_stats", ("source_id", "index_name", "tenant_id")),
+    "delete_source": ("/delete_source", ("source_id", "index_name", "tenant_id")),
+    "delete_index": ("/delete_index", ("index_name", "tenant_id")),
+    'delete_item': ('/delete_item', ('tenant_id', 'index_id', 'source_id', 'item_id')),
+    'item_status': ('/item_status', ('tenant_id', 'index_id', 'source_id', 'item_id')),
+    'text_search': ('/text_search', ('tenant_id', 'index_name', 'query')),
+    'open_text': (
+        '/open_text',
+        (
+            'tenant_id',
+            'index_id',
+            'source_id',
+            'item_id',
+            'section_id',
+            'indexed_dag_id',
+            'source_digest',
+        ),
+    ),
+    'delete_text_item': (
+        '/delete_text_item',
+        ('tenant_id', 'index_id', 'source_id', 'item_id'),
+    ),
+    'delete_text_index': ('/delete_text_index', ('tenant_id', 'index_name')),
 }
 
 
@@ -85,8 +105,7 @@ def register_kb_routes(
         _logger.info(f"KB gateway routes configured (executor={executor})")
     else:
         _logger.warning(
-            "KB gateway routes not configured "
-            "(missing 'kb.executor' in gateway config)"
+            "KB gateway routes not configured (missing 'kb.executor' in gateway config)"
         )
 
     def _error(message: str, status_code: int = 400) -> JSONResponse:
@@ -99,8 +118,7 @@ def register_kb_routes(
         """Validate *body* and forward the action to the KB executor."""
         if not executor:
             return _error(
-                "kb service not configured "
-                "(missing 'kb.executor' in gateway config)",
+                "kb service not configured (missing 'kb.executor' in gateway config)",
                 status_code=503,
             )
 
@@ -154,8 +172,8 @@ def register_kb_routes(
             tags=['KB'],
             dependencies=[Depends(TokenBearer())],
         )
-        async def kb_route(request: Request, _action: str = action):
-            return await _forward(_action, await _body(request))
+        async def kb_route(request: Request):
+            return await _forward(action, await _body(request))
 
     _mount("search", "Semantic search over a knowledge base index")
     _mount(
@@ -166,3 +184,12 @@ def register_kb_routes(
     _mount("source_stats", "Statistics for a knowledge base source")
     _mount("delete_source", "Delete all vectors for a knowledge base source")
     _mount("delete_index", "Delete all vectors for a knowledge base index")
+    _mount(
+        'delete_item',
+        'Withdraw one registered item and clean up its owned indexed output',
+    )
+    _mount('item_status', 'Read registered item and cleanup state')
+    _mount('text_search', 'Full-text search over current registered text')
+    _mount('open_text', 'Open a digest-checked current saved passage')
+    _mount('delete_text_item', 'Withdraw one item and clean up its indexed text')
+    _mount('delete_text_index', 'Withdraw an index and clean up its indexed text')

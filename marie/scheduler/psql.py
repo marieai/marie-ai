@@ -2224,6 +2224,28 @@ class PostgreSQLJobScheduler(JobScheduler):
         """Persist a DAG before acknowledging its submission."""
         return await self.submission_service.submit(work_info, overwrite)
 
+    async def get_sensor_job_state(
+        self, dag_id: str, sensor_id: str, run_key: str | None, queue: str | None
+    ) -> str | None:
+        return await self.repository.get_sensor_job_state(
+            dag_id, sensor_id, run_key, queue
+        )
+
+    async def submit_sensor_job(self, work_info: WorkInfo) -> str:
+        """Admit or reconcile a stable sensor occurrence after an interrupted receipt."""
+        sensor_id = work_info.data.get('sensor_id')
+        if not sensor_id:
+            raise ValueError('Sensor identity is required')
+        args = (work_info.id, sensor_id, work_info.data.get('run_key'), work_info.name)
+        if await self.repository.get_sensor_job_state(*args) is not None:
+            return work_info.id
+        try:
+            return await self.submit_job(work_info)
+        except ValueError:
+            if await self.repository.get_sensor_job_state(*args) is not None:
+                return work_info.id
+            raise
+
     async def _handle_priority_refresh(self, submission_count: int) -> None:
         if not self.priority_refresh_enabled:
             return

@@ -6,6 +6,9 @@ and follows the patterns established in the scheduler repository.
 """
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -36,6 +39,172 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         """
         self._pool = pool
         self._schema = schema
+        self._locked_connection: ContextVar[Any] = ContextVar(
+            "sensor_connection", default=None
+        )
+
+    @asynccontextmanager
+    async def _connection(self) -> AsyncIterator[Any]:
+        connection = self._locked_connection.get()
+        if connection is not None:
+            yield connection
+        else:
+            async with self._pool.acquire() as connection:
+                yield connection
+
+    async def fetchrow(self, query: str, *args: Any) -> Any:
+        """Run a sensor resource lookup on the evaluation's existing connection."""
+        async with self._connection() as connection:
+            return await connection.fetchrow(query, *args)
+
+    async def fetch(self, query: str, *args: Any) -> list[Any]:
+        """Read registered work on the evaluation's existing connection."""
+        async with self._connection() as connection:
+            return await connection.fetch(query, *args)
+
+    @asynccontextmanager
+    async def sensor_lock(self, sensor_id: str) -> AsyncIterator[bool]:
+        """Serialize evaluation/recovery across workers without waiting on another worker."""
+        async with self._pool.acquire() as connection:
+            key = str(UUID(sensor_id))
+            locked = await connection.fetchval(
+                "SELECT pg_try_advisory_lock(hashtextextended($1, 72010))", key
+            )
+            if not locked:
+                yield False
+                return
+            token = self._locked_connection.set(connection)
+            try:
+                yield True
+            finally:
+                self._locked_connection.reset(token)
+                await connection.execute(
+                    "SELECT pg_advisory_unlock(hashtextextended($1, 72010))", key
+                )
+
+    async def get_pending_tick(self, sensor_id: str) -> dict[str, Any] | None:
+        async with self._connection() as conn:
+            row = await conn.fetchrow(
+                f"""SELECT * FROM {self._schema}.sensor_tick
+                    WHERE sensor_id=$1 AND status IN ('started', 'failed')
+                        AND run_requests IS NOT NULL
+                        AND started_at > COALESCE((
+                            SELECT max(started_at) FROM {self._schema}.sensor_tick
+                            WHERE sensor_id=$1 AND status IN ('success', 'skipped')
+                        ), '-infinity'::timestamptz)
+                    ORDER BY started_at DESC LIMIT 1""",
+                UUID(sensor_id),
+            )
+            return self._row_to_dict(row)
+
+    async def get_run_key_job(self, sensor_id: str, run_key: str) -> str | None:
+        async with self._connection() as conn:
+            job = await conn.fetchval(
+                f"SELECT job_id FROM {self._schema}.sensor_run_key WHERE sensor_id=$1 AND run_key=$2",
+                UUID(sensor_id),
+                run_key,
+            )
+            return str(job) if job else None
+
+    async def get_completed_workflows(
+        self, sensor: Dict[str, Any], *, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Read unacknowledged terminal DAG occurrences, including late commits."""
+        from marie.constants import KV_NAMESPACE_JOB
+        from marie.job.common import JOB_INFO_KEY_PREFIX
+        from marie.sensors.definitions.run_status_sensor import RunStatusSensor
+
+        if not 1 <= limit <= 1000:
+            raise ValueError('Workflow completion limit must be between 1 and 1000')
+        evaluator = RunStatusSensor(sensor)
+        evaluator.validate_config()
+        patterns = [
+            pattern.replace('\\', '\\\\')
+            .replace('%', r'\%')
+            .replace('_', r'\_')
+            .replace('*', '%')
+            for pattern in evaluator.monitored_job_names
+        ]
+        scope = evaluator.source_scope
+        kb_handoff = sensor.get('config', {}).get('subtype') == 'kb_workflow'
+        destinations = (
+            f"""
+            AND EXISTS (
+                SELECT 1 FROM {self._schema}.kb_item_state item
+                WHERE item.input_ref->>'kind'='upstream' AND item.input_ref->>'dag_id'=t.id::text
+                  AND item.state <> 'removed' AND (
+                    item.input_ref->>'completion_id' IS DISTINCT FROM t.history_id::text OR
+                    (item.state='pending' AND item.admitted_at IS NULL))
+            )
+        """
+            if kb_handoff
+            else ''
+        )
+        async with self._connection() as connection:
+            rows = await connection.fetch(
+                f"""
+                WITH terminal AS (
+                    SELECT DISTINCT ON (h.id, h.completed_on, h.state) h.*
+                    FROM {self._schema}.dag_history h
+                    JOIN {self._schema}.dag d ON d.id=h.id AND d.state=h.state
+                        AND d.completed_on=h.completed_on
+                    WHERE h.state=ANY($2::text[]) AND h.completed_on IS NOT NULL
+                        AND h.history_created_on >= COALESCE($3::timestamptz, '-infinity')
+                        AND ($4::text[] IS NULL OR h.project_id=ANY($4))
+                        AND (cardinality($5::text[])=0 OR COALESCE(h.planner,h.submission_name,h.name) LIKE ANY($5))
+                        AND (cardinality($6::uuid[])=0 OR h.id=ANY($6))
+                    ORDER BY h.id,h.completed_on,h.state,h.history_id
+                )
+                SELECT t.id,t.id AS dag_id,t.history_id::text AS completion_id,
+                    COALESCE(t.planner,t.submission_name,t.name) AS name,
+                    t.state,t.project_id,t.completed_on AS completed_at,
+                    root.data,COALESCE(result.outputs->0->'output','{{}}'::jsonb) AS output,
+                    COALESCE(result.outputs,'[]'::jsonb) AS outputs
+                FROM terminal t
+                JOIN LATERAL (
+                    SELECT j.data FROM {self._schema}.job j WHERE j.dag_id=t.id
+                    ORDER BY j.job_level,j.id LIMIT 1
+                ) root ON TRUE
+                LEFT JOIN LATERAL (
+                    SELECT jsonb_agg(jsonb_build_object(
+                        'node_id',j.id,'endpoint',j.data->'metadata'->>'on',
+                        'output',COALESCE((kv.value->>'runtime_env_json')::jsonb->'output',j.output)
+                    ) ORDER BY j.job_level DESC,j.id) AS outputs
+                    FROM {self._schema}.job j
+                    LEFT JOIN {self._schema}.kv_store_worker kv
+                        ON kv.namespace=$11 AND kv.key=$12 || j.id::text AND NOT kv.is_deleted
+                        AND kv.value->>'run_attempt_id'=j.run_attempt_id::text
+                    WHERE j.dag_id=t.id
+                        AND left(COALESCE(j.data->'metadata'->>'on',''),4) <> 'noop'
+                        AND COALESCE((kv.value->>'runtime_env_json')::jsonb->'output',j.output) IS NOT NULL
+                ) result ON TRUE
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM {self._schema}.sensor_run_key r
+                    WHERE r.sensor_id=$1 AND r.run_key='run_status:' || $1::text || ':' || t.history_id::text
+                )
+                    AND root.data->>'sensor_id' IS DISTINCT FROM $1::text
+                    AND ($7::text IS NULL OR root.data->'metadata'->>'organization_id'=$7
+                        OR (root.data->'metadata'->>'organization_id' IS NULL AND $4::text[] IS NOT NULL))
+                    AND ($8::text IS NULL OR root.data->'metadata'->>'workspace_id'=$8
+                        OR (root.data->'metadata'->>'workspace_id' IS NULL AND $4::text[] IS NOT NULL))
+                    AND ($9::text IS NULL OR root.data->'metadata'->>'fabric_group_id'=$9)
+                    {destinations}
+                ORDER BY t.history_id LIMIT $10
+                """,
+                UUID(sensor['id']),
+                sorted(evaluator.normalized_statuses),
+                None if kb_handoff else sensor.get('created_at'),
+                scope.get('project_ids'),
+                patterns,
+                [UUID(value) for value in evaluator.monitored_dag_ids],
+                scope.get('organization_id'),
+                scope.get('workspace_id'),
+                scope.get('fabric_group_id'),
+                limit,
+                KV_NAMESPACE_JOB.decode(),
+                JOB_INFO_KEY_PREFIX,
+            )
+        return [self._row_to_dict(row) for row in rows]
 
     @property
     def pool(self) -> Any:
@@ -70,7 +239,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def get_sensor(self, sensor_id: str) -> Optional[Dict[str, Any]]:
         """Get a sensor by its internal ID."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             row = await conn.fetchrow(
                 f"""
                 SELECT * FROM {self._schema}.sensor
@@ -84,7 +253,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         self, external_id: str
     ) -> Optional[Dict[str, Any]]:
         """Get a sensor by its external ID."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             row = await conn.fetchrow(
                 f"""
                 SELECT * FROM {self._schema}.sensor
@@ -96,7 +265,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def get_active_sensors(self) -> List[Dict[str, Any]]:
         """Get all active sensors for daemon evaluation."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT * FROM {self._schema}.sensor
@@ -110,7 +279,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         self, sensor_type: SensorType
     ) -> List[Dict[str, Any]]:
         """Get active sensors of a specific type."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT * FROM {self._schema}.sensor
@@ -123,7 +292,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def create_sensor(self, sensor_data: Dict[str, Any]) -> str:
         """Create a new sensor."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             sensor_id = await conn.fetchval(
                 f"""
                 INSERT INTO {self._schema}.sensor (
@@ -131,8 +300,8 @@ class PostgreSQLSensorStorage(SensorStateStorage):
                     target_job_name, target_dag_id, status,
                     minimum_interval_seconds
                 )
-                VALUES ($1, $2, $3::marie_scheduler.sensor_type, $4, $5, $6,
-                        $7::marie_scheduler.sensor_status, $8)
+                VALUES ($1, $2, $3::marie_scheduler.trigger_type, $4, $5, $6,
+                        $7::marie_scheduler.trigger_status, $8)
                 RETURNING id
                 """,
                 UUID(sensor_data["external_id"]),
@@ -156,6 +325,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         """Update a sensor's configuration."""
         # Build dynamic update query
         set_clauses = []
+        reset_conditions = []
         values = []
         param_idx = 1
 
@@ -166,14 +336,22 @@ class PostgreSQLSensorStorage(SensorStateStorage):
                 "target_job_name",
                 "minimum_interval_seconds",
             ):
+                if key == 'target_job_name':
+                    reset_conditions.append(
+                        f"target_job_name IS DISTINCT FROM ${param_idx}::text"
+                    )
                 set_clauses.append(f"{key} = ${param_idx}")
                 values.append(value)
                 param_idx += 1
             elif key == "config":
+                reset_conditions.append(f"config IS DISTINCT FROM ${param_idx}::jsonb")
                 set_clauses.append(f"config = ${param_idx}")
                 values.append(json.dumps(value))
                 param_idx += 1
             elif key == "target_dag_id":
+                reset_conditions.append(
+                    f"target_dag_id IS DISTINCT FROM ${param_idx}::uuid"
+                )
                 set_clauses.append(f"target_dag_id = ${param_idx}")
                 values.append(UUID(value) if value else None)
                 param_idx += 1
@@ -181,10 +359,16 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         if not set_clauses:
             return await self.get_sensor(sensor_id)
 
+        if reset_conditions:
+            set_clauses.append(
+                "cursor = CASE WHEN sensor_type='schedule' AND ("
+                + ' OR '.join(reset_conditions)
+                + ") THEN NOW()::text ELSE cursor END"
+            )
         set_clauses.append("updated_at = NOW()")
         values.append(UUID(sensor_id))
 
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             row = await conn.fetchrow(
                 f"""
                 UPDATE {self._schema}.sensor
@@ -198,7 +382,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def delete_sensor(self, sensor_id: str) -> bool:
         """Delete a sensor and all related data."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             result = await conn.execute(
                 f"""
                 DELETE FROM {self._schema}.sensor
@@ -210,11 +394,13 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def update_sensor_status(self, sensor_id: str, status: SensorStatus) -> bool:
         """Update a sensor's operational status."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             result = await conn.execute(
                 f"""
                 UPDATE {self._schema}.sensor
-                SET status = $2::marie_scheduler.sensor_status, updated_at = NOW()
+                SET status = $2::marie_scheduler.trigger_status,
+                    cursor = CASE WHEN sensor_type='schedule' AND cursor IS NULL THEN NOW()::text ELSE cursor END,
+                    updated_at = NOW()
                 WHERE id = $1
                 """,
                 UUID(sensor_id),
@@ -228,7 +414,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def get_cursor(self, sensor_id: str) -> Optional[str]:
         """Get the current cursor for a sensor."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             return await conn.fetchval(
                 f"""
                 SELECT cursor FROM {self._schema}.sensor
@@ -239,7 +425,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def set_cursor(self, sensor_id: str, cursor: str) -> None:
         """Set the cursor for a sensor."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             await conn.execute(
                 f"""
                 UPDATE {self._schema}.sensor
@@ -260,21 +446,25 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         status: TickStatus,
         run_requests: Optional[List[Dict[str, Any]]] = None,
         reserved_run_ids: Optional[List[str]] = None,
+        cursor: str | None = None,
+        trigger_payload: dict[str, Any] | None = None,
     ) -> str:
         """Create a new tick record (for STARTED state)."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             tick_id = await conn.fetchval(
                 f"""
                 INSERT INTO {self._schema}.sensor_tick (
-                    sensor_id, status, run_requests, reserved_run_ids
+                    sensor_id, status, run_requests, reserved_run_ids, cursor, trigger_payload
                 )
-                VALUES ($1, $2::marie_scheduler.tick_status, $3, $4)
+                VALUES ($1, $2::marie_scheduler.tick_status, $3, $4, $5, $6)
                 RETURNING id
                 """,
                 UUID(sensor_id),
                 status.value,
                 json.dumps(run_requests) if run_requests else None,
                 [UUID(rid) for rid in reserved_run_ids] if reserved_run_ids else [],
+                cursor,
+                json.dumps(trigger_payload) if trigger_payload else None,
             )
             return str(tick_id)
 
@@ -289,6 +479,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         duration_ms: Optional[int] = None,
         trigger_payload: Optional[Dict[str, Any]] = None,
         tick_id: Optional[str] = None,
+        expected_updated_at: datetime | None = None,
     ) -> str:
         """
         Record a sensor tick and update sensor state atomically.
@@ -300,21 +491,32 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         """
         now = datetime.now(timezone.utc)
 
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             async with conn.transaction():
+                current_updated_at = await conn.fetchval(
+                    f"SELECT updated_at FROM {self._schema}.sensor WHERE id=$1 FOR UPDATE",
+                    UUID(sensor_id),
+                )
+                if (
+                    expected_updated_at is not None
+                    and current_updated_at != expected_updated_at
+                ):
+                    status = TickStatus.SKIPPED
+                    skip_reason = 'Configuration changed while evaluating; admission receipts retained'
+                    cursor = None
                 if tick_id:
                     # Update existing tick (STARTED -> final)
                     await conn.execute(
                         f"""
                         UPDATE {self._schema}.sensor_tick
                         SET status = $2::marie_scheduler.tick_status,
-                            cursor = $3,
+                            cursor = COALESCE($3, cursor),
                             run_ids = $4,
                             skip_reason = $5,
                             error_message = $6,
                             completed_at = $7,
                             duration_ms = $8,
-                            trigger_payload = $9
+                            trigger_payload = COALESCE($9, trigger_payload)
                         WHERE id = $1
                         """,
                         UUID(tick_id),
@@ -393,11 +595,29 @@ class PostgreSQLSensorStorage(SensorStateStorage):
                         now,
                     )
 
+                if cursor is not None and status in (
+                    TickStatus.SUCCESS,
+                    TickStatus.SKIPPED,
+                ):
+                    await conn.execute(
+                        f"UPDATE {self._schema}.sensor SET cursor=$2 WHERE id=$1",
+                        UUID(sensor_id),
+                        cursor,
+                    )
+                if status in (TickStatus.SUCCESS, TickStatus.SKIPPED) and run_ids:
+                    await conn.execute(
+                        f"""UPDATE {self._schema}.sensor SET last_run_key=(
+                            SELECT run_key FROM {self._schema}.sensor_run_key
+                            WHERE sensor_id=$1 AND job_id=$2 ORDER BY created_at DESC LIMIT 1
+                        ) WHERE id=$1""",
+                        UUID(sensor_id),
+                        UUID(run_ids[-1]),
+                    )
                 return str(result_tick_id)
 
     async def get_tick(self, tick_id: str) -> Optional[Dict[str, Any]]:
         """Get a tick by ID."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             row = await conn.fetchrow(
                 f"""
                 SELECT * FROM {self._schema}.sensor_tick
@@ -415,7 +635,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         status: Optional[TickStatus] = None,
     ) -> List[Dict[str, Any]]:
         """Get tick history for a sensor."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             if status:
                 rows = await conn.fetch(
                     f"""
@@ -447,7 +667,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         self, threshold_hours: int = 24
     ) -> List[Dict[str, Any]]:
         """Get STARTED ticks older than threshold (for crash recovery)."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT st.*, s.name as sensor_name, s.target_job_name, s.target_dag_id
@@ -467,7 +687,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def has_run_key(self, sensor_id: str, run_key: str) -> bool:
         """Check if a run_key has already been processed."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             return await conn.fetchval(
                 f"""
                 SELECT EXISTS(
@@ -483,7 +703,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         self, sensor_id: str, run_key: str, job_id: Optional[str] = None
     ) -> None:
         """Record a processed run_key for idempotency."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             await conn.execute(
                 f"""
                 INSERT INTO {self._schema}.sensor_run_key (sensor_id, run_key, job_id)
@@ -529,7 +749,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         where_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
         values.append(limit)
 
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             rows = await conn.fetch(
                 f"""
                 SELECT * FROM {self._schema}.event_log
@@ -552,14 +772,14 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         headers: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Insert an event into the event_log."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             event_id = await conn.fetchval(
                 f"""
                 INSERT INTO {self._schema}.event_log (
                     source, sensor_type, sensor_external_id,
                     routing_key, event_key, payload, headers
                 )
-                VALUES ($1, $2::marie_scheduler.sensor_type, $3, $4, $5, $6, $7)
+                VALUES ($1, $2::marie_scheduler.trigger_type, $3, $4, $5, $6, $7)
                 RETURNING event_id
                 """,
                 source,
@@ -578,7 +798,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def get_webhook_by_path(self, path: str) -> Optional[Dict[str, Any]]:
         """Get webhook registration by path."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             row = await conn.fetchrow(
                 f"""
                 SELECT wr.*, s.external_id as sensor_external_id
@@ -599,7 +819,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         auth_secret: Optional[str] = None,
     ) -> str:
         """Create a webhook registration."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             reg_id = await conn.fetchval(
                 f"""
                 INSERT INTO {self._schema}.webhook_registration (
@@ -622,7 +842,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def cleanup_old_ticks(self, retention_days: int = 30) -> int:
         """Delete old ticks for retention."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             result = await conn.fetchval(
                 f"SELECT {self._schema}.cleanup_old_ticks($1)",
                 retention_days,
@@ -631,7 +851,7 @@ class PostgreSQLSensorStorage(SensorStateStorage):
 
     async def cleanup_old_events(self, retention_days: int = 14) -> int:
         """Delete old events for retention."""
-        async with self._pool.acquire() as conn:
+        async with self._connection() as conn:
             result = await conn.fetchval(
                 f"SELECT {self._schema}.cleanup_old_events($1)",
                 retention_days,
@@ -639,8 +859,8 @@ class PostgreSQLSensorStorage(SensorStateStorage):
             return result or 0
 
     async def cleanup_old_run_keys(self, retention_days: int = 30) -> int:
-        """Delete old run keys for retention."""
-        async with self._pool.acquire() as conn:
+        """Retain completion receipts while their source history can be replayed."""
+        async with self._connection() as conn:
             result = await conn.fetchval(
                 f"SELECT {self._schema}.cleanup_old_run_keys($1)",
                 retention_days,
