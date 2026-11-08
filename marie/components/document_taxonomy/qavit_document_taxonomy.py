@@ -176,7 +176,7 @@ class QaVitDocumentTaxonomy(BaseDocumentTaxonomy):
 
         config = Path(model_name_or_path) / "config.yaml"
         yaml = YAML(typ='rt')
-        self.config = yaml.load(open(config, 'r'))
+        self.config = yaml.load(open(config, 'r', encoding='utf-8'))
         self.model, self.optimizer, self.image_processor, self.tokenizer = (
             get_visual_t5(self.config)
         )
