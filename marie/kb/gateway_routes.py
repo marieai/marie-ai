@@ -47,6 +47,18 @@ _KB_ACTIONS: Dict[str, tuple[str, tuple[str, ...]]] = {
     'delete_item': ('/delete_item', ('tenant_id', 'index_id', 'source_id', 'item_id')),
     'item_status': ('/item_status', ('tenant_id', 'index_id', 'source_id', 'item_id')),
     'text_search': ('/text_search', ('tenant_id', 'index_name', 'query')),
+    'code_search': (
+        '/code_search',
+        ('tenant_id', 'index_id', 'source_id', 'organization_id', 'query'),
+    ),
+    'delete_code_source': (
+        '/delete_code_source',
+        ('tenant_id', 'index_id', 'source_id', 'organization_id'),
+    ),
+    'open_code': (
+        '/open_code',
+        ('tenant_id', 'index_id', 'source_id', 'organization_id', 'citation'),
+    ),
     'open_text': (
         '/open_text',
         (
@@ -101,6 +113,7 @@ def register_kb_routes(
     from marie.auth.auth_bearer import TokenBearer
 
     executor = (kb_config or {}).get("executor")
+    code_executor = (kb_config or {}).get("code_executor")
     if executor:
         _logger.info(f"KB gateway routes configured (executor={executor})")
     else:
@@ -116,9 +129,14 @@ def register_kb_routes(
 
     async def _forward(action: str, body: Dict[str, Any]):
         """Validate *body* and forward the action to the KB executor."""
-        if not executor:
+        target = (
+            code_executor
+            if action in ('code_search', 'open_code', 'delete_code_source')
+            else executor
+        )
+        if not target:
             return _error(
-                "kb service not configured (missing 'kb.executor' in gateway config)",
+                f"kb service not configured (missing kb.{'code_executor' if action in ('code_search', 'open_code', 'delete_code_source') else 'executor'} in gateway config)",
                 status_code=503,
             )
 
@@ -129,7 +147,7 @@ def register_kb_routes(
 
         req = DataRequest()
         req.header.exec_endpoint = endpoint
-        req.header.target_executor = executor
+        req.header.target_executor = target
         # The executor lifecycle wrapper hard-requires a job_id for monitored
         # endpoints; these interactive calls are not scheduler jobs.
         req.parameters = {**body, "job_id": f"kb-{uuid.uuid4().hex}"}
@@ -155,7 +173,7 @@ def register_kb_routes(
 
         # Search-style payloads carry the row list under "results"; surface
         # that list as the result to keep the client contract flat.
-        result = payload.get("results", payload)
+        result = payload if action == 'code_search' else payload.get("results", payload)
         return {"status": "ok", "result": result}
 
     async def _body(request: Request) -> Dict[str, Any]:
@@ -190,6 +208,12 @@ def register_kb_routes(
     )
     _mount('item_status', 'Read registered item and cleanup state')
     _mount('text_search', 'Full-text search over current registered text')
+    _mount('code_search', 'Exact search over an authorized captured repository')
+    _mount(
+        'delete_code_source',
+        'Withdraw a repository source and retire its owned indexes',
+    )
+    _mount('open_code', 'Open a digest-checked captured code range')
     _mount('open_text', 'Open a digest-checked current saved passage')
     _mount('delete_text_item', 'Withdraw one item and clean up its indexed text')
     _mount('delete_text_index', 'Withdraw an index and clean up its indexed text')

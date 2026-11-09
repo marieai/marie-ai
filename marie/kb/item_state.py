@@ -124,9 +124,12 @@ def item_indexing_run(parameters: dict[str, Any]) -> tuple[KbItemScope, str]:
             and str(UUID(parameters['index_name'])) != index_id
         ):
             raise ValueError('Conflicting index names')
-        return KbItemScope(
-            tenant_id, index_id, parameters['source_id'], parameters['item_id']
-        ), indexing_dag_id
+        return (
+            KbItemScope(
+                tenant_id, index_id, parameters['source_id'], parameters['item_id']
+            ),
+            indexing_dag_id,
+        )
     except (ValueError, TypeError, KeyError) as error:
         raise ValueError(
             'Registered KB item scope and current indexing DAG are required'
@@ -175,6 +178,34 @@ def scheduler_execution(parameters: dict[str, Any]) -> dict[str, str]:
     return execution
 
 
+def resolve_indexing_parameters(
+    item: dict[str, Any] | None, parameters: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve a current registered run using its saved processing settings."""
+    _, dag_id = item_indexing_run(parameters)
+    if (
+        item is None
+        or item['state'] == 'removed'
+        or str(item['indexing_dag_id']) != dag_id
+    ):
+        raise StaleIndexingRun('KB indexing DAG changed or was removed')
+    saved = item_run_parameters(item)
+    for key in (
+        'run_params',
+        'uri',
+        'input_ref',
+        'ref_id',
+        'ref_type',
+        'index_name',
+    ):
+        if key in parameters and parameters[key] != saved.get(key):
+            raise ValueError(f'{key} conflicts with the saved KB indexing settings')
+    planner = saved.get('planner', 'kb_indexing')
+    if parameters.get('planner', planner) != planner:
+        raise ValueError('Planner conflicts with the saved KB indexing workflow')
+    return {**saved, 'planner': planner}
+
+
 class KbItemStore:
     """Keep current item and indexing DAG beside the adapter's indexed rows."""
 
@@ -185,29 +216,9 @@ class KbItemStore:
         self, parameters: dict[str, Any]
     ) -> dict[str, Any]:
         """Resolve a current registered run using its saved processing settings."""
-        scope, dag_id = item_indexing_run(parameters)
+        scope, _ = item_indexing_run(parameters)
         item = await self.get(scope)
-        if (
-            item is None
-            or item['state'] == 'removed'
-            or str(item['indexing_dag_id']) != dag_id
-        ):
-            raise StaleIndexingRun('KB indexing DAG changed or was removed')
-        saved = item_run_parameters(item)
-        for key in (
-            'run_params',
-            'uri',
-            'input_ref',
-            'ref_id',
-            'ref_type',
-            'index_name',
-        ):
-            if key in parameters and parameters[key] != saved.get(key):
-                raise ValueError(f'{key} conflicts with the saved KB indexing settings')
-        planner = saved.get('planner', 'kb_indexing')
-        if parameters.get('planner', planner) != planner:
-            raise ValueError('Planner conflicts with the saved KB indexing workflow')
-        return {**saved, 'planner': planner}
+        return resolve_indexing_parameters(item, parameters)
 
     async def register(
         self,

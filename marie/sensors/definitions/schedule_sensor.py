@@ -64,6 +64,42 @@ class ScheduleSensor(BaseSensor):
         self.validate_config()
         now = datetime.now(timezone.utc)
         zone = ZoneInfo(self.cron_timezone)
+        if self.target_job_name == 'kb_repository_refresh':
+            from uuid import UUID
+
+            run = self.get_config_value('run_config', {})
+            pool = context.resources.get('postgres_pool')
+            if pool is None:
+                raise RuntimeError(
+                    'Repository schedule requires the existing PostgreSQL resource'
+                )
+            row = await pool.fetchrow(
+                '''SELECT metadata->'codeIndex' AS indexed FROM marie_studio.kb_source
+                   WHERE id=$1 AND index_id=$2 AND status <> 'disabled' AND source_type='repository' ''',
+                UUID(run['source_id']),
+                UUID(run['index_id']),
+            )
+            indexed = row['indexed'] if row else None
+            if indexed and indexed.get('pendingCommit'):
+                pending_key = self.build_run_key(
+                    'repository_pending',
+                    self.sensor_id,
+                    indexed['indexedDagId'],
+                    indexed['pendingCommit'],
+                )
+                receipt = await pool.fetchrow(
+                    'SELECT job_id FROM marie_scheduler.sensor_run_key WHERE sensor_id=$1 AND run_key=$2',
+                    UUID(self.sensor_id),
+                    pending_key,
+                )
+                if not receipt:
+                    return SensorResult.fire(
+                        run_key=pending_key,
+                        job_name=self.target_job_name,
+                        run_config=run,
+                        tags={'trigger': 'schedule'},
+                        cursor=context.cursor or now.isoformat(),
+                    )
         if context.cursor:
             reference = datetime.fromisoformat(context.cursor)
             if reference.tzinfo is None:

@@ -2986,9 +2986,15 @@ class AsyncJobRepository:
     async def resolve_kb_indexing_metadata(
         self, metadata: dict[str, Any]
     ) -> dict[str, Any]:
-        from marie.kb.item_state import KbItemStore
+        from marie.kb.item_state import item_indexing_run, resolve_indexing_parameters
 
-        return await KbItemStore(self._pool).resolve_indexing_parameters(metadata)
+        scope, _ = item_indexing_run(metadata)
+        item = await self._pool.fetchval(
+            '''SELECT to_jsonb(item) FROM marie_scheduler.kb_item_state item
+               WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND item_id=$4''',
+            *scope.values(),
+        )
+        return resolve_indexing_parameters(item, metadata)
 
     async def read_llm_job_route(self, work_unit_id: str) -> Dict[str, Any] | None:
         async with self._pool.acquire() as conn:

@@ -48,6 +48,9 @@ top-level schema files alone does not prove that the bundle is complete.
 
 ## Prepare the current KB indexing path
 
+See [KB indexing recovery](kb-indexing-recovery.md) for existing scheduler recovery,
+KB status interpretation and the operator-controlled restore procedure.
+
 The KB feature worktree adds `schema/094_kb_item_state.sql` and the matching
 Studio migration `20261105_kb_item_state`. They define the same flat current-item
 guard in `marie_scheduler`; deploy matching AI and Studio revisions and SQL

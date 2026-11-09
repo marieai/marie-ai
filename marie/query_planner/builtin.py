@@ -8,6 +8,7 @@ from marie.query_planner.kb_indexing_planner import (
     query_planner_kb_index_content,
     query_planner_kb_indexing,
 )
+from marie.query_planner.kb_repository_planner import query_planner_kb_repository
 from marie.query_planner.model import QueryPlannersConf
 from marie.query_planner.ocr_planner import PLAN_ID as EXTRACT_PLAN_ID
 from marie.query_planner.ocr_planner import query_planner_extract
@@ -49,6 +50,7 @@ def register_all_known_planners(query_planners_conf: QueryPlannersConf):
     QueryPlanRegistry.register(KB_INDEXING_PLAN_ID, query_planner_kb_indexing)
     QueryPlanRegistry.register('kb_index_content', query_planner_kb_index_content)
     QueryPlanRegistry.register('kb_datasource_sync', query_planner_kb_datasource_sync)
+    QueryPlanRegistry.register('kb_repository_refresh', query_planner_kb_repository)
     QueryPlanRegistry.register(SCHEMA_EXTRACT_PLAN_ID, query_planner_schema_extract)
     result = QueryPlanRegistry.initialize_from_config(query_planners_conf)
 

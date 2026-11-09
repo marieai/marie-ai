@@ -1,0 +1,33 @@
+# Merge the gateway keys and executor into the existing deployment config.
+# Zoekt's served directory and root must be on the same persistent shared volume.
+gateway:
+  with:
+    kb:
+      executor: vector_store_executor
+      code_executor: repository_executor
+executors:
+  - name: repository_executor
+    uses:
+      jtype: RepositoryExecutor
+      py_modules:
+        - marie.executor.kb.repository_executor
+      with:
+        storage:
+          psql:
+            # Use the deployment's existing storage.psql block here.
+            hostname: ${{ ENV.POSTGRES_HOST }}
+            port: 5432
+            username: ${{ ENV.POSTGRES_USER }}
+            password: ${{ ENV.POSTGRES_PASSWORD }}
+            database: ${{ ENV.POSTGRES_DB }}
+            enabled: false
+        code_search:
+          root: /var/lib/marie/kb-code
+          url: http://zoekt:6070
+          indexer: /usr/local/bin/zoekt-index
+          coverage_timeout_seconds: 90
+          repository_roots:
+            - /repositories
+          # Optional: map registered Studio host paths to executor mounts.
+          path_mounts:
+            /studio/repositories: /repositories

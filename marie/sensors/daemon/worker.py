@@ -79,6 +79,22 @@ def sensor_targets_fabric(sensor: Dict[str, Any], fabric_group_id: str | None) -
     return not target or target == fabric_group_id
 
 
+def repository_sensor(sensor: dict[str, Any]) -> bool:
+    """Admit only the native repository target with matching saved source scope."""
+    config = sensor.get('config') or {}
+    run = config.get('run_config') or {}
+    return bool(
+        sensor.get('target_job_name') == 'kb_repository_refresh'
+        and config.get('kbSourceId')
+        and config.get('kbIndexId')
+        and run.get('planner') == 'kb_repository_refresh'
+        and run.get('source_id') == config['kbSourceId']
+        and run.get('index_id') == config['kbIndexId']
+        and run.get('ref_type') == 'kb_repository'
+        and run.get('ref_id') == config['kbSourceId']
+    )
+
+
 def sensor_configuration_digest(sensor: dict[str, Any]) -> str:
     value = [
         sensor.get('config') or {},
@@ -132,7 +148,7 @@ def build_work_info(
         retry_backoff=True,
         policy=(
             'replace'
-            if job_name == 'kb_datasource_sync'
+            if job_name in ('kb_datasource_sync', 'kb_repository_refresh')
             else (
                 'allow_duplicate'
                 if run_request.tags.get('trigger') == 'run_status'
@@ -484,10 +500,20 @@ class SensorWorker:
                 or not sensor_targets_fabric(current, self._fabric_group_id)
             ):
                 return
-            if current.get('config', {}).get('kbSourceId') or current.get(
-                'config', {}
-            ).get('kbIndexId'):
+            if not repository_sensor(current) and (
+                current.get('config', {}).get('kbSourceId')
+                or current.get('config', {}).get('kbIndexId')
+            ):
                 await self._evaluate_locked_sensor(current)
+                return
+            if repository_sensor(
+                current
+            ) and not await self._storage.repository_schedule_active(current):
+                await self._storage.record_tick(
+                    sensor_id=current['id'],
+                    status=TickStatus.FAILED,
+                    error_message='Native repository source or schedule is unavailable',
+                )
                 return
             pending = await self._storage.get_pending_tick(current['id'])
             if pending:
@@ -566,9 +592,10 @@ class SensorWorker:
         tick_id = None
 
         try:
-            if sensor.get('config', {}).get('kbSourceId') or sensor.get(
-                'config', {}
-            ).get('kbIndexId'):
+            if not repository_sensor(sensor) and (
+                sensor.get('config', {}).get('kbSourceId')
+                or sensor.get('config', {}).get('kbIndexId')
+            ):
                 raise RuntimeError(
                     'Datasource execution is not ready; F10b target admission is required'
                 )

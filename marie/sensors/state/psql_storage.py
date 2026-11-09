@@ -97,6 +97,32 @@ class PostgreSQLSensorStorage(SensorStateStorage):
             )
             return self._row_to_dict(row)
 
+    async def repository_schedule_active(self, sensor: dict[str, Any]) -> bool:
+        """Check the existing native source/schedule binding before admission."""
+        config = sensor['config']
+        run = config['run_config']
+        async with self._connection() as connection:
+            return bool(
+                await connection.fetchval(
+                    '''SELECT 1 FROM marie_studio.kb_source s
+                   JOIN marie_studio.kb_index k ON k.id=s.index_id
+                   JOIN marie_studio.tenant t ON t.id=k.tenant_id
+                   JOIN marie_studio.git_repositories r ON r.id=(s.dataset_inputs->>'repositoryId')::uuid
+                   WHERE s.id=$1 AND k.id=$2 AND t.id=$3 AND t.organization_id=$4 AND k.workspace_id=$5
+                     AND s.trigger_config_id=$6 AND s.sync_mode='scheduled' AND s.source_type='repository'
+                     AND s.status <> 'disabled' AND t.status='active' AND r.is_enabled AND r.git_enabled
+                     AND NOT COALESCE((k.metadata->>'removalPending')::boolean,false)
+                     AND NOT COALESCE((s.metadata->>'removalPending')::boolean,false)
+                     AND (r.visibility='system' OR (r.visibility='organization' AND r.organization_id=t.organization_id))''',
+                    UUID(config['kbSourceId']),
+                    UUID(config['kbIndexId']),
+                    UUID(run['tenant_id']),
+                    UUID(run['organization_id']),
+                    UUID(run['workspace_id']),
+                    UUID(sensor['external_id']),
+                )
+            )
+
     async def get_run_key_job(self, sensor_id: str, run_key: str) -> str | None:
         async with self._connection() as conn:
             job = await conn.fetchval(
