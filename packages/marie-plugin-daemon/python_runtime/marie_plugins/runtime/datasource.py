@@ -1,4 +1,4 @@
-"""Datasource page dispatch over the existing session protocol."""
+"""Datasource dispatch over the existing session protocol."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from marie.extension.datasource import (
     DatasourceDefinition,
     DatasourceInputError,
     DatasourceOutputError,
-    DatasourcePage,
     DatasourceRequest,
+    DatasourceResult,
     invoke_datasource,
 )
 
@@ -20,12 +20,12 @@ from .session import SessionFrame, error_frame, session_frame
 def dispatch_datasource(
     request: dict[str, Any],
     definition: DatasourceDefinition,
-    fetch: Callable[[DatasourceRequest], DatasourcePage | dict[str, Any]],
+    fetch: Callable[[DatasourceRequest], DatasourceResult | dict[str, Any]],
 ) -> Iterator[SessionFrame]:
     """Invoke a plugin-bound handler; callers cannot select implementation code."""
     session_id = request['session_id']
     try:
-        page = invoke_datasource(definition, request.get('data'), fetch)
+        result = invoke_datasource(definition, request.get('data'), fetch)
     except DatasourceInputError:
         yield error_frame(
             session_id,
@@ -40,5 +40,5 @@ def dispatch_datasource(
             message='Invalid datasource output',
         )
         return
-    yield session_frame(session_id, 'stream', page.model_dump())
+    yield session_frame(session_id, 'stream', result.model_dump())
     yield session_frame(session_id, 'end', {})

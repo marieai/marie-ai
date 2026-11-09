@@ -42,6 +42,53 @@ from marie.vector_stores.types import (
 logger = MarieLogger("marie.vector_stores.pgvector").logger
 
 
+async def cleanup_removed_items(
+    pool: Any,
+    tenant_id: str,
+    index_id: str,
+    items: list[dict[str, Any]],
+    table_name: str = 'kb_vectors',
+) -> int:
+    """Clean indexed vector rows that were already withdrawn from the catalog."""
+    source_ids = [item['source_id'] for item in items]
+    item_ids = [item['item_id'] for item in items]
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            count = 0
+            if await conn.fetchval('SELECT to_regclass($1)', table_name):
+                count = await conn.fetchval(
+                    f'''WITH deleted AS (
+                        DELETE FROM {table_name} v
+                        USING unnest($3::text[],$4::text[]) withdrawn(source_id,item_id)
+                        WHERE v.index_name=$2::uuid::text AND v.source_id=withdrawn.source_id
+                          AND v.ref_doc_id=withdrawn.item_id
+                          AND EXISTS (SELECT 1 FROM marie_scheduler.kb_item_state k
+                            WHERE k.tenant_id=$1::uuid AND k.index_id=$2::uuid
+                              AND k.source_id=withdrawn.source_id AND k.item_id=withdrawn.item_id
+                              AND k.state='removed' AND k.backend='pgvector' AND k.store_name=$5)
+                        RETURNING 1
+                    ) SELECT count(*) FROM deleted''',
+                    tenant_id,
+                    index_id,
+                    source_ids,
+                    item_ids,
+                    table_name,
+                )
+            await conn.execute(
+                '''UPDATE marie_scheduler.kb_item_state SET cleanup_state='complete',error=NULL,
+                       updated_at=clock_timestamp()
+                   WHERE tenant_id=$1::uuid AND index_id=$2::uuid AND state='removed'
+                     AND backend='pgvector' AND store_name=$5
+                     AND (source_id,item_id) IN (SELECT * FROM unnest($3::text[],$4::text[]))''',
+                tenant_id,
+                index_id,
+                source_ids,
+                item_ids,
+                table_name,
+            )
+            return count
+
+
 class PGVectorStore(BasePydanticVectorStore):
     """PostgreSQL vector store using pgvector extension.
 
@@ -290,41 +337,9 @@ class PGVectorStore(BasePydanticVectorStore):
     async def _cleanup_removed_batch(
         self, tenant_id: str, index_id: str, items: list[dict[str, Any]]
     ) -> int:
-        source_ids = [item['source_id'] for item in items]
-        item_ids = [item['item_id'] for item in items]
-        async with self._pool.acquire() as conn:
-            async with conn.transaction():
-                count = await conn.fetchval(
-                    f'''WITH deleted AS (
-                        DELETE FROM {self.table_name} v
-                        USING unnest($3::text[],$4::text[]) withdrawn(source_id,item_id)
-                        WHERE v.index_name=$2::uuid::text AND v.source_id=withdrawn.source_id
-                          AND v.ref_doc_id=withdrawn.item_id
-                          AND EXISTS (SELECT 1 FROM marie_scheduler.kb_item_state k
-                            WHERE k.tenant_id=$1::uuid AND k.index_id=$2::uuid
-                              AND k.source_id=withdrawn.source_id AND k.item_id=withdrawn.item_id
-                              AND k.state='removed' AND k.backend='pgvector' AND k.store_name=$5)
-                        RETURNING 1
-                    ) SELECT count(*) FROM deleted''',
-                    tenant_id,
-                    index_id,
-                    source_ids,
-                    item_ids,
-                    self.table_name,
-                )
-                await conn.execute(
-                    '''UPDATE marie_scheduler.kb_item_state SET cleanup_state='complete',error=NULL,
-                           updated_at=clock_timestamp()
-                       WHERE tenant_id=$1::uuid AND index_id=$2::uuid AND state='removed'
-                         AND backend='pgvector' AND store_name=$5
-                         AND (source_id,item_id) IN (SELECT * FROM unnest($3::text[],$4::text[]))''',
-                    tenant_id,
-                    index_id,
-                    source_ids,
-                    item_ids,
-                    self.table_name,
-                )
-                return count
+        return await cleanup_removed_items(
+            self._pool, tenant_id, index_id, items, self.table_name
+        )
 
     async def _ensure_pool(self) -> None:
         """Ensure connection pool is created."""

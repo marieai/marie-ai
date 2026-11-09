@@ -405,20 +405,32 @@ class VectorStoreExecutor(MarieExecutor):
             raise ValueError('KB tenant and index scope are required') from error
         return str(tenant_id), str(index_id)
 
-    async def _require_index_scope(self, parameters: Dict[str, Any]) -> str:
+    async def _require_index_scope(
+        self, parameters: Dict[str, Any], *, embedding: bool = False
+    ) -> str:
         await self._ensure_store()
         if self._vector_store.guarded is not True:
             return parameters.get('index_name', 'default')
         tenant_id, index_id = self._index_scope(parameters)
-        row = await self._vector_store.client.fetchrow(
-            '''SELECT 1 FROM marie_scheduler.kb_item_state
-               WHERE tenant_id=$1 AND index_id=$2 AND backend='pgvector' AND store_name=$3 LIMIT 1''',
-            UUID(tenant_id),
-            UUID(index_id),
-            self._table_name,
-        )
+        query = '''SELECT run_params FROM marie_scheduler.kb_item_state
+                   WHERE tenant_id=$1 AND index_id=$2 AND backend='pgvector' AND store_name=$3'''
+        identity = (UUID(tenant_id), UUID(index_id), self._table_name)
+        row = None
+        if embedding:
+            row = await self._vector_store.client.fetchrow(
+                query
+                + " AND state <> 'removed' AND (run_params ? 'embedding_model' OR run_params ? 'embedding_dim') LIMIT 1",
+                *identity,
+            )
+        if row is None:
+            row = await self._vector_store.client.fetchrow(
+                query + (" AND state <> 'removed'" if embedding else '') + ' LIMIT 1',
+                *identity,
+            )
         if row is None:
             raise PermissionError('KB index is not registered for this backend')
+        if embedding:
+            self._check_embedding_profile(row['run_params'])
         parameters['index_name'] = str(index_id)
         return str(index_id)
 
@@ -697,6 +709,7 @@ class VectorStoreExecutor(MarieExecutor):
             return docs
         execution = scheduler_execution(parameters)
         parameters = item_run_parameters(item)
+        self._check_embedding_profile(parameters['run_params'])
         await self._ensure_initialized()
         if not docs:
             raise ValueError('Complete KB item output is required')
@@ -1124,6 +1137,17 @@ class VectorStoreExecutor(MarieExecutor):
         except Exception as e:
             self.logger.error(f"Failed to update submission status: {e}")
 
+    def _check_embedding_profile(self, parameters: Dict[str, Any]) -> None:
+        for key, actual in (
+            ('embedding_model', self._embedding_model),
+            ('embedding_dim', self._embedding_dim),
+        ):
+            if parameters.get(key) is not None and parameters[key] != actual:
+                raise ValueError(
+                    f'Saved embedding profile {key}={parameters[key]!r} does not match '
+                    f'this executor ({actual!r})'
+                )
+
     @requests(on="/search")
     async def search(
         self,
@@ -1145,7 +1169,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             DocList of matching documents with similarity scores in metadata.
         """
-        await self._require_index_scope(parameters)
+        await self._require_index_scope(parameters, embedding=True)
         await self._ensure_initialized()
 
         # Get query
@@ -1476,7 +1500,7 @@ class VectorStoreExecutor(MarieExecutor):
         Returns:
             DocList of matching documents with combined scores.
         """
-        await self._require_index_scope(parameters)
+        await self._require_index_scope(parameters, embedding=True)
         await self._ensure_initialized()
 
         query = parameters.get("query")

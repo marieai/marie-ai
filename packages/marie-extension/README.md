@@ -65,7 +65,7 @@ The installed plugin entrypoint binds its handler to that declaration:
 from pathlib import Path
 import yaml
 
-from marie.extension.datasource import DatasourcePage, DatasourceRequest
+from marie.extension.datasource import DatasourceResult, DatasourceRequest
 from marie.extension.manifest import ExtensionPackage
 from marie_plugins.runtime import run
 from marie_plugins.runtime.datasource import dispatch_datasource
@@ -76,28 +76,90 @@ package = ExtensionPackage.model_validate(
 definition = package.datasources[0]
 
 
-def fetch_page(request: DatasourceRequest) -> DatasourcePage:
-    # Fetch at most request.limit records using request.configuration,
-    # request.cursor and request.credentials.
-    return DatasourcePage(records=[{'id': 'remote-42', 'title': 'Example'}])
+def read_data(request: DatasourceRequest) -> DatasourceResult:
+    # Use the datasource configuration and its normal provider implementation.
+    return DatasourceResult(records=[{'id': 'remote-42', 'title': 'Example'}])
 
 
-run(lambda frame: dispatch_datasource(frame, definition, fetch_page))
+run(lambda frame: dispatch_datasource(frame, definition, read_data))
 ```
 
 Install the SDK and the Python runtime's `datasource` extra in the plugin
 environment. The dispatcher reuses the existing session protocol, validates the
-declared dataset inputs and record schema, and returns one `stream` page followed
-by `end`. It accepts at most 100 records and 1 MiB per page. Use stored artifact
-references for larger content. Records retain their declared structure; they do
-not need text or chunk fields. Schema references must resolve locally.
+declared dataset inputs and record schema, and returns a `stream` result followed
+by `end`. Inline output keeps the existing 1 MiB transport bound; larger content
+uses the datasource's existing stored output references. There is no page-size
+or cursor contract. Records retain their declared structure and do not require
+text or chunk fields. Schema references must resolve locally.
 
-`next_cursor` continues pagination; it does not establish source completeness or
-authorize removal of unseen records. The plugin entrypoint chooses its handler;
-requests cannot supply implementation paths.
+The datasource delivers data for ingestion using its normal implementation and
+output/storage mechanism. Pagination of stored records belongs to query/list
+APIs after ingestion. Any provider-specific request handling stays internal to
+the datasource. The plugin entrypoint chooses its handler; requests cannot supply
+implementation paths.
 
-Studio's `kbIndexes.testDatasource` API accepts `tenantId`, `indexId`, `sourceId`,
-and optional `cursor`/`limit`. It requires KB update permission, loads the saved
-binding, and invokes one page on the registered Plugin Executor using signed
-admission. Credentials resolve in the worker. This operation does not enable
-recurring discovery or index its returned records.
+Studio's `kbIndexes.testDatasource` API accepts `tenantId`, `indexId` and `sourceId`.
+It requires KB update permission, loads the saved binding, and invokes the
+datasource once on the registered Plugin Executor using normal signed admission.
+Credentials resolve in the worker. This test operation does not enable recurring
+discovery or index its returned records.
+
+### Index datasource document output
+
+A datasource can opt into the existing KB document workflows by declaring
+`indexingAdapter: document` alongside `outputSchema`. Other domain output stays
+in its original format and needs its own compatible adapter.
+
+Return stable record IDs and references to content already saved by the datasource:
+
+```json
+{
+  "records": [{
+    "id": "wiki:42",
+    "uri": "s3://documents/tenants/TENANT_ID/wiki/42.md",
+    "input_ref": {
+      "kind": "text",
+      "uri": "s3://documents/tenants/TENANT_ID/wiki/42.md",
+      "media_type": "text/markdown",
+      "sha256": "SHA256_OF_SAVED_BYTES"
+    }
+  }]
+}
+```
+
+Use a real tenant UUID and lowercase 64-character SHA-256 digest. Saved text and
+saved extraction references use `kb_index_content`. An original document uses
+`uri` plus `sha256` and goes through `kb_indexing`. Saved artifacts must belong
+to the binding's tenant; an extraction reference must match that document's
+completed workflow. No output is copied into a second archive.
+
+Unchanged records keep their indexing DAG. Changed references/digests enqueue
+replacement indexing while the previous successful result remains searchable.
+Return `{"id": "wiki:42", "deleted": true}` for an explicit removal. An empty
+or partial delivery does not mean unseen items were deleted. Removed items need
+the existing cleanup flow before reintroduction; after cleanup completes, a
+reintroduced stable ID receives a fresh indexing DAG. An unchanged item whose
+indexing failed also receives a fresh DAG on an explicit new sync.
+
+Studio's Sync action and source schedule enqueue `kb_datasource_sync`. The Plugin
+Executor resolves the saved binding when its scheduler job executes. It does not
+queue the interactive test's expiring envelope. The existing KB item sensor then
+submits indexing jobs. Configure the worker's existing `storage.psql` block and
+`storage.s3.bucket_name` to match the registered KB storage connection. Output
+URIs must use that bucket and the binding's tenant prefix. Share Studio's existing
+extension package archive directory with the worker; the mock service template
+uses `MARIE_DEFAULT_MOUNT/plugin-packages`. Match `MARIE_EXTENSION_PACKAGE_STORE`
+if Studio overrides that directory, and forward the normal daemon signing key.
+
+The full sync respects the installed package's `runtimePolicy.timeoutMs`; set it
+for the provider's expected run time before qualifying a large synchronization.
+The interactive datasource test retains its short preview bound. Scheduled runs
+require the configured principal to remain an active organization member.
+
+Explicit removal immediately withdraws results from search. Normal datasource
+processing calls the existing backend cleanup functions for that KB-owned indexed
+output before binding removal or ID reintroduction. The datasource owns cleanup
+of its source records, files and saved artifacts. The
+original-document `sha256` currently detects changes. Verification of those raw
+bytes belongs to the original-document pipeline qualification; saved-text reads
+already verify the supplied artifact digest.

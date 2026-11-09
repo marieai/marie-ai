@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -22,8 +23,10 @@ from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 from marie.plugin_daemon import (
     PluginInvocationSpec,
+    build_invocation_envelope,
     discover_daemon,
     runtime_error_frame,
+    sign_envelope,
 )
 from marie.plugin_daemon.envelope import verify_envelope
 from marie.plugin_daemon.frames import now_utc
@@ -73,6 +76,11 @@ class MariePluginDaemonExecutor(MarieExecutor):
         self._next_restart_at: datetime | None = None
         self._draining = False
         self._lifecycle_lock = threading.Lock()
+        self._datasource_bucket = (kwargs.get('storage', {}).get('s3') or {}).get(
+            'bucket_name'
+        )
+        self._datasource_pool = None
+        self._datasource_pool_lock = asyncio.Lock()
         self.discovery = discover_daemon(daemon_url, daemon_bin, daemon_addr, self._env)
 
         if start and self.discovery.mode == "binary_child":
@@ -126,6 +134,8 @@ class MariePluginDaemonExecutor(MarieExecutor):
             else None
         )
         params = op_params if isinstance(op_params, dict) else execution_params
+        if params.get('operation') == 'kb_datasource_sync':
+            return await self._sync_datasource(execution_params)
         if 'invocation_envelope' in params:
             return frames_to_docs(
                 await self._invoke_datasource(params['invocation_envelope'], request_id)
@@ -162,10 +172,7 @@ class MariePluginDaemonExecutor(MarieExecutor):
                 raise ValueError(
                     'Datasource invocation requires signed saved-binding admission'
                 )
-            if (
-                params.get('type') == 'datasource'
-                or params.get('action') == 'fetch_page'
-            ):
+            if params.get('type') == 'datasource':
                 raise ValueError(
                     'Datasource payload requires signed saved-binding admission'
                 )
@@ -210,6 +217,99 @@ class MariePluginDaemonExecutor(MarieExecutor):
         )
         return frames_to_docs(frames)
 
+    async def _sync_datasource(self, parameters: dict[str, Any]) -> DocList[TextDoc]:
+        from marie.kb.datasource import admit_datasource_items
+        from marie.plugins.datasource import load_datasource_binding
+        from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
+
+        if not self._datasource_bucket:
+            raise ValueError(
+                'Datasource sync requires the existing storage.s3.bucket_name'
+            )
+        if self._datasource_pool is None:
+            async with self._datasource_pool_lock:
+                if self._datasource_pool is None:
+                    storage = getattr(self, 'storage_conf', None)
+                    if not storage:
+                        raise ValueError(
+                            'Datasource sync requires the existing storage.psql configuration'
+                        )
+                    pool = AsyncPostgresConnectionPool()
+                    await pool.initialize(storage, autocommit=True)
+                    self._datasource_pool = pool
+        root = Path(
+            self._env.get('MARIE_EXTENSION_PACKAGE_STORE')
+            or str(
+                Path(self._env.get('MARIE_DEFAULT_MOUNT', '/mnt/data/marie-ai'))
+                / 'plugin-packages'
+            )
+        )
+        binding = await load_datasource_binding(self._datasource_pool, parameters, root)
+        binding['bucket_name'] = self._datasource_bucket
+        spec = PluginInvocationSpec(
+            action_type='datasource',
+            action_id=binding['datasource_ref'],
+            install_id=str(binding['extension_install_id']),
+            package_id=str(binding['package_id']),
+            package_ref=binding['package_ref'],
+            package_digest=binding['package_digest'],
+            package_trust_level=binding['trust_level'],
+            provider_id=str(binding['provider_id']) if binding['provider_id'] else None,
+            credential_binding_ids=[
+                str(row['binding_id'])
+                for row in binding['credentials']
+                if row['binding_id']
+            ],
+            credential_requirements=[
+                {
+                    'name': row['name'],
+                    'required': row['required'],
+                    'secret_ref': row['secret_ref'],
+                }
+                for row in binding['credentials']
+            ],
+        )
+        envelope = build_invocation_envelope(
+            spec,
+            organization_id=str(binding['organization_id']),
+            workspace_id=str(binding['workspace_id']),
+            user_id=binding['user_id'],
+            request_id=parameters['job_id'],
+            payload={
+                'type': 'datasource',
+                'datasource': binding['datasource_ref'],
+                'source_id': str(binding['source_id']),
+                'index_id': str(binding['index_id']),
+                'tenant_id': str(binding['tenant_id']),
+                'configuration': binding['dataset_inputs'],
+            },
+            timeout_ms=(binding['manifest_snapshot'].get('runtimePolicy') or {}).get(
+                'timeoutMs', int(self.invoke_timeout_s * 1000)
+            ),
+            runtime_policy=binding['manifest_snapshot'].get('runtimePolicy'),
+        )
+        envelope['input'] = {
+            'credential_requirements': spec.credential_requirements,
+            'output_schema': binding['output_schema'],
+        }
+        envelope = sign_envelope(
+            envelope, key_id=self._signing_key_id, secret=self._signing_secret
+        )
+        frames = await self._invoke_datasource(envelope, parameters['job_id'])
+        if any(frame.get('type') == 'error' for frame in frames):
+            raise ValueError(
+                'Datasource execution failed; inspect the plugin worker logs'
+            )
+        records = next(
+            frame['data']['records']
+            for frame in frames
+            if frame.get('type') == 'stream'
+        )
+        count = await admit_datasource_items(self._datasource_pool, binding, records)
+        return frames_to_docs(
+            [{'type': 'stream', 'data': {'records_admitted': count}}, {'type': 'end'}]
+        )
+
     async def _invoke_datasource(
         self, envelope: dict[str, Any], request_id: str
     ) -> list[dict[str, Any]]:
@@ -245,17 +345,9 @@ class MariePluginDaemonExecutor(MarieExecutor):
             if (
                 envelope.get('actionType') != 'datasource'
                 or payload.get('type') != 'datasource'
-                or payload.get('action') != 'fetch_page'
                 or payload.get('datasource') != envelope.get('actionId')
             ):
                 raise ValueError('Datasource admission action mismatch')
-            limit = payload.get('limit')
-            if (
-                isinstance(limit, bool)
-                or not isinstance(limit, int)
-                or not 1 <= limit <= 100
-            ):
-                raise ValueError('Datasource admission requires a bounded page limit')
             if 'credentials' in payload:
                 raise ValueError(
                     'Datasource admission must carry references, not credentials'
@@ -310,35 +402,28 @@ class MariePluginDaemonExecutor(MarieExecutor):
         if any(frame.get('type') == 'error' for frame in frames):
             return frames
         try:
-            pages = [frame['data'] for frame in frames if frame.get('type') == 'stream']
-            if len(pages) != 1 or not any(
+            results = [
+                frame['data'] for frame in frames if frame.get('type') == 'stream'
+            ]
+            if len(results) != 1 or not any(
                 frame.get('type') == 'end' for frame in frames
             ):
-                raise ValueError('Incomplete datasource page')
-            page = pages[0]
-            records = page['records']
-            cursor = page.get('next_cursor')
-            if (
-                not isinstance(records, list)
-                or len(records) > limit
-                or set(page) - {'records', 'next_cursor'}
-            ):
-                raise ValueError('Invalid datasource page')
-            if cursor is not None and (
-                not isinstance(cursor, str) or not cursor or len(cursor) > 4096
-            ):
-                raise ValueError('Invalid datasource cursor')
+                raise ValueError('Incomplete datasource result')
+            result = results[0]
+            records = result['records']
+            if not isinstance(records, list) or set(result) - {'records'}:
+                raise ValueError('Invalid datasource result')
             for record in records:
                 validator.validate(record)
             if (
                 len(
-                    json.dumps(page, ensure_ascii=False, allow_nan=False).encode(
+                    json.dumps(result, ensure_ascii=False, allow_nan=False).encode(
                         'utf-8'
                     )
                 )
                 > 1024 * 1024
             ):
-                raise ValueError('Datasource page exceeds its bound')
+                raise ValueError('Datasource output exceeds its transport bound')
         except (
             ValueError,
             TypeError,

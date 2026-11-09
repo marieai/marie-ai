@@ -35,14 +35,11 @@ def admission():
         request_id='request-1',
         payload={
             'type': 'datasource',
-            'action': 'fetch_page',
             'datasource': spec.action_id,
             'source_id': 'source-1',
             'index_id': 'index-1',
             'tenant_id': 'tenant-1',
             'configuration': {'space': 'Engineering'},
-            'cursor': None,
-            'limit': 2,
         },
     )
     envelope['input'] = {
@@ -75,7 +72,7 @@ def executor(monkeypatch, output=None):
             else [
                 {
                     'type': 'stream',
-                    'data': {'records': [{'id': 'row-1'}], 'next_cursor': None},
+                    'data': {'records': [{'id': 'row-1'}]},
                 },
                 {'type': 'end'},
             ]
@@ -214,7 +211,7 @@ def test_datasource_payload_cannot_hide_behind_a_legacy_action(
         [{'type': 'stream', 'data': {'records': []}}],
         [{'type': 'end'}],
         [
-            {'type': 'stream', 'data': {'records': [{'id': str(i)} for i in range(3)]}},
+            {'type': 'stream', 'data': {'records': 'invalid'}},
             {'type': 'end'},
         ],
     ],
@@ -257,3 +254,13 @@ def test_unresolvable_credential_returns_safe_structured_error(monkeypatch):
     frames = run(worker, {'invocation_envelope': admission()})
     assert frames[0]['error']['code'] == 'credential_unavailable'
     assert 'PRIVATE_BINDING_REFERENCE' not in str(frames)
+
+
+def test_worker_returns_all_delivered_records_without_pagination(monkeypatch):
+    records = [{'id': str(i)} for i in range(101)]
+    worker, calls = executor(
+        monkeypatch, [{'type': 'stream', 'data': {'records': records}}, {'type': 'end'}]
+    )
+    result = run(worker, {'invocation_envelope': admission()})
+    assert result[0]['data']['records'] == records
+    assert len(calls) == 1

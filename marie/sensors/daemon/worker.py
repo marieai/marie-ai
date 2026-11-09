@@ -65,6 +65,7 @@ _ENVELOPE_KEYS = (
     'fabric_group_id',
     'organization_id',
     'workspace_id',
+    'user_id',
     'input_ref',
     'upstream',
 )
@@ -129,9 +130,15 @@ def build_work_info(
         retry_limit=3,
         retry_delay=2,
         retry_backoff=True,
-        policy='allow_duplicate'
-        if run_request.tags.get('trigger') == 'run_status'
-        else None,
+        policy=(
+            'replace'
+            if job_name == 'kb_datasource_sync'
+            else (
+                'allow_duplicate'
+                if run_request.tags.get('trigger') == 'run_status'
+                else None
+            )
+        ),
         start_after=now,
         expire_in_seconds=0,
         keep_until=now + timedelta(days=2),

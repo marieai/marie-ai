@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, Un
 from docarray import DocList
 from marie.instrumentation.context import using_attributes
 
-from marie.api import AssetKeyDoc, parse_payload_to_docs
+from marie.api import ASSET_PAYLOAD_KEYS, AssetKeyDoc, parse_payload_to_docs
 from marie.constants import __default_endpoint__
 from marie.excepts import ExecutorError, InternalNetworkError
 from marie.job.common import JobInfo, JobStatus
@@ -116,7 +116,12 @@ class GatewayJobDistributor(JobDistributor):
             key: metadata[key] for key in IDENTITY_PARAMETER_KEYS if key in metadata
         }
         run_params = metadata.get("run_params")
-        parameters, asset_doc = await parse_payload_to_docs(metadata)
+        if job_info.entrypoint == "plugin_daemon_executor://execute" and not any(
+            key in metadata for key in ASSET_PAYLOAD_KEYS
+        ):
+            parameters, asset_doc = {}, None
+        else:
+            parameters, asset_doc = await parse_payload_to_docs(metadata)
         parameters["job_id"] = submission_id
         parameters["payload"] = metadata
         for key in MOCK_EXECUTOR_PARAMETER_KEYS:
@@ -212,7 +217,9 @@ class GatewayJobDistributor(JobDistributor):
         if target_exec:
             request.header.target_executor = target_exec
         request.parameters = parameters
-        request.data.docs = DocList[AssetKeyDoc]([asset_doc])
+        request.data.docs = DocList[AssetKeyDoc](
+            [asset_doc] if asset_doc is not None else []
+        )
 
         session_id = self._resolve_session_id(submission_id, job_info)
         self.logger.debug(
@@ -243,7 +250,7 @@ class GatewayJobDistributor(JobDistributor):
         self.logger.info(
             f"[{submission_id}] Publishing job via stream_send (session={session_id})"
         )
-        docs = DocList[AssetKeyDoc]([asset_doc])
+        docs = DocList[AssetKeyDoc]([asset_doc] if asset_doc is not None else [])
 
         with using_attributes(session_id=session_id):
             try:

@@ -26,7 +26,7 @@ STUDIO = Path(os.environ.get('MARIE_STUDIO_TEST_ROOT', ROOT.parent / 'marie-stud
 
 
 @pytest.mark.timeout(90)
-def test_saved_studio_sources_execute_real_datasource_pages(
+def test_saved_studio_sources_execute_real_datasource_results(
     daemon_binary, tmp_path, unused_tcp_port
 ):
     if not (STUDIO / 'packages/api/package.json').is_file():
@@ -80,13 +80,13 @@ def test_saved_studio_sources_execute_real_datasource_pages(
             '''from pathlib import Path
 import yaml
 from marie.extension.manifest import ExtensionPackage
-from marie.extension.datasource import DatasourcePage
+from marie.extension.datasource import DatasourceResult
 from marie_plugins.runtime import run
 from marie_plugins.runtime.datasource import dispatch_datasource
 
 definition = ExtensionPackage.model_validate(yaml.safe_load(Path('marie-extension.yaml').read_text())).datasources[0]
 def fetch(request):
-    return DatasourcePage(records=[{'id': request.source_id, 'dataset': request.configuration['space'],
+    return DatasourceResult(records=[{'id': request.source_id, 'dataset': request.configuration['space'],
                                   'count': 0, 'active': False, 'token_echo': request.credentials['token']}])
 run(lambda request: dispatch_datasource(request, definition, fetch))
 ''',

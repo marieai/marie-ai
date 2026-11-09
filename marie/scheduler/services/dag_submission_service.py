@@ -86,6 +86,14 @@ class DagSubmissionService:
                 f'For work item : {work_info}.'
             )
 
+        metadata = work_info.data.get('metadata', {})
+        if metadata.get('planner', work_info.name) in (
+            'kb_indexing',
+            'kb_index_content',
+        ) and (metadata.get('item_id') or metadata.get('ref_type') == 'kb_item'):
+            work_info.data[
+                'metadata'
+            ] = await self.repository.resolve_kb_indexing_metadata(metadata)
         plan, dag_nodes = query_plan_work_items(work_info)
         scheduler_trace(
             'dag_plan_built',

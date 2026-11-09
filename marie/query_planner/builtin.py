@@ -1,5 +1,8 @@
 from marie.logging_core.predefined import default_logger as logger
 from marie.query_planner.base import QueryPlanRegistry
+from marie.query_planner.kb_datasource_sync_planner import (
+    query_planner_kb_datasource_sync,
+)
 from marie.query_planner.kb_indexing_planner import PLAN_ID as KB_INDEXING_PLAN_ID
 from marie.query_planner.kb_indexing_planner import (
     query_planner_kb_index_content,
@@ -45,6 +48,7 @@ def register_all_known_planners(query_planners_conf: QueryPlannersConf):
     QueryPlanRegistry.register(EXTRACT_PLAN_ID, query_planner_extract)
     QueryPlanRegistry.register(KB_INDEXING_PLAN_ID, query_planner_kb_indexing)
     QueryPlanRegistry.register('kb_index_content', query_planner_kb_index_content)
+    QueryPlanRegistry.register('kb_datasource_sync', query_planner_kb_datasource_sync)
     QueryPlanRegistry.register(SCHEMA_EXTRACT_PLAN_ID, query_planner_schema_extract)
     result = QueryPlanRegistry.initialize_from_config(query_planners_conf)
 

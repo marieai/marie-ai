@@ -2983,6 +2983,13 @@ class AsyncJobRepository:
                         raise RuntimeError('routing_manifest_insert_incomplete')
         return True, str(row[0])
 
+    async def resolve_kb_indexing_metadata(
+        self, metadata: dict[str, Any]
+    ) -> dict[str, Any]:
+        from marie.kb.item_state import KbItemStore
+
+        return await KbItemStore(self._pool).resolve_indexing_parameters(metadata)
+
     async def read_llm_job_route(self, work_unit_id: str) -> Dict[str, Any] | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(

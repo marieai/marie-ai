@@ -156,6 +156,8 @@ def item_run_parameters(item: dict[str, Any]) -> dict[str, Any]:
         workflow = item['input_ref'].get('processing_workflow')
         if workflow:
             parameters['planner'] = workflow
+    if item['run_params'].get('fabric_group_id'):
+        parameters['fabric_group_id'] = item['run_params']['fabric_group_id']
     return parameters
 
 
@@ -178,6 +180,34 @@ class KbItemStore:
 
     def __init__(self, pool: AsyncPostgresConnectionPool) -> None:
         self.pool = pool
+
+    async def resolve_indexing_parameters(
+        self, parameters: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Resolve a current registered run using its saved processing settings."""
+        scope, dag_id = item_indexing_run(parameters)
+        item = await self.get(scope)
+        if (
+            item is None
+            or item['state'] == 'removed'
+            or str(item['indexing_dag_id']) != dag_id
+        ):
+            raise StaleIndexingRun('KB indexing DAG changed or was removed')
+        saved = item_run_parameters(item)
+        for key in (
+            'run_params',
+            'uri',
+            'input_ref',
+            'ref_id',
+            'ref_type',
+            'index_name',
+        ):
+            if key in parameters and parameters[key] != saved.get(key):
+                raise ValueError(f'{key} conflicts with the saved KB indexing settings')
+        planner = saved.get('planner', 'kb_indexing')
+        if parameters.get('planner', planner) != planner:
+            raise ValueError('Planner conflicts with the saved KB indexing workflow')
+        return {**saved, 'planner': planner}
 
     async def register(
         self,
@@ -264,14 +294,16 @@ class KbItemStore:
                     )
                 return row
 
-    async def pending(self, owner_type: str, limit: int) -> list[dict[str, Any]]:
+    async def pending(
+        self, owner_type: str | tuple[str, ...], limit: int
+    ) -> list[dict[str, Any]]:
         return await self.pool.fetch(
             '''SELECT * FROM marie_scheduler.kb_item_state
-               WHERE state='pending' AND admitted_at IS NULL AND owner_type=$1
+               WHERE state='pending' AND admitted_at IS NULL AND owner_type=ANY($1)
                  AND backend IN ('pgvector','postgresql_text')
                  AND (input_ref->>'kind' IS DISTINCT FROM 'upstream' OR input_ref ? 'artifact')
                ORDER BY updated_at,tenant_id,index_id,source_id,item_id LIMIT $2''',
-            owner_type,
+            [owner_type] if isinstance(owner_type, str) else list(owner_type),
             limit,
         )
 

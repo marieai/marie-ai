@@ -60,7 +60,12 @@ class KbDocumentSensor(BaseSensor):
         limit = int(self.config.get('max_files_per_tick', 100))
         if not 1 <= limit <= 1000:
             raise ValueError('max_files_per_tick must be between 1 and 1000')
-        items = await self._store(context).pending(self.owner_type, limit)
+        owners = (
+            ('kb_document', 'datasource')
+            if self.owner_type == 'kb_document'
+            else self.owner_type
+        )
+        items = await self._store(context).pending(owners, limit)
         if not items:
             return SensorResult.skip(
                 'No registered KB items await admission', cursor=context.cursor

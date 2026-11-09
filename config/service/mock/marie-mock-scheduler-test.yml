@@ -250,11 +250,21 @@ executors:
         py_modules:
           - marie.executor.extensions.plugin_daemon_executor
       with:
+        storage:
+          psql:
+            <<: *psql_conf_shared
+            enabled: False
+          s3:
+            <<: *s3_conf_shared
+            enabled: False
         start: false                      # proxy to the EXTERNAL daemon; don't spawn a child
     timeout_ready: 3000000
     replicas: 1
     env:
       MARIE_PLUGIN_DAEMON_URL: ${{ ENV.MARIE_PLUGIN_DAEMON_URL }}
+      MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID: ${{ ENV.MARIE_PLUGIN_DAEMON_SIGNING_KEY_ID }}
+      MARIE_PLUGIN_DAEMON_SIGNING_SECRET: ${{ ENV.MARIE_PLUGIN_DAEMON_SIGNING_SECRET }}
+      MARIE_EXTENSION_PACKAGE_STORE: ${{ ENV.MARIE_DEFAULT_MOUNT }}/plugin-packages
 
   - name: guardrail_executor
     uses:

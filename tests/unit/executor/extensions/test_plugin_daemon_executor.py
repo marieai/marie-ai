@@ -438,8 +438,9 @@ def test_invoke_plugin_reads_identity_from_params():
     assert env["workspaceId"] == "ws-1"
 
 
+@pytest.mark.parametrize('with_asset', [True, False])
 def test_scheduled_connector_preserves_settings_through_distributor(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, with_asset
 ) -> None:
     monkeypatch.setenv("CONNECTOR_TEST_API_KEY", "test-credential")
     source = tmp_path / "source.json"
@@ -449,7 +450,7 @@ def test_scheduled_connector_preserves_settings_through_distributor(
         entrypoint="plugin_daemon_executor://execute",
         metadata={
             "metadata": {
-                "uri": source.as_uri(),
+                **({'uri': source.as_uri()} if with_asset else {}),
                 "op_params": {
                     "plugin": dict(_PLUGIN),
                     "credential_requirements": [
@@ -476,9 +477,10 @@ def test_scheduled_connector_preserves_settings_through_distributor(
             "run_attempt_id": "attempt-1",
         },
     )
-    parameters, _ = asyncio.run(
+    parameters, asset = asyncio.run(
         GatewayJobDistributor()._build_payload("job-scheduled", job)
     )
+    assert (asset is not None) == with_asset
 
     out, envelopes = _run_invoke_plugin(parameters)
 

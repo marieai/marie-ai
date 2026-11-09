@@ -24,14 +24,14 @@ class DatasourceDefinition(ExtensionModel):
         default_factory=SchemaTrack, alias="configurationSchema"
     )
     output_schema: dict[str, object] | None = Field(default=None, alias="outputSchema")
+    indexing_adapter: str | None = Field(default=None, alias='indexingAdapter')
 
 
 class DatasourceRequest(BaseModel):
-    """One bounded page request for a saved datasource binding."""
+    """Invocation of a saved datasource binding."""
 
     model_config = ConfigDict(extra='forbid')
     type: Literal['datasource']
-    action: Literal['fetch_page']
     datasource: str
     source_id: str = Field(min_length=1)
     index_id: str = Field(min_length=1)
@@ -39,16 +39,13 @@ class DatasourceRequest(BaseModel):
     configuration: dict[str, Any]
     credentials: dict[str, str] = Field(default_factory=dict, repr=False)
     user_id: str = ''
-    cursor: str | None = Field(default=None, max_length=4096)
-    limit: int = Field(default=50, ge=1, le=100, strict=True)
 
 
-class DatasourcePage(BaseModel):
-    """Datasource-defined records and an optional pagination continuation."""
+class DatasourceResult(BaseModel):
+    """Records delivered by the datasource for ingestion."""
 
     model_config = ConfigDict(extra='forbid')
-    records: list[Any] = Field(max_length=100)
-    next_cursor: str | None = Field(default=None, min_length=1, max_length=4096)
+    records: list[Any]
 
 
 class DatasourceInputError(ValueError):
@@ -56,15 +53,15 @@ class DatasourceInputError(ValueError):
 
 
 class DatasourceOutputError(ValueError):
-    """Handler output exceeds its declared schema or page bounds."""
+    """Handler output violates its declared schema or transport bound."""
 
 
 def invoke_datasource(
     definition: DatasourceDefinition,
     payload: dict[str, Any],
-    fetch: Callable[[DatasourceRequest], DatasourcePage | dict[str, Any]],
-) -> DatasourcePage:
-    """Validate a declared datasource invocation and its typed page output."""
+    fetch: Callable[[DatasourceRequest], DatasourceResult | dict[str, Any]],
+) -> DatasourceResult:
+    """Validate a declared datasource invocation and its output."""
     try:
         request = DatasourceRequest.model_validate(payload)
         if request.datasource != definition.ref:
@@ -86,17 +83,15 @@ def invoke_datasource(
 
     output = fetch(request)
     try:
-        page = DatasourcePage.model_validate(output)
-        if len(page.records) > request.limit:
-            raise DatasourceOutputError('Datasource page exceeds the requested limit')
-        for record in page.records:
+        result = DatasourceResult.model_validate(output)
+        for record in result.records:
             validator.validate(record)
-        encoded = json.dumps(page.model_dump(), ensure_ascii=False, allow_nan=False)
+        encoded = json.dumps(result.model_dump(), ensure_ascii=False, allow_nan=False)
         if len(encoded.encode('utf-8')) > 1024 * 1024:
             raise DatasourceOutputError(
-                'Datasource page exceeds 1 MiB; use artifact references'
+                'Datasource output exceeds the 1 MiB transport bound; use existing artifact references'
             )
-        return page
+        return result
     except (
         ValidationError,
         SchemaValidationError,

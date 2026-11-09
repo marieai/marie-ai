@@ -407,6 +407,23 @@ async def test_persist_keeps_dag_successful_when_post_commit_effects_fail(
     service._notify_callback.assert_awaited_once_with()
 
 
+async def test_persist_resolves_registered_kb_settings_before_planning(monkeypatch):
+    service = build_service()
+    saved = {'planner': 'kb_indexing', 'item_id': 'item', 'run_params': {'parse_mode': 'auto'}}
+    service.repository.resolve_kb_indexing_metadata = AsyncMock(return_value=saved)
+    submitted = work_item('dag-1')
+    submitted.data['metadata'] = {'planner': 'kb_indexing', 'item_id': 'item'}
+    planned = []
+
+    def plan(work):
+        planned.append(work.data['metadata'])
+        return QueryPlan(nodes=[]), [SimpleNamespace(dag_id=None)]
+
+    monkeypatch.setattr(submission_module, 'query_plan_work_items', plan)
+    await service.persist(submitted)
+    assert planned == [saved]
+
+
 @pytest.mark.asyncio
 async def test_submission_validation_propagates_repository_outage() -> None:
     service = build_service()

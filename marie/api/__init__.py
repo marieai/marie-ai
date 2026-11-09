@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 logger = default_logger
 
+ASSET_PAYLOAD_KEYS = ("uri", "data", "srcData", "srcBase64", "srcFile", "srcUrl")
+
 TYPES_TO_EXT = {
     "png": "png",
     "jpeg": "jpg",

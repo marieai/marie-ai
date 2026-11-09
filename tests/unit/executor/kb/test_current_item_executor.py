@@ -85,6 +85,8 @@ def test_managed_table_contract_is_checked_before_executor_startup():
 @pytest.fixture
 def current():
     executor = _make_executor()
+    executor._embedding_model = 'runtime-model'
+    executor._embedding_dim = 2
     row = {
         'tenant_id': str(uuid4()),
         'index_id': str(uuid4()),
@@ -136,6 +138,26 @@ async def test_current_item_prepares_everything_before_one_checked_write(current
     assert nodes[0]['metadata']['source_uri'] == row['uri']
     executor._vector_store.add_node.assert_not_awaited()
     executor._vector_store.add_nodes_batch.assert_not_awaited()
+
+
+@pytest.mark.parametrize('setting,value', [('embedding_model', 'other-model'), ('embedding_dim', 999)])
+async def test_current_item_rejects_incompatible_saved_embedding_profile(current, setting, value):
+    executor, row, params = current
+    executor._embedding_model = 'runtime-model'
+    executor._embedding_dim = 2
+    row['run_params'][setting] = value
+    with pytest.raises(ValueError, match='embedding profile'):
+        await executor.embed_and_store(DocList[TextDoc]([TextDoc(text='must not embed')]), params)
+    executor._embeddings.embed_text.assert_not_called()
+
+
+@pytest.mark.parametrize('method', ['search', 'hybrid_search'])
+async def test_search_rejects_runtime_embedding_profile_change(current, method):
+    executor, row, params = current
+    row['run_params']['embedding_model'] = 'previous-runtime-model'
+    with pytest.raises(ValueError, match='embedding profile'):
+        await getattr(executor, method)(DocList[TextDoc](), {**params, 'query': 'example'})
+    executor._embeddings.embed_text.assert_not_called()
 
 
 async def test_failed_preparation_never_stores_partial_current_output(current):

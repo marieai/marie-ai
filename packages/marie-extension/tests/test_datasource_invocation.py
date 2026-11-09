@@ -3,7 +3,7 @@ from marie.extension.datasource import (
     DatasourceDefinition,
     DatasourceInputError,
     DatasourceOutputError,
-    DatasourcePage,
+    DatasourceResult,
     invoke_datasource,
 )
 
@@ -35,29 +35,28 @@ def definition():
 def payload(**updates):
     return {
         'type': 'datasource',
-        'action': 'fetch_page',
         'datasource': 'datasources/sample/wiki',
         'source_id': 'source-1',
         'index_id': 'index-1',
         'tenant_id': 'tenant-1',
         'configuration': {'space': 'Engineering'},
-        'limit': 2,
         **updates,
     }
 
 
-def test_page_preserves_typed_records_and_source_configuration():
+def test_result_preserves_all_records_and_source_configuration():
     seen = []
 
     def fetch(request):
         seen.append(request)
-        return DatasourcePage(
-            records=[{'id': 'row-1', 'score': 0}], next_cursor='page-2'
+        return DatasourceResult(
+            records=[{'id': f'row-{i}', 'score': i} for i in range(101)]
         )
 
     result = invoke_datasource(definition(), payload(), fetch)
-    assert result.records == [{'id': 'row-1', 'score': 0}]
-    assert result.next_cursor == 'page-2'
+    assert len(result.records) == 101
+    assert result.records[0] == {'id': 'row-0', 'score': 0}
+    assert result.records[-1] == {'id': 'row-100', 'score': 100}
     assert seen[0].configuration == {'space': 'Engineering', 'archived': False}
     assert seen[0].source_id == 'source-1'
 
@@ -67,7 +66,6 @@ def test_page_preserves_typed_records_and_source_configuration():
     [
         {'datasource': 'datasources/other/wiki'},
         {'type': 'tool'},
-        {'limit': 101},
         {'source_id': ''},
         {'configuration': {'space': 42}},
         {'configuration': {'space': 'x', 'api_key': 'forged'}},
@@ -84,16 +82,16 @@ def test_invalid_requests_never_call_the_handler(updates):
 
 
 @pytest.mark.parametrize(
-    'page',
+    'output',
     [
         {'records': [{'id': 'x', 'score': 'wrong'}]},
-        {'records': [{'id': str(i), 'score': i} for i in range(3)]},
+        {'records': 'invalid'},
         {'records': [{'id': 'x' * (1024 * 1024), 'score': 0}]},
     ],
 )
-def test_invalid_or_unbounded_output_is_rejected(page):
+def test_invalid_or_unbounded_output_is_rejected(output):
     with pytest.raises(DatasourceOutputError):
-        invoke_datasource(definition(), payload(), lambda request: page)
+        invoke_datasource(definition(), payload(), lambda request: output)
 
 
 def test_runtime_uses_the_existing_session_frames():
@@ -103,7 +101,7 @@ def test_runtime_uses_the_existing_session_frames():
         dispatch_datasource(
             {'session_id': 's1', 'event': 'request', 'data': payload()},
             definition(),
-            lambda request: DatasourcePage(records=[{'id': 'x', 'score': 0}]),
+            lambda request: DatasourceResult(records=[{'id': 'x', 'score': 0}]),
         )
     )
     assert [frame['data']['type'] for frame in frames] == ['stream', 'end']
