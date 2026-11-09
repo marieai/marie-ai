@@ -14,10 +14,12 @@ from marie.plugin_daemon.envelope import (
     sign_envelope,
 )
 from marie.plugin_daemon.frames import parse_daemon_frames, runtime_error_frame
+from marie.plugin_daemon.invocation import PluginInvocationSpec
 
 __all__ = [
     "DaemonDiscovery",
     "DEFAULT_RUNTIME_POLICY",
+    "PluginInvocationSpec",
     "build_invocation_envelope",
     "canonical_runtime_envelope",
     "discover_daemon",

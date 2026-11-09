@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 import yaml
-
 from marie.extension.manifest import ExtensionPackage
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -27,6 +26,26 @@ def test_invalid_kind_rejected() -> None:
 
     with pytest.raises(ValueError, match="kind must be ExtensionPackage"):
         ExtensionPackage.model_validate(data)
+
+
+def test_datasource_provider_must_be_declared_with_the_correct_type() -> None:
+    data = yaml.safe_load(
+        (FIXTURES / 'minimal-tool' / 'marie-extension.yaml').read_text()
+    )
+    data['datasources'] = [
+        {
+            'ref': 'datasources/wiki',
+            'name': 'Wiki',
+            'providerRef': data['providers'][0]['ref'],
+        }
+    ]
+    with pytest.raises(ValueError, match='datasource_provider'):
+        ExtensionPackage.model_validate(data)
+    data['providers'][0]['type'] = 'datasource_provider'
+    assert (
+        ExtensionPackage.model_validate(data).datasources[0].provider_ref
+        == data['providers'][0]['ref']
+    )
 
 
 def test_agent_strategy_provider_has_typed_agent_contract() -> None:

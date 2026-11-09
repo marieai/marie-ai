@@ -34,10 +34,10 @@ from marie.constants import DEFAULT_DAEMON_ADDR, DEFAULT_TENANT_UUID
 from marie.logging_core.logger import MarieLogger
 from marie.plugin_daemon import (
     DEFAULT_RUNTIME_POLICY,
+    PluginInvocationSpec,
     build_invocation_envelope,
     sign_envelope,
 )
-from marie.plugins.agent_tool import PluginToolSpec
 from marie.plugins.daemon_client import PluginDaemonClient
 from marie.secret_store import CredentialRequirement
 
@@ -205,7 +205,7 @@ class EmbeddedPlugins:
         self._workspace_id = workspace_id
         self._client_factory = client_factory or self._default_client_factory
         self._client: PluginDaemonClient | None = None
-        self._specs: dict[str, PluginToolSpec] = {}
+        self._specs: dict[str, PluginInvocationSpec] = {}
         self._install_ids: dict[str, str] = {}
         self._runtime_generation = 0
         self.logger = MarieLogger(self.__class__.__name__)
@@ -407,7 +407,7 @@ class EmbeddedPlugins:
 
     def _require_spec_client(
         self, package: str
-    ) -> tuple[PluginToolSpec, PluginDaemonClient]:
+    ) -> tuple[PluginInvocationSpec, PluginDaemonClient]:
         spec = self._specs.get(package)
         if spec is None or self._client is None:
             raise ValueError(f"plugin package is not installed: {package}")
@@ -429,18 +429,16 @@ class EmbeddedPlugins:
     @staticmethod
     def _invoke_client(
         client: PluginDaemonClient,
-        spec: PluginToolSpec,
+        spec: PluginInvocationSpec,
         entry: _PluginEntry,
         action: str,
         payload: dict[str, Any],
         request_id: str,
         trace_id: str,
-    ) -> Any:
+    ) -> list[dict[str, Any]]:
         return client.invoke(
-            spec,
+            spec.model_copy(update={'action_id': f'actions/{action}'}),
             payload,
-            action_id=f"actions/{action}",
-            action_type="stub",
             request_id=request_id,
             trace_id=trace_id,
             runtime_policy=entry.runtime_policy,
@@ -470,10 +468,9 @@ class EmbeddedPlugins:
         archive = Path(entry.path).read_bytes()
         install_id = f"{self._executor_identity}@{self._daemon_addr}/{entry.package}"
 
-        spec = PluginToolSpec(
-            type="extension_tool",
-            tool_name=_tool_name(entry.package),
-            tool_ref=entry.package,
+        spec = PluginInvocationSpec(
+            action_type='stub',
+            action_id='actions/install',
             install_id=install_id,
             package_id=install_id,
             package_ref=package_ref,
@@ -585,21 +582,9 @@ def inspect_archive(zip_path: str) -> tuple[str, str]:
     return package_ref, "sha256:" + hasher.hexdigest()
 
 
-def _tool_name(package: str) -> str:
-    return package.rsplit("/", 1)[-1] or package
-
-
 def _result_from_output(
-    output: Any, *, request_id: str, trace_id: str
+    frames: list[dict[str, Any]], *, request_id: str, trace_id: str
 ) -> PluginInvocationResult:
-    frames = getattr(output, "raw_output", None)
-    if not isinstance(frames, list):
-        content = getattr(output, "content", None)
-        try:
-            frames = json.loads(content) if content else []
-        except (TypeError, ValueError):
-            frames = []
-
     structured_frames = tuple(frame for frame in frames if isinstance(frame, dict))
     stream_data: dict[str, Any] | None = None
     for frame in structured_frames:

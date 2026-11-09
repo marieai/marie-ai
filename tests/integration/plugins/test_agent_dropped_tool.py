@@ -101,7 +101,7 @@ async def test_agent_binds_dropped_tool_per_request(
         for tenant in ['one', 'two']:
             envelope = sign_envelope(
                 build_invocation_envelope(
-                    PluginToolSpec.model_validate(dropped),
+                    PluginToolSpec.model_validate(dropped).to_invocation(),
                     payload={},
                     organization_id=f'org-{tenant}',
                     workspace_id=f'ws-{tenant}',

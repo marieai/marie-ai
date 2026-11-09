@@ -1,4 +1,4 @@
-"""Client for invoking installed plugin tools via the marie plugin daemon.
+"""Client for invoking installed plugin actions via the marie plugin daemon.
 
 Builds the marie runtime envelope and dispatches it to the daemon's real
 ``POST /v1/dispatch/invoke`` endpoint. The daemon protocol (discovery, envelope
@@ -22,26 +22,35 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from marie.instrumentation import start_span
 from opentelemetry import trace as trace_api
 from opentelemetry.trace import StatusCode
 
-from marie.agent.tools.base import ToolOutput
 from marie.constants import DEFAULT_DAEMON_ADDR
-from marie.instrumentation import start_span
 from marie.plugin_daemon import (
+    PluginInvocationSpec,
     build_invocation_envelope,
     discover_daemon,
     parse_daemon_frames,
     sign_envelope,
 )
-from marie.plugins.agent_tool import PluginToolSpec
 from marie.secret_store import CredentialResolver
 
-logger = logging.getLogger("marie.agent.tools.plugin_daemon")
+logger = logging.getLogger("marie.plugin_daemon")
+
+
+class PluginDaemonHTTPError(RuntimeError):
+    """HTTP rejection from the daemon, retaining its status for worker frames."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        super().__init__(
+            f'daemon dispatch returned HTTP {status_code}: {detail}'.rstrip(': ')
+        )
 
 
 class PluginDaemonClient:
-    """Dispatches plugin-tool invocations to the marie plugin daemon.
+    """Dispatches plugin actions and returns the daemon's runtime frames.
 
     Transport is chosen by the execution environment:
       - ``base_url`` set → REMOTE (dispatch to that URL).
@@ -63,6 +72,7 @@ class PluginDaemonClient:
         daemon_addr: str = DEFAULT_DAEMON_ADDR,
         spawn_local: bool = False,
         timeout_s: float = 30.0,
+        max_response_bytes: int = 5 * 1024 * 1024,
         env: dict[str, str] | None = None,
     ) -> None:
         self.organization_id = organization_id
@@ -74,6 +84,9 @@ class PluginDaemonClient:
         # another system.
         self.credential_resolver = credential_resolver or CredentialResolver()
         self.timeout_s = timeout_s
+        if max_response_bytes <= 0:
+            raise ValueError('max_response_bytes must be positive')
+        self.max_response_bytes = max_response_bytes
         self._child: subprocess.Popen[bytes] | None = None
         self._active_responses: dict[str, Any] = {}
         self._cancelled_requests: set[str] = set()
@@ -125,37 +138,25 @@ class PluginDaemonClient:
 
     def invoke(
         self,
-        spec: PluginToolSpec,
+        spec: PluginInvocationSpec,
         payload: dict[str, Any],
         *,
-        action_id: str | None = None,
-        action_type: str = "tool",
         request_id: str | None = None,
         trace_id: str | None = None,
         runtime_policy: dict[str, Any] | None = None,
-    ) -> ToolOutput:
-        # The dify_plugin ToolInvokeRequest requires user_id; inject it from the
-        # execution context (the daemon forwards `payload` opaquely to the plugin).
-        # Credentials are resolved in marie-ai from the spec's requirements.
+        redact_output: bool = False,
+    ) -> list[dict[str, Any]]:
         credentials = self.credential_resolver.resolve(spec.credential_requirements)
         payload = {**payload, "user_id": self.user_id or "", "credentials": credentials}
 
-        # OTel span for the daemon-dispatch hop (a child of the agent's tool span
-        # when called via safe_call). Visible in the standard tracing pipeline.
-        tracer = trace_api.get_tracer("marie.agent.tools.plugin_daemon")
-        span = start_span(tracer, f"plugin.invoke:{spec.tool_name}", span_kind="tool")
+        tracer = trace_api.get_tracer("marie.plugin_daemon")
+        span = start_span(tracer, f"plugin.invoke:{spec.action_id}", span_kind="chain")
         span.set_attribute("plugin.provider", spec.provider_ref or "")
-        span.set_attribute("plugin.tool", spec.tool_ref or "")
+        span.set_attribute("plugin.action_type", spec.action_type)
+        span.set_attribute("plugin.action_id", spec.action_id)
         span.set_attribute("plugin.package_ref", spec.package_ref or "")
         span.set_attribute("plugin.organization_id", self.organization_id)
         span.set_attribute("plugin.daemon_url", self._url)
-        span.set_input(
-            {
-                "provider": spec.provider_ref,
-                "tool": spec.tool_ref,
-                "tool_parameters": payload.get("tool_parameters"),
-            }
-        )
         started = time.perf_counter()
         try:
             timeout_ms = int(
@@ -167,9 +168,6 @@ class PluginDaemonClient:
                 organization_id=self.organization_id,
                 workspace_id=self.workspace_id,
                 user_id=self.user_id,
-                action_id=action_id,
-                action_type=action_type,
-                credential_binding_ids=spec.credential_binding_ids,
                 request_id=request_id,
                 trace_id=trace_id,
                 timeout_ms=timeout_ms,
@@ -185,7 +183,7 @@ class PluginDaemonClient:
                     raise RuntimeError("plugin invocation cancelled")
             span.set_attribute("plugin.request_id", request_id)
             logger.info(
-                f"plugin invoke start tool={spec.tool_ref} provider={spec.provider_ref} "
+                f"plugin invoke start action={spec.action_id} provider={spec.provider_ref} "
                 f"package={spec.package_ref} request_id={request_id} url={self._url}"
             )
             body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
@@ -206,7 +204,15 @@ class PluginDaemonClient:
                 try:
                     if cancelled:
                         raise RuntimeError("plugin invocation cancelled")
-                    raw = response.read().decode("utf-8")
+                    raw_bytes = response.read(self.max_response_bytes + 1)
+                    with self._response_lock:
+                        if request_id in self._cancelled_requests:
+                            raise RuntimeError('plugin invocation cancelled')
+                    if len(raw_bytes) > self.max_response_bytes:
+                        raise RuntimeError(
+                            f'plugin response exceeds {self.max_response_bytes} bytes'
+                        )
+                    raw = raw_bytes.decode("utf-8")
                 finally:
                     with self._response_lock:
                         self._active_responses.pop(request_id, None)
@@ -215,34 +221,35 @@ class PluginDaemonClient:
             except HTTPError as error:
                 detail = ""
                 try:
-                    detail = error.read().decode("utf-8", "replace")
-                except Exception:
+                    detail = error.read(self.max_response_bytes).decode(
+                        "utf-8", "replace"
+                    )
+                except OSError:
                     pass
-                raise RuntimeError(
-                    f"daemon dispatch returned HTTP {error.code}: {detail}".rstrip(": ")
-                ) from error
+                finally:
+                    error.close()
+                if redact_output:
+                    detail = _redact_values(detail, list(credentials.values()))
+                raise PluginDaemonHTTPError(error.code, detail) from error
             except (OSError, URLError, TimeoutError) as error:
                 raise RuntimeError(f"daemon dispatch failed: {error}") from error
 
             frames = parse_daemon_frames(raw, request_id)
+            if redact_output:
+                frames = _redact_values(frames, list(credentials.values()))
             duration_ms = (time.perf_counter() - started) * 1000
             span.set_attribute("plugin.frame_count", len(frames))
             span.set_attribute("plugin.duration_ms", round(duration_ms, 1))
             span.set_output({"frame_count": len(frames)})
             span.set_status(StatusCode.OK)
             logger.info(
-                f"plugin invoke ok tool={spec.tool_ref} frames={len(frames)} "
+                f"plugin invoke ok action={spec.action_id} frames={len(frames)} "
                 f"duration_ms={duration_ms:.1f} request_id={request_id}"
             )
-            return ToolOutput(
-                content=json.dumps(frames, separators=(",", ":")),
-                tool_name=spec.tool_name or "plugin_tool",
-                raw_input=payload,
-                raw_output=frames,
-            )
+            return frames
         except Exception as error:
             span.set_status(StatusCode.ERROR, str(error)[:200])
-            logger.error(f"plugin invoke failed tool={spec.tool_ref}: {error}")
+            logger.error(f"plugin invoke failed action={spec.action_id}: {error}")
             raise
         finally:
             span.end()
@@ -281,3 +288,19 @@ class PluginDaemonClient:
 
     def __exit__(self, *exc: object) -> None:
         self.close()
+
+
+def _redact_values(value: Any, secrets: list[str]) -> Any:
+    if isinstance(value, str):
+        for secret in secrets:
+            if secret:
+                value = value.replace(secret, '[REDACTED]')
+        return value
+    if isinstance(value, list):
+        return [_redact_values(item, secrets) for item in value]
+    if isinstance(value, dict):
+        return {
+            _redact_values(key, secrets): _redact_values(item, secrets)
+            for key, item in value.items()
+        }
+    return value

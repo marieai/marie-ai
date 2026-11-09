@@ -23,8 +23,11 @@ from docarray.documents import TextDoc
 from marie.executor.extensions.plugin_daemon_executor import MariePluginDaemonExecutor
 from marie.job.common import JobInfo, JobStatus
 from marie.job.gateway_job_distributor import GatewayJobDistributor
-from marie.plugin_daemon import build_invocation_envelope, sign_envelope
-from marie.plugins.agent_tool import PluginToolSpec
+from marie.plugin_daemon import (
+    PluginInvocationSpec,
+    build_invocation_envelope,
+    sign_envelope,
+)
 from marie.plugins.embedded import inspect_archive
 
 DAEMON_DIR = Path(__file__).resolve().parents[3] / 'packages' / 'marie-plugin-daemon'
@@ -54,6 +57,7 @@ def test_scheduled_executor_invokes_secured_daemon(
     unused_tcp_port: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    action_type = 'tool'
     addr = f'127.0.0.1:{unused_tcp_port}'
     url = f'http://{addr}'
     key_id = 'executor-integration-test'
@@ -167,15 +171,20 @@ def test_scheduled_executor_invokes_secured_daemon(
             for name in ('marie-extension.yaml', 'main.py', 'requirements.txt'):
                 package.write(DAEMON_DIR / 'testdata' / 'fixture-plugin' / name, name)
         package_ref, digest = inspect_archive(str(archive))
-        spec = PluginToolSpec(
-            tool_ref='echo',
+        spec = PluginInvocationSpec(
+            action_type=action_type,
+            action_id=f'{action_type}s/echo',
+            install_id='fixture-install',
             package_ref=package_ref,
             package_digest=digest,
             package_id='fixture-package',
         )
         install_envelope = sign_envelope(
             build_invocation_envelope(
-                spec, payload={}, organization_id='test-org', workspace_id='test-ws'
+                spec,
+                payload={},
+                organization_id='test-org',
+                workspace_id='test-ws',
             ),
             key_id=key_id,
             secret=secret,
@@ -198,13 +207,22 @@ def test_scheduled_executor_invokes_secured_daemon(
                     'uri': source.as_uri(),
                     'op_params': {
                         'plugin': {
-                            'tool_ref': 'echo',
+                            **(
+                                {'tool_ref': 'echo'}
+                                if action_type == 'tool'
+                                else {
+                                    'action_type': 'datasource',
+                                    'action_id': 'datasources/echo',
+                                }
+                            ),
+                            'install_id': 'fixture-install',
                             'package_ref': package_ref,
                             'package_digest': digest,
                             'package_id': 'fixture-package',
                         },
                         'organization_id': 'test-org',
                         'workspace_id': 'test-ws',
+                        'source_id': 'test-source',
                         'url': 'https://example.com/signed?name=caf\u00e9&limit=2',
                     },
                 }
@@ -214,7 +232,7 @@ def test_scheduled_executor_invokes_secured_daemon(
             GatewayJobDistributor()._build_payload('signed-job', job)
         )
         docs = asyncio.run(
-            executor.connector_invoke(DocList[TextDoc]([]), parameters=parameters)
+            executor.invoke_plugin(DocList[TextDoc]([]), parameters=parameters)
         )
         frames = [json.loads(doc.text) for doc in docs]
         assert [frame['type'] for frame in frames] == ['stream', 'end'], frames
@@ -229,7 +247,7 @@ def test_scheduled_executor_invokes_secured_daemon(
             'sha256:' + '0' * 64
         )
         docs = asyncio.run(
-            executor.connector_invoke(DocList[TextDoc]([]), parameters=wrong_version)
+            executor.invoke_plugin(DocList[TextDoc]([]), parameters=wrong_version)
         )
         assert len(docs) == 1
         assert json.loads(docs[0].text)['error']['message'] == (
@@ -246,7 +264,7 @@ def test_scheduled_executor_invokes_secured_daemon(
         )
         try:
             docs = asyncio.run(
-                wrong_key.connector_invoke(DocList[TextDoc]([]), parameters=parameters)
+                wrong_key.invoke_plugin(DocList[TextDoc]([]), parameters=parameters)
             )
             assert (
                 json.loads(docs[0].text)['error']['message']

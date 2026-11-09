@@ -66,6 +66,13 @@ def test_partial_signing_configuration_is_rejected(setting: str) -> None:
         )
 
 
+def test_generic_handler_keeps_execute_endpoint() -> None:
+    executor = MariePluginDaemonExecutor(
+        daemon_url='http://127.0.0.1:1', start=False, env={'PATH': ''}
+    )
+    assert executor.requests['/execute'].fn == MariePluginDaemonExecutor.invoke_plugin
+
+
 def test_sidecar_status_reports_health():
     server = ThreadingHTTPServer(("127.0.0.1", 0), HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -73,7 +80,9 @@ def test_sidecar_status_reports_health():
 
     try:
         url = f"http://127.0.0.1:{server.server_port}"
-        executor = MariePluginDaemonExecutor(daemon_url=url, start=False, env={"PATH": ""})
+        executor = MariePluginDaemonExecutor(
+            daemon_url=url, start=False, env={"PATH": ""}
+        )
         status = executor.status_payload()
     finally:
         server.shutdown()
@@ -86,10 +95,12 @@ def test_sidecar_status_reports_health():
 
 
 def test_connector_invocation_rejects_missing_plugin_identity():
-    executor = MariePluginDaemonExecutor(daemon_url="http://127.0.0.1:1", start=False, env={"PATH": ""})
+    executor = MariePluginDaemonExecutor(
+        daemon_url="http://127.0.0.1:1", start=False, env={"PATH": ""}
+    )
 
     docs = asyncio.run(
-        executor.connector_invoke(
+        executor.invoke_plugin(
             DocList[TextDoc]([]),
             parameters={"job_id": "request-2"},
         )
@@ -299,16 +310,18 @@ class DispatchHandler(BaseHTTPRequestHandler):
         pass
 
 
-def _run_connector_invoke(parameters: dict):
+def _run_invoke_plugin(parameters: dict):
     DispatchHandler.envelopes = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), DispatchHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         url = f"http://127.0.0.1:{server.server_port}"
-        executor = MariePluginDaemonExecutor(daemon_url=url, start=False, env={"PATH": ""})
+        executor = MariePluginDaemonExecutor(
+            daemon_url=url, start=False, env={"PATH": ""}
+        )
         out = asyncio.run(
-            executor.connector_invoke(DocList[TextDoc]([]), parameters=parameters)
+            executor.invoke_plugin(DocList[TextDoc]([]), parameters=parameters)
         )
     finally:
         server.shutdown()
@@ -360,7 +373,7 @@ def test_slow_connector_response_keeps_event_loop_and_other_requests_running(
 
     async def run() -> None:
         slow = asyncio.create_task(
-            executor.connector_invoke(
+            executor.invoke_plugin(
                 DocList[TextDoc]([]), parameters={"plugin": dict(_PLUGIN), "slow": True}
             )
         )
@@ -374,7 +387,7 @@ def test_slow_connector_response_keeps_event_loop_and_other_requests_running(
                 with pytest.raises(asyncio.CancelledError):
                     await asyncio.wait_for(slow, timeout=1)
             fast = await asyncio.wait_for(
-                executor.connector_invoke(
+                executor.invoke_plugin(
                     DocList[TextDoc]([]), parameters={"plugin": dict(_PLUGIN)}
                 ),
                 timeout=1,
@@ -400,8 +413,8 @@ def test_slow_connector_response_keeps_event_loop_and_other_requests_running(
         executor.shutdown()
 
 
-def test_connector_invoke_reads_identity_from_params():
-    out, envelopes = _run_connector_invoke(
+def test_invoke_plugin_reads_identity_from_params():
+    out, envelopes = _run_invoke_plugin(
         {
             "resource": "pages",
             "operation": "web_reader",
@@ -467,7 +480,7 @@ def test_scheduled_connector_preserves_settings_through_distributor(
         GatewayJobDistributor()._build_payload("job-scheduled", job)
     )
 
-    out, envelopes = _run_connector_invoke(parameters)
+    out, envelopes = _run_invoke_plugin(parameters)
 
     assert any('"ok":true' in doc.text for doc in out), [doc.text for doc in out]
     assert len(envelopes) == 1
@@ -492,7 +505,7 @@ def test_scheduled_connector_preserves_settings_through_distributor(
 
 
 def test_scheduled_connector_prefers_nested_settings_and_execution_context() -> None:
-    out, envelopes = _run_connector_invoke(
+    out, envelopes = _run_invoke_plugin(
         {
             "job_id": "job-context",
             "organization_id": "org-context",
@@ -527,8 +540,8 @@ def test_scheduled_connector_prefers_nested_settings_and_execution_context() -> 
     }
 
 
-def test_connector_invoke_nil_uuid_tenant_fallback():
-    out, envelopes = _run_connector_invoke(
+def test_invoke_plugin_nil_uuid_tenant_fallback():
+    out, envelopes = _run_invoke_plugin(
         {
             "operation": "web_reader",
             "plugin": dict(_PLUGIN),
@@ -541,16 +554,20 @@ def test_connector_invoke_nil_uuid_tenant_fallback():
     assert env["workspaceId"] == "00000000-0000-0000-0000-000000000000"
 
 
-def test_connector_invoke_resolves_credentials_into_payload(monkeypatch):
+def test_invoke_plugin_resolves_credentials_into_payload(monkeypatch):
     # W2 Task 3: a credential requirement with an env: secret_ref resolves in
     # marie-ai (CredentialResolver) and is injected into the daemon payload.
     monkeypatch.setenv("READER_API_KEY", "s3cr3t")
-    out, envelopes = _run_connector_invoke(
+    out, envelopes = _run_invoke_plugin(
         {
             "operation": "web_reader",
             "plugin": dict(_PLUGIN),
             "credential_requirements": [
-                {"name": "api_key", "secret_ref": "env:READER_API_KEY", "required": True}
+                {
+                    "name": "api_key",
+                    "secret_ref": "env:READER_API_KEY",
+                    "required": True,
+                }
             ],
             "organization_id": "org-1",
             "workspace_id": "ws-1",
@@ -560,3 +577,59 @@ def test_connector_invoke_resolves_credentials_into_payload(monkeypatch):
     env = envelopes[0]
     # build_invocation_envelope forwards the op payload (incl. resolved creds)
     assert env["payload"]["credentials"] == {"api_key": "s3cr3t"}
+
+
+def test_datasource_requires_signed_saved_binding_admission() -> None:
+    out, envelopes = _run_invoke_plugin(
+        {
+            'job_id': 'sync-job-1',
+            'plugin': {
+                'action_type': 'datasource',
+                'action_id': 'datasources/confluence',
+                'install_id': 'install-1',
+                'package_id': 'package-1',
+                'package_ref': 'ext.test.sources',
+                'package_digest': 'sha256:abc',
+                'credential_binding_ids': ['binding-1'],
+            },
+            'organization_id': 'org-1',
+            'workspace_id': 'workspace-1',
+            'source_id': 'source-1',
+            'configuration': {'space': 'Engineering'},
+            'runtime_policy': {'timeoutMs': 12000, 'networkPolicy': 'internal_only'},
+        }
+    )
+    assert envelopes == []
+    assert json.loads(out[0].text)['error']['code'] == 'invalid_envelope'
+
+
+@pytest.mark.parametrize('missing', ['organization_id', 'workspace_id', 'source_id'])
+@pytest.mark.parametrize('value', [None, '', '00000000-0000-0000-0000-000000000000'])
+def test_datasource_requires_real_scope_before_dispatch(missing, value) -> None:
+    parameters = {
+        'plugin': {
+            **_PLUGIN,
+            'action_type': 'datasource',
+            'action_id': 'datasources/pages',
+        },
+        'organization_id': 'org-1',
+        'workspace_id': 'workspace-1',
+        'source_id': 'source-1',
+        missing: value,
+    }
+    out, envelopes = _run_invoke_plugin(parameters)
+    assert envelopes == []
+    assert json.loads(out[0].text)['error']['code'] == 'invalid_envelope'
+
+
+def test_datasource_does_not_derive_action_from_tool_ref() -> None:
+    out, envelopes = _run_invoke_plugin(
+        {
+            'plugin': {**_PLUGIN, 'action_type': 'datasource'},
+            'organization_id': 'org-1',
+            'workspace_id': 'workspace-1',
+            'source_id': 'source-1',
+        }
+    )
+    assert envelopes == []
+    assert json.loads(out[0].text)['error']['code'] == 'invalid_envelope'

@@ -1,5 +1,3 @@
-from pydantic import Field, model_validator
-
 from marie.extension.agent import AgentDefinition
 from marie.extension.datasource import DatasourceDefinition
 from marie.extension.endpoint import EndpointDefinition
@@ -10,6 +8,7 @@ from marie.extension.settings import ExtensionModel
 from marie.extension.tool import ToolDefinition
 from marie.extension.trigger import TriggerDefinition
 from marie.extension.trust import TrustSpec
+from pydantic import Field, model_validator
 
 
 class PackageMetadata(ExtensionModel):
@@ -68,4 +67,17 @@ class ExtensionPackage(ExtensionModel):
     def validate_kind(self) -> "ExtensionPackage":
         if self.kind != "ExtensionPackage":
             raise ValueError("kind must be ExtensionPackage")
+        datasource_providers = {
+            provider.ref
+            for provider in self.providers
+            if provider.type == 'datasource_provider'
+        }
+        if any(
+            datasource.provider_ref
+            and datasource.provider_ref not in datasource_providers
+            for datasource in self.datasources
+        ):
+            raise ValueError(
+                'Datasource providerRef must name a declared datasource_provider'
+            )
         return self

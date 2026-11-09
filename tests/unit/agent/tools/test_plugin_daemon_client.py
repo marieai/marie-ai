@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from marie.plugin_daemon import build_invocation_envelope, sign_envelope
+from marie.plugin_daemon import (
+    build_invocation_envelope,
+    canonical_runtime_envelope,
+    sign_envelope,
+)
 from marie.plugins.agent_tool import PluginToolSpec
 
 # The marie daemon ships a signed fixture; signing it in Python must reproduce the
@@ -34,6 +38,7 @@ def test_signing_matches_daemon_fixture_byte_for_byte():
     assert signed["signature"]["value"] == expected
     assert signed["signature"]["algorithm"] == "hmac-sha256"
 
+
 # Allowed action types (mirrors policy.allowedActionType in the marie daemon).
 _ALLOWED_ACTION_TYPES = {
     "tool",
@@ -45,6 +50,24 @@ _ALLOWED_ACTION_TYPES = {
     "webapp",
     "stub",
 }
+
+
+def test_canonical_envelope_preserves_null_and_matches_daemon_numbers():
+    assert canonical_runtime_envelope(
+        {
+            'payload': {
+                'cursor': None,
+                'threshold': 1.0,
+                'small': 1e-7,
+                'decimal': 1e-6,
+                'large': 1e20,
+                'exponent': 1e21,
+            },
+        }
+    ) == (
+        '{"payload":{"cursor":null,"decimal":0.000001,"exponent":1e+21,'
+        '"large":100000000000000000000,"small":1e-7,"threshold":1}}'
+    )
 
 
 def _spec(**overrides):
@@ -59,7 +82,7 @@ def _spec(**overrides):
         "packageDigest": "sha256:abc",
     }
     base.update(overrides)
-    return PluginToolSpec.model_validate(base)
+    return PluginToolSpec.model_validate(base).to_invocation()
 
 
 def test_envelope_is_policy_compliant():
@@ -119,13 +142,16 @@ def test_envelope_requires_org_and_workspace():
 
 def test_envelope_accepts_generic_action_identity_credentials_and_policy():
     env = build_invocation_envelope(
-        _spec(),
+        _spec().model_copy(
+            update={
+                "action_type": "stub",
+                "action_id": "actions/run_repair",
+                "credential_binding_ids": ["binding-1"],
+            }
+        ),
         payload={"action": "run_repair"},
         organization_id="org-1",
         workspace_id="ws-1",
-        action_type="stub",
-        action_id="actions/run_repair",
-        credential_binding_ids=["binding-1"],
         request_id="request-1",
         trace_id="trace-1",
         timeout_ms=600_000,

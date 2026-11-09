@@ -11,6 +11,7 @@ binds tenant and signing context; the daemon client resolves credentials.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from marie.agent.tools.base import AgentTool, ToolMetadata, ToolOutput
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from marie.plugin_daemon import PluginInvocationSpec
 from marie.secret_store import CredentialRequirement
 
 if TYPE_CHECKING:
@@ -87,6 +89,22 @@ class PluginToolSpec(BaseModel):
                 "(install_id / package_ref / provider_ref)"
             )
         return self
+
+    def to_invocation(self) -> PluginInvocationSpec:
+        """Translate the dropped tool into explicit daemon action claims."""
+        return PluginInvocationSpec(
+            action_type='tool',
+            action_id=f'tools/{self.tool_name}',
+            install_id=self.install_id,
+            provider_id=self.provider_id,
+            provider_ref=self.provider_ref,
+            package_id=self.package_id,
+            package_ref=self.package_ref,
+            package_digest=self.package_digest,
+            package_trust_level=self.package_trust_level,
+            credential_requirements=self.credential_requirements,
+            credential_binding_ids=self.credential_binding_ids,
+        )
 
 
 def is_plugin_tool_spec(spec: dict[str, Any]) -> bool:
@@ -161,17 +179,26 @@ class PluginTool(AgentTool):
         }
 
     def call(self, **kwargs: Any) -> ToolOutput:
+        payload = self.build_payload(kwargs)
+        spec = self._spec.to_invocation()
         if self._client is not None:
-            return self._client.invoke(self._spec, self.build_payload(kwargs))
-        factory = _runtime_client_factory.get()
-        if factory is None:
-            raise RuntimeError(
-                "PluginTool has no daemon client bound; the execution environment "
-                "must call bind_client() (or construct PluginTool(spec, client)) "
-                f"before invoking tool={self._spec.tool_name!r}"
-            )
-        with factory() as client:
-            return client.invoke(self._spec, self.build_payload(kwargs))
+            frames = self._client.invoke(spec, payload)
+        else:
+            factory = _runtime_client_factory.get()
+            if factory is None:
+                raise RuntimeError(
+                    "PluginTool has no daemon client bound; the execution environment "
+                    "must call bind_client() (or construct PluginTool(spec, client)) "
+                    f"before invoking tool={self._spec.tool_name!r}"
+                )
+            with factory() as client:
+                frames = client.invoke(spec, payload)
+        return ToolOutput(
+            content=json.dumps(frames, separators=(',', ':')),
+            tool_name=self._spec.tool_name or 'plugin_tool',
+            raw_input=payload,
+            raw_output=frames,
+        )
 
     def _default_description(self) -> str:
         return f"Invoke the installed plugin tool {self._spec.tool_name}."

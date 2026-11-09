@@ -268,7 +268,7 @@ async def test_250_sources_progress_and_keep_plugin_work_outside_sensor(
             )
             active += 1
             maximum = max(maximum, active)
-            await executor.connector_invoke(
+            await executor.invoke_plugin(
                 DocList[TextDoc](),
                 parameters={
                     'job_id': str(row['id']),

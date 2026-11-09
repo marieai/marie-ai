@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from marie.agent.tools.base import ToolOutput
 from marie.agent.tools.registry import resolve_tools
 
 from marie.executor.agent.tools.registry import resolve_executor_tools
+from marie.plugin_daemon import PluginInvocationSpec
 from marie.plugins.agent_tool import (
     PluginTool,
     PluginToolSpec,
@@ -61,7 +63,12 @@ def test_is_plugin_tool_spec_discriminates():
     # native/base tool (no source/toolRef/installId)
     assert (
         is_plugin_tool_spec(
-            {"id": "x", "name": "calculator", "slug": "calculator", "toolType": "function"}
+            {
+                "id": "x",
+                "name": "calculator",
+                "slug": "calculator",
+                "toolType": "function",
+            }
         )
         is False
     )
@@ -107,3 +114,40 @@ def test_build_payload_is_dify_invoke_tool_shape():
         "credentials": {},
         "tool_parameters": {"url": "https://example.com"},
     }
+
+
+@pytest.mark.parametrize('runtime_client', [False, True])
+def test_tool_adapts_shared_frames_to_agent_output(runtime_client: bool) -> None:
+    frames = [{'type': 'stream', 'data': {'result': 'ok'}}]
+    calls = []
+
+    class Client:
+        def invoke(self, spec, payload):
+            calls.append((spec, payload))
+            return frames
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    client = Client()
+    tool = PluginTool(PluginToolSpec.model_validate(DROPPED_TOOL))
+    if runtime_client:
+        with PluginTool.runtime(lambda: client):
+            output = tool.call(url='https://example.com')
+    else:
+        output = tool.bind_client(client).call(url='https://example.com')
+
+    assert isinstance(output, ToolOutput)
+    assert output.tool_name == 'jina_reader'
+    assert output.raw_output == frames
+    assert output.raw_input['tool_parameters'] == {'url': 'https://example.com'}
+    spec, payload = calls[0]
+    assert isinstance(spec, PluginInvocationSpec)
+    assert spec.action_type == 'tool'
+    assert spec.action_id == 'tools/jina_reader'
+    assert spec.install_id == 'inst-1'
+    assert spec.provider_id == 'prov-1'
+    assert payload['tool'] == 'jina_reader'

@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from marie.agent.tools.base import ToolOutput
 from marie.constants import DEFAULT_DAEMON_ADDR
 from marie.plugins.embedded import (
     EmbeddedPlugins,
@@ -54,15 +53,6 @@ def _config(zip_path: str) -> list[dict]:
             "timeout_s": 120,
         }
     ]
-
-
-def _tool_output(frames: list[dict]) -> ToolOutput:
-    return ToolOutput(
-        content=json.dumps(frames),
-        tool_name="document-extraction",
-        raw_input={},
-        raw_output=frames,
-    )
 
 
 class _FakeClient:
@@ -222,7 +212,9 @@ def test_install_hydrates_credentials_and_provider_identity(tmp_path):
         }
     )
     client = _FakeClient()
-    plugins = EmbeddedPlugins(config, "agent_executor", client_factory=_factory([client]))
+    plugins = EmbeddedPlugins(
+        config, "agent_executor", client_factory=_factory([client])
+    )
     plugins._post_install = lambda client, envelope, archive, timeout_s: _CANNED_INSTALL
 
     plugins.ensure_started()
@@ -245,9 +237,7 @@ def test_empty_config_is_lazy_and_ensure_started_raises():
         plugins.ensure_started()
 
 
-def test_daemon_client_discovery_inherits_process_environment(
-    monkeypatch, tmp_path
-):
+def test_daemon_client_discovery_inherits_process_environment(monkeypatch, tmp_path):
     from marie.plugins import daemon_client
 
     binary = tmp_path / 'marie-plugin-daemon'
@@ -371,7 +361,7 @@ def test_invoke_delegates_and_extracts_stream(tmp_path):
         {"type": "stream", "data": {"markdown": "# Hi", "metadata": {"page_count": 2}}},
         {"type": "end"},
     ]
-    client = _FakeClient(invoke_result=_tool_output(frames))
+    client = _FakeClient(invoke_result=frames)
     plugins, factory = _started(zip_path, [client])
 
     result = plugins.invoke(_PACKAGE, "extract", {"path": "/x.pdf", "format": "pdf"})
@@ -384,8 +374,8 @@ def test_invoke_delegates_and_extracts_stream(tmp_path):
     assert payload["format"] == "pdf"
     assert payload["execution"]["request_id"] == invocation["request_id"]
     assert payload["execution"]["trace_id"] == invocation["trace_id"]
-    assert invocation["action_id"] == "actions/extract"
-    assert invocation["action_type"] == "stub"
+    assert spec.action_id == "actions/extract"
+    assert spec.action_type == "stub"
     assert invocation["runtime_policy"]["timeoutMs"] == 120_000
     assert spec.package_ref == _PACKAGE_ID
 
@@ -397,7 +387,7 @@ def test_invoke_result_preserves_all_frames_and_execution_metadata(tmp_path):
         {"type": "stream", "data": {"outcome": "success"}},
         {"type": "end", "data": {"usage": {"tokens": 12}}},
     ]
-    client = _FakeClient(invoke_result=_tool_output(frames))
+    client = _FakeClient(invoke_result=frames)
     plugins, _ = _started(zip_path, [client])
 
     result = plugins.invoke_result(
@@ -429,7 +419,7 @@ def test_invoke_result_preserves_all_frames_and_execution_metadata(tmp_path):
 def test_invoke_raises_on_error_frame(tmp_path):
     zip_path = _build_plugin_zip(tmp_path)
     frames = [{"type": "error", "data": {"message": "conversion failed"}}]
-    client = _FakeClient(invoke_result=_tool_output(frames))
+    client = _FakeClient(invoke_result=frames)
     plugins, factory = _started(zip_path, [client])
 
     with pytest.raises(RuntimeError, match="conversion failed"):
@@ -440,19 +430,18 @@ def test_invoke_raises_on_error_frame(tmp_path):
 def test_retryable_error_frame_respawns_once(tmp_path):
     zip_path = _build_plugin_zip(tmp_path)
     failed = _FakeClient(
-        invoke_result=_tool_output(
-            [
-                {
-                    "type": "error",
-                    "data": {"message": "runtime stopped", "retryable": True},
-                }
-            ]
-        )
+        invoke_result=[
+            {
+                "type": "error",
+                "data": {"message": "runtime stopped", "retryable": True},
+            }
+        ]
     )
     healthy = _FakeClient(
-        invoke_result=_tool_output(
-            [{"type": "stream", "data": {"outcome": "success"}}, {"type": "end"}]
-        )
+        invoke_result=[
+            {"type": "stream", "data": {"outcome": "success"}},
+            {"type": "end"},
+        ]
     )
     plugins, factory = _started(zip_path, [failed, healthy])
 
@@ -479,9 +468,7 @@ def test_respawn_retry_reuses_request_identity_and_payload(tmp_path):
             operation_id = payload["operation_id"]
             if operation_id not in committed_effects:
                 committed_effects.append(operation_id)
-            return _tool_output(
-                [{"type": "stream", "data": {"outcome": "success"}}]
-            )
+            return [{"type": "stream", "data": {"outcome": "success"}}]
 
     failed = CommitThenCrash()
     healthy = IdempotentRetry()
@@ -500,16 +487,14 @@ def test_respawn_retry_reuses_request_identity_and_payload(tmp_path):
     assert first_payload == second_payload
     assert first_invocation["request_id"] == second_invocation["request_id"]
     assert first_invocation["trace_id"] == second_invocation["trace_id"]
-    assert first_invocation["action_id"] == second_invocation["action_id"]
+    assert failed.invocations[0][0].action_id == healthy.invocations[0][0].action_id
     assert committed_effects == ["effect-1"]
 
 
 @pytest.mark.asyncio
 async def test_invoke_async_does_not_block_event_loop(tmp_path):
     zip_path = _build_plugin_zip(tmp_path)
-    client = _BlockingClient(
-        _tool_output([{"type": "stream", "data": {"outcome": "success"}}])
-    )
+    client = _BlockingClient([{"type": "stream", "data": {"outcome": "success"}}])
     plugins, _ = _started(zip_path, [client])
 
     invocation = asyncio.create_task(plugins.invoke_async(_PACKAGE, "extract", {}))
@@ -525,9 +510,7 @@ async def test_invoke_async_does_not_block_event_loop(tmp_path):
 @pytest.mark.asyncio
 async def test_invoke_async_cancellation_does_not_respawn(tmp_path):
     zip_path = _build_plugin_zip(tmp_path)
-    client = _BlockingClient(
-        _tool_output([{"type": "stream", "data": {"outcome": "success"}}])
-    )
+    client = _BlockingClient([{"type": "stream", "data": {"outcome": "success"}}])
     plugins, factory = _started(zip_path, [client])
 
     invocation = asyncio.create_task(
@@ -550,7 +533,7 @@ async def test_invoke_async_cancellation_does_not_respawn(tmp_path):
 
 def test_invoke_raises_when_no_stream_result(tmp_path):
     zip_path = _build_plugin_zip(tmp_path)
-    client = _FakeClient(invoke_result=_tool_output([{"type": "end"}]))
+    client = _FakeClient(invoke_result=[{"type": "end"}])
     plugins, _ = _started(zip_path, [client])
 
     with pytest.raises(RuntimeError, match="no stream result"):
@@ -589,7 +572,7 @@ def test_crash_respawns_once_then_succeeds(tmp_path):
         {"type": "end"},
     ]
     dead = _FakeClient(invoke_error=RuntimeError("dead"))
-    healthy = _FakeClient(invoke_result=_tool_output(frames))
+    healthy = _FakeClient(invoke_result=frames)
     plugins, factory = _started(zip_path, [dead, healthy])
 
     result = plugins.invoke(_PACKAGE, "extract", {"path": "/x.pdf"})

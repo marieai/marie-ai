@@ -11,20 +11,24 @@ from urllib.request import Request, urlopen
 
 from docarray import DocList
 from docarray.documents import TextDoc
+from jsonschema.exceptions import SchemaError
+from jsonschema.exceptions import ValidationError as SchemaValidationError
+from jsonschema.validators import validator_for
+from referencing import Registry
+from referencing.exceptions import Unresolvable
 
 from marie.constants import DEFAULT_DAEMON_ADDR, DEFAULT_TENANT_UUID
 from marie.executor.marie_executor import MarieExecutor
 from marie.logging_core.logger import MarieLogger
 from marie.plugin_daemon import (
-    build_invocation_envelope,
+    PluginInvocationSpec,
     discover_daemon,
-    parse_daemon_frames,
     runtime_error_frame,
-    sign_envelope,
 )
+from marie.plugin_daemon.envelope import verify_envelope
 from marie.plugin_daemon.frames import now_utc
+from marie.plugins.daemon_client import PluginDaemonClient, PluginDaemonHTTPError
 from marie.runtime import requests
-from marie.secret_store import CredentialRequirement, CredentialResolver
 
 
 class MariePluginDaemonExecutor(MarieExecutor):
@@ -100,24 +104,19 @@ class MariePluginDaemonExecutor(MarieExecutor):
         )
 
     @requests(on="/execute")
-    async def connector_invoke(
+    async def invoke_plugin(
         self,
         docs: DocList[TextDoc],
         parameters: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> DocList[TextDoc]:
-        """Dispatch a CONNECTOR node to the plugin daemon and return its frames.
+        """Dispatch an admitted plugin action and return its runtime frames.
 
         Routed here by the fixed endpoint ``plugin_daemon_executor://execute``.
         Scheduled settings come from ``payload.op_params``; direct requests use
-        top-level parameters. Tenant claims come from execution context, falling
-        back to the nil UUID when absent (W2 scope; install + invoke must share
-        the same fallback tenant or the daemon returns ``plugin_not_installed``).
+        top-level parameters. Legacy tools retain the nil-tenant fallback;
+        datasources require explicit organization, workspace and source identity.
         """
-        # Lazy import: marie.agent pulls in heavy dependencies (and itself
-        # imports marie.executor); keep it out of this module's import path.
-        from marie.plugins.agent_tool import PluginToolSpec
-
         execution_params = parameters or {}
         request_id = str(execution_params.get("job_id") or "")
         scheduled_payload = execution_params.get("payload")
@@ -127,45 +126,65 @@ class MariePluginDaemonExecutor(MarieExecutor):
             else None
         )
         params = op_params if isinstance(op_params, dict) else execution_params
-        plugin = params.get("plugin") or {}
-        try:
-            spec = PluginToolSpec(
-                tool_ref=plugin["tool_ref"],
-                tool_name=plugin["tool_ref"],
-                package_ref=plugin["package_ref"],
-                package_digest=plugin["package_digest"],
-                package_trust_level=plugin.get("package_trust_level", "community"),
-                install_id=plugin.get("install_id"),
-                provider_id=plugin.get("provider_id"),
-                package_id=plugin.get("package_id"),
+        if 'invocation_envelope' in params:
+            return frames_to_docs(
+                await self._invoke_datasource(params['invocation_envelope'], request_id)
             )
-        except KeyError as error:
+        try:
+            plugin = params.get('plugin') or {}
+            if not isinstance(plugin, dict):
+                raise ValueError('plugin identity must be an object')
+            action_type = plugin.get('action_type', 'tool')
+            action_id = plugin.get('action_id')
+            if action_type == 'tool' and action_id is None and plugin.get('tool_ref'):
+                action_id = f"tools/{plugin['tool_ref']}"
+            spec = PluginInvocationSpec.model_validate(
+                {
+                    **plugin,
+                    'action_type': action_type,
+                    'action_id': action_id,
+                    'credential_requirements': params.get(
+                        'credential_requirements', []
+                    ),
+                }
+            )
+            if not spec.package_ref or not spec.package_digest:
+                raise ValueError(
+                    'plugin invocation requires package_ref and package_digest'
+                )
+            organization_id = execution_params.get('organization_id') or params.get(
+                'organization_id'
+            )
+            workspace_id = execution_params.get('workspace_id') or params.get(
+                'workspace_id'
+            )
+            if spec.action_type == 'datasource':
+                raise ValueError(
+                    'Datasource invocation requires signed saved-binding admission'
+                )
+            if (
+                params.get('type') == 'datasource'
+                or params.get('action') == 'fetch_page'
+            ):
+                raise ValueError(
+                    'Datasource payload requires signed saved-binding admission'
+                )
+            runtime_policy = params.get('runtime_policy')
+            if runtime_policy is not None and not isinstance(runtime_policy, dict):
+                raise ValueError('runtime_policy must be an object')
+        except (ValueError, TypeError) as error:
             return frames_to_docs(
                 [
                     runtime_error_frame(
                         request_id,
-                        f"connector node missing plugin identity field: {error}",
+                        f"invalid plugin invocation: {error}",
                         "invalid_envelope",
                     )
                 ]
             )
 
-        requirements = [
-            CredentialRequirement(**req)
-            for req in params.get("credential_requirements", [])
-        ]
-        credentials = CredentialResolver().resolve(requirements)
-
-        organization_id = str(
-            execution_params.get("organization_id")
-            or params.get("organization_id")
-            or DEFAULT_TENANT_UUID
-        )
-        workspace_id = str(
-            execution_params.get("workspace_id")
-            or params.get("workspace_id")
-            or DEFAULT_TENANT_UUID
-        )
+        organization_id = str(organization_id or DEFAULT_TENANT_UUID)
+        workspace_id = str(workspace_id or DEFAULT_TENANT_UUID)
         user_id = str(execution_params.get("user_id") or params.get("user_id") or "")
 
         control_keys = {
@@ -176,25 +195,165 @@ class MariePluginDaemonExecutor(MarieExecutor):
             "user_id",
             "job_id",
             "payload",
+            "runtime_policy",
         }
         op_payload = {k: v for k, v in params.items() if k not in control_keys}
-        payload = {**op_payload, "credentials": credentials, "user_id": user_id}
-
-        envelope = build_invocation_envelope(
+        frames = await asyncio.to_thread(
+            self._invoke_daemon,
             spec,
-            payload=payload,
+            op_payload,
+            request_id,
             organization_id=organization_id,
             workspace_id=workspace_id,
             user_id=user_id,
-            action_type=plugin.get("action_type", "tool"),
-            request_id=request_id or None,
+            runtime_policy=runtime_policy,
         )
-        if self._signing_key_id and self._signing_secret:
-            envelope = sign_envelope(
+        return frames_to_docs(frames)
+
+    async def _invoke_datasource(
+        self, envelope: dict[str, Any], request_id: str
+    ) -> list[dict[str, Any]]:
+        try:
+            if not isinstance(envelope, dict):
+                raise ValueError('Plugin admission must be an object')
+            verify_envelope(
                 envelope, key_id=self._signing_key_id, secret=self._signing_secret
             )
-        frames = await asyncio.to_thread(self._invoke_daemon, envelope, request_id)
-        return frames_to_docs(frames)
+            payload = envelope['payload']
+            claims = envelope['input']
+            scope = [
+                envelope.get('organizationId'),
+                envelope.get('workspaceId'),
+                envelope.get('installId'),
+                envelope.get('userId'),
+                envelope.get('packageId'),
+                envelope.get('packageRef'),
+                envelope.get('packageDigest'),
+            ]
+            scope += [
+                payload.get(key) for key in ('source_id', 'index_id', 'tenant_id')
+            ]
+            if not all(
+                isinstance(value, str)
+                and value.strip()
+                and value.strip() != DEFAULT_TENANT_UUID
+                for value in scope
+            ):
+                raise ValueError(
+                    'Datasource admission requires a complete binding scope'
+                )
+            if (
+                envelope.get('actionType') != 'datasource'
+                or payload.get('type') != 'datasource'
+                or payload.get('action') != 'fetch_page'
+                or payload.get('datasource') != envelope.get('actionId')
+            ):
+                raise ValueError('Datasource admission action mismatch')
+            limit = payload.get('limit')
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 100
+            ):
+                raise ValueError('Datasource admission requires a bounded page limit')
+            if 'credentials' in payload:
+                raise ValueError(
+                    'Datasource admission must carry references, not credentials'
+                )
+            spec = PluginInvocationSpec(
+                action_type='datasource',
+                action_id=envelope['actionId'],
+                install_id=envelope['installId'],
+                package_id=envelope['packageId'],
+                package_ref=envelope['packageRef'],
+                package_digest=envelope['packageDigest'],
+                package_trust_level=envelope['packageTrustLevel'],
+                provider_id=envelope.get('providerId'),
+                credential_binding_ids=envelope['credentialBindingIds'],
+                credential_requirements=claims['credential_requirements'],
+            )
+            request_id = envelope['requestId']
+            schema = claims['output_schema']
+            if not isinstance(schema, dict):
+                raise ValueError('Datasource admission requires an output schema')
+            validator_type = validator_for(schema)
+            validator_type.check_schema(schema)
+            validator = validator_type(schema, registry=Registry())
+        except (ValueError, TypeError, KeyError, AttributeError, SchemaError):
+            return [
+                runtime_error_frame(
+                    request_id,
+                    'Invalid or expired datasource admission',
+                    'invalid_envelope',
+                )
+            ]
+        try:
+            frames = await asyncio.to_thread(
+                self._invoke_daemon,
+                spec,
+                payload,
+                request_id,
+                organization_id=envelope['organizationId'],
+                workspace_id=envelope['workspaceId'],
+                user_id=envelope['userId'],
+                runtime_policy=envelope['runtimePolicy'],
+                redact_output=True,
+            )
+        except (ValueError, TypeError):
+            return [
+                runtime_error_frame(
+                    request_id,
+                    'Datasource credentials are unavailable in this executor',
+                    'credential_unavailable',
+                )
+            ]
+        if any(frame.get('type') == 'error' for frame in frames):
+            return frames
+        try:
+            pages = [frame['data'] for frame in frames if frame.get('type') == 'stream']
+            if len(pages) != 1 or not any(
+                frame.get('type') == 'end' for frame in frames
+            ):
+                raise ValueError('Incomplete datasource page')
+            page = pages[0]
+            records = page['records']
+            cursor = page.get('next_cursor')
+            if (
+                not isinstance(records, list)
+                or len(records) > limit
+                or set(page) - {'records', 'next_cursor'}
+            ):
+                raise ValueError('Invalid datasource page')
+            if cursor is not None and (
+                not isinstance(cursor, str) or not cursor or len(cursor) > 4096
+            ):
+                raise ValueError('Invalid datasource cursor')
+            for record in records:
+                validator.validate(record)
+            if (
+                len(
+                    json.dumps(page, ensure_ascii=False, allow_nan=False).encode(
+                        'utf-8'
+                    )
+                )
+                > 1024 * 1024
+            ):
+                raise ValueError('Datasource page exceeds its bound')
+        except (
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            SchemaError,
+            SchemaValidationError,
+            Unresolvable,
+        ):
+            return [
+                runtime_error_frame(
+                    request_id, 'Invalid datasource output', 'invalid_datasource_output'
+                )
+            ]
+        return frames
 
     def status_payload(self) -> dict[str, Any]:
         self._ensure_child()
@@ -337,7 +496,16 @@ class MariePluginDaemonExecutor(MarieExecutor):
         return health
 
     def _invoke_daemon(
-        self, envelope: dict[str, Any], request_id: str
+        self,
+        spec: PluginInvocationSpec,
+        payload: dict[str, Any],
+        request_id: str,
+        *,
+        organization_id: str,
+        workspace_id: str,
+        user_id: str,
+        runtime_policy: dict[str, Any] | None,
+        redact_output: bool = False,
     ) -> list[dict[str, Any]]:
         self._ensure_child()
         if self.discovery.mode == "unavailable":
@@ -356,31 +524,33 @@ class MariePluginDaemonExecutor(MarieExecutor):
                 )
             ]
 
-        body = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
-        request = Request(
-            f"{url.rstrip('/')}/v1/dispatch/invoke",
-            data=body,
-            headers={
-                "Accept": "text/event-stream, application/x-ndjson, application/json",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
         try:
-            with urlopen(request, timeout=self.invoke_timeout_s) as response:
-                raw = response.read().decode("utf-8")
-        except HTTPError as error:
+            with PluginDaemonClient(
+                base_url=url,
+                organization_id=organization_id,
+                workspace_id=workspace_id,
+                user_id=user_id,
+                signing_key_id=self._signing_key_id,
+                signing_secret=self._signing_secret,
+                timeout_s=self.invoke_timeout_s,
+            ) as client:
+                return client.invoke(
+                    spec,
+                    payload,
+                    request_id=request_id or None,
+                    runtime_policy=runtime_policy,
+                    redact_output=redact_output,
+                )
+        except PluginDaemonHTTPError as error:
             return [
                 runtime_error_frame(
                     request_id,
-                    f"daemon invoke returned HTTP {error.code}",
+                    f"daemon invoke returned HTTP {error.status_code}",
                     "runtime_http_error",
                 )
             ]
-        except (OSError, URLError, TimeoutError) as error:
+        except RuntimeError as error:
             return [runtime_error_frame(request_id, str(error))]
-
-        return parse_daemon_frames(raw, request_id)
 
 
 def frames_to_docs(frames: list[dict[str, Any]]) -> DocList[TextDoc]:

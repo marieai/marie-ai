@@ -4,7 +4,7 @@ wire contract — method EXECUTOR_ENDPOINT, the fixed endpoint
 requirements inside ``params`` (``params.plugin``).
 
 This is the plan→dispatch contract the scheduler routes to
-``MariePluginDaemonExecutor.connector_invoke`` (see
+``MariePluginDaemonExecutor.invoke_plugin`` (see
 tests/unit/executor/extensions/test_plugin_daemon_executor.py for the executor
 side and tests/unit/job/test_gateway_job_distributor.py for the routing).
 """
