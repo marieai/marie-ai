@@ -1,0 +1,86 @@
+x-sglang: &sglang
+  image: "${SGLANG_IMAGE:-lmsysorg/sglang:v0.5.19}"
+  ipc: host
+  restart: unless-stopped
+  volumes:
+    - "${HF_CACHE_DIR:-${HOME}/.cache/huggingface}:/root/.cache/huggingface"
+  environment:
+    HF_TOKEN:
+    SGLANG_API_KEY:
+    MODEL_PATH: "${MODEL_PATH:-nvidia/Qwen3.8-27B-NVFP4}"
+    OMP_NUM_THREADS: "1"
+  entrypoint: ["/bin/bash", "-c"]
+  command:
+    - |
+      set -euo pipefail
+      api_key_args=()
+      if [[ -n "$${SGLANG_API_KEY:-}" ]]; then
+        api_key_args=(--api-key "$$SGLANG_API_KEY")
+      fi
+      exec python3 -m sglang.launch_server \
+        --model-path "$$MODEL_PATH" \
+        --served-model-name Qwen3.8-27B \
+        --host 0.0.0.0 \
+        --port 8000 \
+        --tp-size 1 \
+        --attention-backend flashinfer \
+        --kv-cache-dtype fp8_e4m3 \
+        --mamba-ssm-dtype float32 \
+        --mamba-radix-cache-strategy extra_buffer_lazy \
+        --max-mamba-cache-size 4 \
+        --max-running-requests 1 \
+        --cuda-graph-max-bs-decode 1 \
+        --context-length 32768 \
+        --max-total-tokens 32768 \
+        --mem-fraction-static 0.90 \
+        --chunked-prefill-size 2048 \
+        --reasoning-parser qwen3 \
+        --tool-call-parser qwen3_coder \
+        --enable-metrics \
+        "$${api_key_args[@]}"
+
+services:
+  replica-0:
+    <<: *sglang
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${PORT_0:-8000}:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_0:-0}"]
+              capabilities: [gpu]
+  replica-1:
+    <<: *sglang
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${PORT_1:-8001}:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_1:-1}"]
+              capabilities: [gpu]
+  replica-2:
+    <<: *sglang
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${PORT_2:-8002}:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_2:-2}"]
+              capabilities: [gpu]
+  replica-3:
+    <<: *sglang
+    ports:
+      - "${BIND_IP:-127.0.0.1}:${PORT_3:-8003}:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${GPU_3:-3}"]
+              capabilities: [gpu]

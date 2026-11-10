@@ -3,11 +3,12 @@
     etcd_name: "{{ inventory_hostname }}"
     etcd_ip: "{{ ansible_host }}"
 
+
 - name: Build initial cluster string from hostvars
   set_fact:
     initial_cluster: >-
-      {{ groups['etcd_cluster'] | map('extract', hostvars, 'ansible_host') | zip(groups['etcd_cluster']) |
-         map('join', '=http://') | map('regex_replace', '$', ':2380') | join(',') }}
+      {{ groups['etcd_cluster'] | zip(groups['etcd_cluster'] | map('extract', hostvars, 'ansible_host')) 
+         | map('join', '=http://') | map('regex_replace', '$', ':2380') | join(',') }}
 
 - name: Ensure Docker is installed
   shell: |
@@ -15,27 +16,43 @@
   register: docker_check
   changed_when: false
 
-- name: Ensure etcd data dir exists
-  file:
-    path: "{{ etcd_data_dir }}"
-    state: directory
-    owner: "{{ ansible_user | default('gpu-svc') }}"
-    mode: '0755'
-  become: true
+# - name: Ensure etcd data dir exists
+#   file:
+#     path: "{{ etcd_data_dir }}"
+#     state: directory
+#     owner: "{{ ansible_user | default('gpu-svc') }}"
+#     mode: '0755'
+#   become: true
+
+# using named volumes
+- name: Ensure etcd_data Docker volume exists
+  community.docker.docker_volume:
+    name: etcd_data
 
 - name: Run etcd container
   community.docker.docker_container:
     name: "{{ etcd_name }}"
     image: "{{ etcd_image }}"
-    restart_policy: always
     state: started
+    pull: true
+    tty: true
+    init: true
+    
+    restart_policy: "always" # always | on-failure | unless-stopped
+    network_mode: host 
     published_ports:
       - "{{ etcd_client_port }}:2379"
       - "{{ etcd_peer_port }}:2380"
     volumes:
-      - "{{ etcd_data_dir }}:/etcd-data"
-    environment:
+      - etcd_data:/etcd-data
+    env:
       ETCDCTL_API: "3"
+
+    log_driver: local
+    log_options:
+      max-size: 100m
+      max-file: 10    
+
     command: >
       /usr/local/bin/etcd
         --name {{ etcd_name }}

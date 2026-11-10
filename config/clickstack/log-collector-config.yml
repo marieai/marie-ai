@@ -23,7 +23,7 @@ receivers:
       line_start_pattern: '^(INFO|WARN|ERROR|DEBUG|CRITICAL|FATAL|WARNI)'
 
     operators:
-      # Parse Docker JSON log format first
+      # Parse Docker JSON log format first`1
       - type: json_parser
         id: docker_parser
         timestamp:

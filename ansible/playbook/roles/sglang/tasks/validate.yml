@@ -1,0 +1,48 @@
+---
+- name: Validate SGLang deployment settings
+  ansible.builtin.assert:
+    that:
+      - sglang_state in ['started', 'stopped', 'absent']
+      - sglang_replicas is sequence and sglang_replicas is not string and sglang_replicas is not mapping
+      - sglang_replicas | length > 0
+      - sglang_cache_dir is string and sglang_cache_dir.startswith('/')
+      - sglang_container_prefix is string and sglang_container_prefix is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+      - sglang_api_key is string and sglang_hf_token is string
+      - sglang_wait_for_ready is boolean
+      - sglang_extra_args is sequence and sglang_extra_args is not string and sglang_extra_args is not mapping
+      - sglang_context_length | string is match('^[1-9][0-9]*$')
+      - sglang_max_total_tokens | string is match('^[1-9][0-9]*$')
+      - sglang_max_total_tokens | int >= sglang_context_length | int
+      - sglang_max_running_requests | string is match('^[1-9][0-9]*$')
+      - sglang_max_mamba_cache_size | string is match('^[1-9][0-9]*$')
+      - sglang_max_mamba_cache_size | int >= 4 * (sglang_max_running_requests | int)
+      - sglang_mem_fraction_static | float > 0 and sglang_mem_fraction_static | float < 1
+      - sglang_chunked_prefill_size | string is match('^[1-9][0-9]*$')
+      - sglang_ready_timeout | string is match('^[1-9][0-9]*$')
+    fail_msg: Invalid SGLang deployment settings; check the role variables and inference limits.
+    quiet: true
+  no_log: "{{ sglang_api_key | length > 0 or sglang_hf_token | length > 0 }}"
+
+- name: Validate SGLang replica entries
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined and item.name is string
+      - item.name is match('^[A-Za-z0-9][A-Za-z0-9_.-]*$')
+      - item.gpu_id is defined and item.gpu_id | string is match('^(0|[1-9][0-9]*|GPU-[0-9a-fA-F-]+)$')
+      - item.port is defined and item.port is integer
+      - item.port >= 1 and item.port <= 65535
+    fail_msg: Each SGLang replica needs a valid name, one GPU ID, and an integer port in 1..65535.
+    quiet: true
+  loop: "{{ sglang_replicas }}"
+  loop_control:
+    label: "{{ item.name | default('invalid replica') }}"
+
+- name: Reject conflicting SGLang replica assignments
+  ansible.builtin.assert:
+    that:
+      - sglang_replicas | map(attribute='name') | unique | length == sglang_replicas | length
+      - sglang_replicas | map(attribute='gpu_id') | map('string') | unique | length == sglang_replicas | length
+      - sglang_replicas | map(attribute='port') | unique | length == sglang_replicas | length
+    fail_msg: SGLang replica names, GPU IDs, and published ports must each be unique on a host.
+    quiet: true

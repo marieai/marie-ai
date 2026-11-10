@@ -1,0 +1,4 @@
+---
+collections:
+  - name: community.docker
+    version: 5.4.0

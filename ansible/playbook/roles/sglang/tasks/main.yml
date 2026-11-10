@@ -1,0 +1,91 @@
+---
+- name: Validate SGLang configuration
+  ansible.builtin.import_tasks: validate.yml
+  tags: [sglang_validate]
+
+- name: Check SGLang host prerequisites
+  ansible.builtin.import_tasks: preflight.yml
+  when: sglang_state == 'started'
+  tags: [sglang_deploy]
+
+- name: Create the shared model cache
+  ansible.builtin.file:
+    path: "{{ sglang_cache_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: sglang_state == 'started'
+  tags: [sglang_deploy]
+
+- name: Deploy SGLang replicas
+  community.docker.docker_container:
+    name: "{{ sglang_container_prefix }}-{{ item.name }}"
+    image: "{{ sglang_image }}"
+    state: "{{ 'healthy' if sglang_wait_for_ready else 'started' }}"
+    healthy_wait_timeout: "{{ sglang_ready_timeout }}"
+    pull: missing
+    detach: true
+    restart_policy: unless-stopped
+    command_handling: correct
+    comparisons:
+      env: strict
+    command: >-
+      {{ sglang_server_command + sglang_extra_args
+         + (['--api-key', sglang_api_key] if sglang_api_key | length > 0 else []) }}
+    ipc_mode: host
+    device_requests:
+      - driver: nvidia
+        device_ids: ["{{ item.gpu_id | string }}"]
+        capabilities: [[gpu]]
+    published_ports:
+      - "{{ sglang_bind_address }}:{{ item.port }}:8000"
+    volumes:
+      - "{{ sglang_cache_dir }}:/root/.cache/huggingface:rw"
+    env: >-
+      {{ {'OMP_NUM_THREADS': '1'}
+         | combine({'HF_TOKEN': sglang_hf_token} if sglang_hf_token | length > 0 else {}) }}
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5m
+    log_driver: local
+    log_options:
+      max-size: 100m
+      max-file: "3"
+  loop: "{{ sglang_replicas }}"
+  loop_control:
+    label: "{{ item.name }} (GPU {{ item.gpu_id }}, port {{ item.port }})"
+  no_log: true
+  when: sglang_state == 'started'
+  tags: [sglang_deploy]
+
+- name: Inspect configured replicas for lifecycle operations
+  community.docker.docker_container_info:
+    name: "{{ sglang_container_prefix }}-{{ item.name }}"
+  loop: "{{ sglang_replicas }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _sglang_lifecycle_info
+  no_log: true
+  when: sglang_state != 'started'
+  tags: [sglang_deploy]
+
+- name: Stop or remove existing SGLang replicas without reconciling configuration
+  community.docker.docker_container:
+    name: "{{ sglang_container_prefix }}-{{ item.item.name }}"
+    state: "{{ sglang_state }}"
+  loop: "{{ _sglang_lifecycle_info.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+  when:
+    - sglang_state != 'started'
+    - item.exists | default(false)
+  tags: [sglang_deploy]

@@ -1,47 +1,72 @@
 ---
 
 - name: Deploy to node
-  hosts: ml_cluster
+  hosts: "{{ target_group }}"
   gather_facts: true
   vars:
     stack_name: "dev"
-    
-    image_tag: 3.0.30-cuda
-    config_tag: marie-3.0.30.yml
-    
-    image_tagLAST: 3.0.26-cuda
-    config_tagLAST: marie-3.0.21.yml
-    
+
+    # default_image_tag: "4.5rc1-cuda"
+    default_image_tag_PREV: "5.0.1-cuda"
+    default_image_tag: "5.0.3-cuda"
+
+    available_config_tags:
+      - marie-g5-annotator_llm.yml
+      - marie-g5-annotator_embeddings.yml
+      - marie-g5-annotator_parser.yml
+
     server_port: 8080
+
+  vars_prompt:
+    - name: config_tag
+      prompt: |-
+        Available config tags:
+          1. marie-g5-annotator_llm.yml
+          2. marie-g5-annotator_embeddings.yml
+          3. marie-g5-annotator_parser.yml
+        Enter the config tag to use
+      private: false
+
   tasks:
-#    - name: Create network
-#      community.docker.docker_network:
-#        name: "marie-{{ stack_name }}"
-#        state: present
-#        driver: bridge
+    - name: Validate config_tag
+      ansible.builtin.assert:
+        that:
+          - config_tag in available_config_tags
+        fail_msg: "'{{ config_tag }}' is not a valid config tag. Must be one of: {{ available_config_tags | join(', ') }}"
+
+    - name: Derive annotator type and config path from config_tag
+      ansible.builtin.set_fact:
+        annotator_type: "{{ config_tag | regex_replace('^marie-g5-annotator_(.+)\\.yml$', '\\1') }}"
+        config_path: "/etc/marie/config/service/g5/{{ config_tag }}"
+
+    - name: Show resolved config
+      ansible.builtin.debug:
+        msg: "annotator_type={{ annotator_type }}, config_path={{ config_path }}"
+
     # https://docs.ansible.com/ansible/latest/collections/community/docker/docker_container_module.html
     - name: Run the inference-server
       community.docker.docker_container:
-        name: "marieai-{{ stack_name }}-server"
-        image: "marieai/marie:{{ image_tag }}"
+        name: "marieai-{{ stack_name }}-server-{{ annotator_type }}"
+        image: "marieai/marie:{{ image_tag | default(default_image_tag) }}"
         state: started
         recreate: "{{ (stack_name == 'dev') | bool }}"
 #        auto_remove: "{{ (stack_name == 'dev') | bool }}"
+        init: true # This adds the --init flag
         pull: true
         tty: true
         restart_policy: "always" # always | on-failure | unless-stopped
         network_mode: host #"marie-{{ stack_name }}"
-        command: server --start --uses /etc/marie/config/service/{{ config_tag }}
-        device_requests:
-          - # Add nVidia GPUs to this container
-            driver: nvidia
-            count: -1  # this means we want all
-            capabilities:
-              - gpu
-              - compute
-              - utility
-              # See https://github.com/NVIDIA/nvidia-container-runtime#supported-driver-capabilities
-              # for a list of capabilities supported by the nvidia driver
+        command: "server --start --uses {{ config_path }}"
+        # device_requests:
+        #   - # Add nVidia GPUs to this container
+        #     driver: nvidia
+        #     count: -1  # this means we want all
+        #     capabilities:
+        #       - gpu
+        #       - compute
+        #       - utility
+        #       # See https://github.com/NVIDIA/nvidia-container-runtime#supported-driver-capabilities
+        #       # for a list of capabilities supported by the nvidia driver
 
         log_driver: local
         log_options:
@@ -50,12 +75,19 @@
         env:
           MARIE_CACHE_SKIP_LOAD: "true" # causes issues with docker
           MARIE_DEFAULT_MOUNT: "/etc/marie"
-          MARIE_LOG_CONFIG: docker
+          MARIE_LOG_CONFIG: default # docker
           MARIE_DEPLOYMENT_NAME: marie
           COLUMNS: "180"
-          JINA_MP_START_METHOD: "fork"
+          JINA_MP_START_METHOD: "spawn"
+          VLLM_WORKER_MULTIPROC_METHOD: "spawn"
           JINA_LOG_LEVEL:
             "{{ lookup('ansible.builtin.env', 'JINA_LOG_LEVEL') | default('DEBUG', true) }}"
+          OPENAI_API_BASE: http://192.222.48.192
+          OPENAI_API_KEY: EMPTY
+          MARIE_PURGE_OUTPUT : "true" # CRITICAL DURING DEBUG AND TESTING
+          ETCD_LEASE_SEC: "15"
+          ETCD_HEARTBEAT_SEC: "3"
+
 #        ports:
 #          - "{{ server_port }}:8080"
 
@@ -65,10 +97,11 @@
 #          MARIE_DEBUG_WAIT_FOR_CLIENT: "1"
 #          MARIE_DEBUG_HOST: "0.0.0.0"
         volumes:
-          - "/mnt/data/marie-ai/config:/etc/marie/config:ro"
+          - "/mnt/data/marie-ai/config-g5:/etc/marie/config:ro"
           - "/mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw"
-          - "/mnt/data/marie-ai/config/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro"
+          - "/mnt/data/marie-ai/config-g5/service/im-policy.xml:/etc/ImageMagick-6/policy.xml:ro"
           - "/mnt/data/marie-ai/model_zoo/cache/huggingface/hub:/root/.cache/huggingface/hub:rw"
+          - "/tmp/marie/generators:/root/.marie/generators:rw"
 
 # Docker debug command
 # docker container ls -aq | xargs --no-run-if-empty docker stop && docker rm $(docker ps --filter status=exited -q)
@@ -76,8 +109,11 @@
 
 
 # Run interactive
-# /opt/venv/lib/python3.12/site-packages/marie_server#
+# /opt/venv/lib/python3.10/site-packages/marie_server#
 # docker run --rm  -it --entrypoint /bin/bash --gpus all --name=marieai  --network=host -e JINA_LOG_LEVEL=debug -e MARIE_DEFAULT_MOUNT='/etc/marie' -v /mnt/data/marie-ai/config:/etc/marie/config:ro -v /mnt/data/marie-ai/model_zoo:/etc/marie/model_zoo:rw marieai/marie:3.0.25-cuda
-# uv pip install --python /opt/venv/bin/python debugpy
-# /opt/venv/lib/python3.12/site-packages/marie_server#
+# pip install debugpy
+# /opt/venv/lib/python3.10/site-packages/marie_server#
 # MARIE_DEBUG=1;MARIE_DEBUG_PORT=5678;MARIE_DEBUG_WAIT_FOR_CLIENT=1;MARIE_DEBUG_HOST=0.0.0.0 marie server --start --uses /etc/marie/config/service/marie-3.0.2x-corr.yml
+
+# /etc/marie/config/service/g5/marie-g5-annotator_llm.yml
+# /mnt/data/marie-ai/config-g5/service/g5/marie-g5-annotator_llm.yml

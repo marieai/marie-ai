@@ -1,0 +1,21 @@
+---
+all:
+  children:
+    sglang_nodes:
+      hosts:
+        gpu-example-01:
+          ansible_host: 192.0.2.10
+          ansible_user: gpu-svc
+          sglang_replicas:
+            - name: replica-0
+              gpu_id: "0"
+              port: 8000
+            - name: replica-1
+              gpu_id: "1"
+              port: 8001
+            - name: replica-2
+              gpu_id: "2"
+              port: 8002
+            - name: replica-3
+              gpu_id: "3"
+              port: 8003

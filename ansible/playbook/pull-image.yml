@@ -4,10 +4,10 @@
   hosts: ml_cluster
   gather_facts: true
 
+
   vars:
-    image_tag: 3.0.26-cuda
-    default_image_tagXX: 3.0.24-cuda
-    default_image_tag: 3.0.26-cuda
+    image_tag: 4.0.7-cuda
+    default_image_tag: 5.0.0-cuda
 
   vars_prompt:
 
