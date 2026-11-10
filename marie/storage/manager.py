@@ -510,8 +510,10 @@ class StorageManager:
 
         for future in futures:
             try:
-                future.result()
-                success += 1
+                if future.result() is False:
+                    failed += 1
+                else:
+                    success += 1
             except Exception as e:
                 print(e)
                 failed += 1

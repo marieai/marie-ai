@@ -393,15 +393,17 @@ def store_assets(
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
         if not connected:
             logger.error(f"Error storing assets : Could not connect to S3")
-            return [s3_asset_base]
+            return None
 
         logger.info(f"store_assets for {ref_id} : {ref_type} : {root_asset_dir}")
-        StorageManager.copy_dir(
+        uploaded = StorageManager.copy_dir(
             root_asset_dir,
             s3_asset_base,
             relative_to_dir=root_asset_dir,
             match_wildcard=match_wildcard,
         )
+        if not uploaded:
+            return None
 
         return StorageManager.list(s3_asset_base, return_full_path=True)
     except Exception as e:

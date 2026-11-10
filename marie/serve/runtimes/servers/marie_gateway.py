@@ -2123,6 +2123,7 @@ class MarieServerGateway(CompositeServer):
         setup servers inside CompositeServer
         """
         self.logger.debug(f"Setting up MarieGateway server")
+        setup_auth(self.args.get("auth", {}))
         await super().setup_server()
 
         self.grpc_broker = setup_toast_events(self.args.get("toast", {}))
@@ -2136,7 +2137,6 @@ class MarieServerGateway(CompositeServer):
                     break
         storage_config = self.args.get("storage", {})
         setup_storage(storage_config)
-        setup_auth(self.args.get("auth", {}))
         setup_llm_tracking(self.args.get("llm_tracking", {}))
 
         await self.setup_service_discovery(

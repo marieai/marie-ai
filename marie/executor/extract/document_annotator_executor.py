@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from pathlib import Path
 from typing import Any, Optional, Union
 
 import torch
@@ -23,7 +24,7 @@ from marie.extract.structures import UnstructuredDocument
 from marie.logging_core.logger import MarieLogger
 from marie.logging_core.mdc import MDC
 from marie.models.utils import torch_gc
-from marie.utils.asset_util import prepare_asset_directory, store_assets
+from marie.utils.asset_util import prepare_asset_directory, s3_asset_path, store_assets
 from marie.utils.docs import docs_from_asset, frames_from_docs
 from marie.utils.error import serialize_error
 from marie.utils.json import load_json_file
@@ -305,6 +306,11 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
             node_task_id = parameters.get("node_task_id")
             partition_key = parameters.get("partition_key")
 
+            # Push only agent-output results to S3 for downstream nodes.
+            stored_uris = store_assets(
+                ref_id, ref_type, root_asset_dir, match_wildcard="agent-output/**/*"
+            )
+
             self._record_annotation_assets(
                 job_id=job_id,
                 ref_id=ref_id,
@@ -312,14 +318,11 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                 op_key=op_key,
                 op_layout=op_layout,
                 page_count=doc.page_count,
+                root_asset_dir=root_asset_dir,
+                stored_uris=stored_uris,
                 dag_id=dag_id,
                 node_task_id=node_task_id,
                 partition_key=partition_key,
-            )
-
-            # Push only agent-output results to S3 for downstream nodes
-            store_assets(
-                ref_id, ref_type, root_asset_dir, match_wildcard="agent-output/**/*"
             )
 
             response = {
@@ -376,23 +379,63 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         op_key: str,
         op_layout: str,
         page_count: int,
+        root_asset_dir: str,
+        stored_uris: list[str] | None,
         dag_id: Optional[str] = None,
         node_task_id: Optional[str] = None,
         partition_key: Optional[str] = None,
     ) -> None:
-        """Record asset materializations for annotation results"""
+        """Record the location and content of uploaded annotation results."""
 
-        if not self.asset_tracking_enabled or not job_id:
+        if not self.asset_tracking_enabled or not job_id or not stored_uris:
             return
 
         try:
-            annotation_fingerprint = f"{op_key}:{op_layout}:{ref_id}:{page_count}"
-            fingerprint_bytes = annotation_fingerprint.encode("utf-8")
+            root = Path(root_asset_dir)
+            output_dir = root / "agent-output" / op_key
+            files = sorted(
+                path
+                for path in output_dir.rglob("*")
+                if path.is_file() and path.name != "_SUCCESS.yaml"
+            )
+            if not files:
+                return
 
-            # Compute version based on operation parameters
+            s3_root = s3_asset_path(ref_id, ref_type)
+            confirmed_uris = set(stored_uris)
+            file_uris = []
+            manifest = []
+            for path in files:
+                uri = f"{s3_root}/{path.relative_to(root).as_posix()}"
+                if uri not in confirmed_uris:
+                    self.logger.warning(
+                        f"Skipping annotation asset {op_key}: output upload is incomplete"
+                    )
+                    return
+                with path.open("rb") as stream:
+                    checksum = hashlib.file_digest(stream, "sha256").hexdigest()
+                manifest.append(
+                    {
+                        "path": path.relative_to(output_dir).as_posix(),
+                        "size_bytes": path.stat().st_size,
+                        "checksum": checksum,
+                    }
+                )
+                file_uris.append(uri)
+
+            manifest_bytes = json.dumps(
+                manifest, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            single_file = len(files) == 1
+            uri = (
+                file_uris[0]
+                if single_file
+                else f"{s3_root}/{output_dir.relative_to(root).as_posix()}/"
+            )
+
             upstream_versions = self._get_upstream_versions(dag_id, node_task_id)
             version = AssetTracker.compute_asset_version(
-                payload_bytes=fingerprint_bytes,
+                payload_bytes=manifest_bytes,
                 code_fingerprint=getattr(self, "code_version", "unknown"),
                 prompt_fingerprint=f"{op_key}:{op_layout}",
                 upstream_versions=upstream_versions,
@@ -403,14 +446,22 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
                     "asset_key": f"annotation/{op_key}",
                     "version": version,
                     "kind": "annotation",
-                    "size_bytes": len(fingerprint_bytes),
-                    "checksum": hashlib.sha256(fingerprint_bytes).hexdigest(),
+                    "size_bytes": sum(entry["size_bytes"] for entry in manifest),
+                    "checksum": (
+                        manifest[0]["checksum"]
+                        if single_file
+                        else hashlib.sha256(manifest_bytes).hexdigest()
+                    ),
+                    "uri": uri,
                     "metadata": {
                         "op_key": op_key,
                         "op_layout": op_layout,
                         "ref_id": ref_id,
                         "ref_type": ref_type,
                         "page_count": page_count,
+                        "file_count": len(files),
+                        "checksum_scope": "file" if single_file else "manifest",
+                        "files": manifest,
                     },
                 }
             ]
