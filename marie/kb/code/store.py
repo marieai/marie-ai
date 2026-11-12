@@ -19,9 +19,25 @@ from marie.kb.code.capture import (
     eligible_path,
     resolve_repository_path,
 )
+from marie.kb.code.navigation import parse_file
 from marie.kb.code.zoekt import Zoekt
 from marie.kb.item_state import StaleIndexingRun, scheduler_execution
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
+
+
+def _code_lines(text: str) -> list[str]:
+    parts = text.split('\n')
+    return [line + '\n' for line in parts[:-1]] + (
+        [parts[-1]] if parts[-1] else []
+    ) or ['']
+
+
+def _code_line_number(value: Any) -> int:
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError('Code range line numbers must be integers')
+    return value
 
 
 def scope_key(scope: dict[str, Any]) -> str:
@@ -55,8 +71,8 @@ class CodeIndexStore:
             '''SELECT s.*,k.tenant_id,k.workspace_id,t.organization_id,r.path,r.name AS repository_name
                FROM marie_scheduler.kb_source s
                JOIN marie_scheduler.kb_index k ON k.id=s.index_id
-               JOIN marie_studio.tenant t ON t.id=k.tenant_id
-               JOIN marie_studio.git_repositories r ON r.id=(s.dataset_inputs->>'repositoryId')::uuid
+               JOIN marie_runtime.tenant t ON t.id=k.tenant_id
+               JOIN marie_runtime.git_repositories r ON r.id=(s.dataset_inputs->>'repositoryId')::uuid
                WHERE s.id=$1 AND k.id=$2 AND t.id=$3 AND t.organization_id=$4
                  AND t.status='active' AND s.source_type='repository' AND s.status <> 'disabled'
                  AND NOT COALESCE((k.metadata->>'removalPending')::boolean,false)
@@ -180,6 +196,12 @@ class CodeIndexStore:
                 }
                 (directory / 'manifest.json').write_text(json.dumps(manifest))
                 fingerprint = settings_digest(source)
+                navigation = await asyncio.to_thread(
+                    self._parse_capture, directory / 'files', capture.files
+                )
+                navigation_digest = hashlib.sha256(
+                    json.dumps(navigation, sort_keys=True).encode()
+                ).hexdigest()
                 previous_files = {}
                 previous_valid = False
                 if current.get('handle'):
@@ -199,6 +221,7 @@ class CodeIndexStore:
                     previous_valid
                     and current.get('digest') == capture.digest
                     and current.get('configDigest') == fingerprint
+                    and current.get('navigationDigest') == navigation_digest
                     and await self.zoekt.usable(current['handle'], current['files'])
                 )
                 changed = sum(
@@ -214,6 +237,7 @@ class CodeIndexStore:
                         capture.commit,
                         len(capture.files),
                     )
+                    await self._save_navigation(connection, scope, handle, navigation)
                 result = (
                     current
                     if unchanged
@@ -228,6 +252,7 @@ class CodeIndexStore:
                         'size': capture.size,
                         'omitted': capture.omitted,
                         'indexedDagId': str(job['dag_id']),
+                        'navigationDigest': navigation_digest,
                         **stats,
                     }
                 )
@@ -290,7 +315,7 @@ class CodeIndexStore:
                             and current['handle'] != result['handle']
                         ):
                             await self.zoekt.remove(current['handle'])
-                        await self._cleanup(key, result['handle'])
+                        await self._cleanup(key, result['handle'], connection)
                 except (OSError, json.JSONDecodeError):
                     result['cleanupError'] = (
                         'Owned retired repository files could not be removed; the next refresh retries cleanup.'
@@ -311,18 +336,71 @@ class CodeIndexStore:
                         )
                         if saved != handle:
                             await self.zoekt.remove(handle)
+                            await connection.execute(
+                                'DELETE FROM marie_scheduler.kb_code_navigation WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND handle=$4',
+                                UUID(scope['tenant_id']),
+                                UUID(scope['index_id']),
+                                UUID(scope['source_id']),
+                                handle,
+                            )
                 finally:
                     await connection.execute(
                         'SELECT pg_advisory_unlock(hashtextextended($1,60601))', key
                     )
 
-    async def _cleanup(self, key: str, keep: str) -> None:
+    def _parse_capture(
+        self, directory: Path, files: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                'path': path,
+                'digest': info['sha256'],
+                **parse_file(directory / path, info['sha256']),
+            }
+            for path, info in sorted(files.items())
+        ]
+
+    async def _save_navigation(
+        self,
+        connection: Any,
+        scope: dict[str, Any],
+        handle: str,
+        records: list[dict[str, Any]],
+    ) -> None:
+        for start in range(0, len(records), 100):
+            await connection.execute(
+                '''INSERT INTO marie_scheduler.kb_code_navigation
+                   (tenant_id,index_id,source_id,handle,path,digest,language,status,provider_version,symbols,refs,imports)
+                   SELECT $1,$2,$3,$4,r.path,r.digest,r.language,r.status,r.provider_version,r.symbols,r.refs,r.imports
+                   FROM jsonb_to_recordset($5::jsonb) AS r(path text,digest text,language text,status text,provider_version text,
+                     symbols jsonb,refs jsonb,imports jsonb)''',
+                UUID(scope['tenant_id']),
+                UUID(scope['index_id']),
+                UUID(scope['source_id']),
+                handle,
+                json.dumps(
+                    [
+                        {**row, 'refs': row['references']}
+                        for row in records[start : start + 100]
+                    ]
+                ),
+            )
+
+    async def _cleanup(self, key: str, keep: str, connection: Any) -> None:
         for manifest in self.zoekt.root.glob('*/manifest.json'):
             if (
                 manifest.parent.name != keep
                 and json.loads(manifest.read_text()).get('scope') == key
             ):
                 await self.zoekt.remove(manifest.parent.name)
+        tenant, index, source = map(UUID, json.loads(key))
+        await connection.execute(
+            'DELETE FROM marie_scheduler.kb_code_navigation WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND handle<>$4',
+            tenant,
+            index,
+            source,
+            keep,
+        )
 
     async def remove(self, scope: dict[str, Any]) -> dict[str, Any]:
         """Withdraw a source, including removal-pending sources, and its owned shards."""
@@ -342,7 +420,7 @@ class CodeIndexStore:
                     )
                     source = await connection.fetchrow(
                         '''SELECT s.id,s.metadata->'codeIndex'->>'handle' AS handle FROM marie_scheduler.kb_source s JOIN marie_scheduler.kb_index k ON k.id=s.index_id
-                           JOIN marie_studio.tenant t ON t.id=k.tenant_id
+                           JOIN marie_runtime.tenant t ON t.id=k.tenant_id
                            WHERE s.id=$1 AND k.id=$2 AND t.id=$3 AND t.organization_id=$4 AND s.source_type='repository'
                            FOR UPDATE OF k,s''',
                         UUID(scope['source_id']),
@@ -363,7 +441,7 @@ class CodeIndexStore:
                     )
                     if source['handle']:
                         await self.zoekt.remove(source['handle'])
-                    await self._cleanup(scope_key(scope), '')
+                    await self._cleanup(scope_key(scope), '', connection)
                     await connection.execute(
                         "UPDATE marie_scheduler.kb_source SET metadata=metadata-'codeIndex' WHERE id=$1",
                         source['id'],
@@ -497,8 +575,9 @@ class CodeIndexStore:
                     'message': 'Captured file digest differs. Refresh this source.',
                 }
             text = content.decode('utf-8')
-            lines = text.splitlines(keepends=True) or ['']
-            start, end = citation['startLine'], citation['endLine']
+            lines = _code_lines(text)
+            start = _code_line_number(citation['startLine'])
+            end = _code_line_number(citation['endLine'])
             if not 1 <= start <= end <= len(lines) or end - start >= 100:
                 raise ValueError('Code range must contain at most 100 existing lines')
             passage = ''.join(lines[start - 1 : end])
@@ -522,4 +601,165 @@ class CodeIndexStore:
                     'endLine': end,
                     'totalLines': len(lines),
                 },
+            }
+
+    async def navigate(
+        self,
+        scope: dict[str, Any],
+        citation: dict[str, Any],
+        mode: str,
+        name: str = '',
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Read bounded syntax candidates from the authorized current capture."""
+        if mode not in ('outline', 'definitions', 'references'):
+            raise ValueError('Unknown code navigation mode')
+        if (
+            not 1 <= limit <= 50
+            or len(name) > 200
+            or (mode != 'outline' and not name.strip())
+        ):
+            raise ValueError('Navigation requires a bounded name and candidate limit')
+        opened = await self.open(scope, citation)
+        if opened['outcome'] != 'ready':
+            return opened
+        async with self._read(scope) as (connection, source):
+            try:
+                current, manifest = self._manifest(source, scope)
+            except ValueError:
+                return {
+                    'outcome': 'unavailable',
+                    'message': 'Captured repository is unavailable. Refresh this source.',
+                }
+            if any(
+                citation.get(key) != current[key]
+                for key in ('handle', 'repositoryId', 'branch', 'commit')
+            ):
+                return {
+                    'outcome': 'changed',
+                    'message': 'This repository has changed. Search again.',
+                }
+            args = [
+                UUID(scope['tenant_id']),
+                UUID(scope['index_id']),
+                UUID(scope['source_id']),
+                current['handle'],
+            ]
+            coverage_rows = await connection.fetch(
+                '''SELECT status,count(*)::int AS count FROM marie_scheduler.kb_code_navigation
+                   WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND handle=$4 GROUP BY status''',
+                *args,
+            )
+            coverage = {
+                status: 0
+                for status in (
+                    'ready',
+                    'partial',
+                    'truncated',
+                    'unsupported',
+                    'unavailable',
+                )
+            }
+            coverage.update({row['status']: row['count'] for row in coverage_rows})
+            coverage['unavailable'] += max(
+                0, len(manifest['files']) - sum(coverage.values())
+            )
+            anchor = await connection.fetchrow(
+                '''SELECT status,language FROM marie_scheduler.kb_code_navigation
+                   WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND handle=$4 AND path=$5''',
+                *args,
+                citation['path'],
+            )
+            array = 'refs' if mode == 'references' else 'symbols'
+            rows = await connection.fetch(
+                f'''SELECT n.path,n.digest,n.status,entry.value AS record FROM marie_scheduler.kb_code_navigation n
+                    CROSS JOIN LATERAL jsonb_array_elements(n.{array}) entry(value)
+                    WHERE n.tenant_id=$1 AND n.index_id=$2 AND n.source_id=$3 AND n.handle=$4
+                      AND (($5='outline' AND n.path=$6) OR
+                        ($5<>'outline' AND (entry.value->>'name'=$7 OR entry.value->>'qualified_name'=$7)))
+                    ORDER BY n.path,COALESCE((entry.value->'span'->>'start_line')::int,(entry.value->>'line')::int),
+                      entry.value->>'name' LIMIT $8''',
+                *args,
+                mode,
+                citation['path'],
+                name,
+                limit + 1,
+            )
+            results = []
+            captured_lines: dict[str, list[str]] = {}
+            characters = 0
+            truncated = len(rows) > limit
+            for row in rows[:limit]:
+                info = manifest['files'].get(row['path'])
+                if not info or info['sha256'] != row['digest']:
+                    raise PermissionError(
+                        'Navigation artifact differs from captured file'
+                    )
+                record = row['record']
+                start = record.get('line') or record['span']['start_line']
+                span = record.get('span') or {}
+                end = max(
+                    start, span.get('end_line', start) - (span.get('end_col') == 0)
+                )
+                if row['path'] not in captured_lines:
+                    original = (
+                        self.zoekt.directory(current['handle']) / 'files' / row['path']
+                    )
+                    try:
+                        content = await asyncio.to_thread(original.read_bytes)
+                    except OSError:
+                        return {
+                            'outcome': 'unavailable',
+                            'message': 'Captured file is unavailable.',
+                        }
+                    if hashlib.sha256(content).hexdigest() != info['sha256']:
+                        return {
+                            'outcome': 'changed',
+                            'message': 'Captured file digest differs. Refresh this source.',
+                        }
+                    captured_lines[row['path']] = _code_lines(content.decode('utf-8'))
+                lines = captured_lines[row['path']]
+                bounded_end = start - 1
+                range_characters = 0
+                for line in range(start, min(end, start + 99, len(lines)) + 1):
+                    range_characters += len(lines[line - 1])
+                    if range_characters > 8000:
+                        break
+                    bounded_end = line
+                if bounded_end < start:
+                    truncated = True
+                    continue
+                candidate = {
+                    'name': record['name'],
+                    'qualifiedName': record.get('qualified_name', record['name']),
+                    'kind': record['kind'],
+                    'signature': record.get('signature', ''),
+                    'parseStatus': record.get('parse_status', row['status']),
+                    'rangeTruncated': bounded_end < end,
+                    'citation': {
+                        **citation,
+                        'path': row['path'],
+                        'sourceDigest': row['digest'],
+                        'startLine': start,
+                        'endLine': bounded_end,
+                    },
+                }
+                size = sum(
+                    len(candidate[key])
+                    for key in ('name', 'qualifiedName', 'kind', 'signature')
+                ) + len(row['path'])
+                if characters + size > 8000:
+                    truncated = True
+                    break
+                characters += size
+                results.append(candidate)
+            return {
+                'outcome': 'ready',
+                'mode': mode,
+                'heuristic': True,
+                'status': anchor['status'] if anchor else 'unavailable',
+                'language': anchor['language'] if anchor else None,
+                'coverage': coverage,
+                'results': results,
+                'truncated': truncated,
             }

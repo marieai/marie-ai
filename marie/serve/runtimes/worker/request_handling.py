@@ -32,7 +32,7 @@ from marie.constants import __default_endpoint__
 from marie.excepts import BadConfigSource, RuntimeTerminated
 from marie.helper import get_full_version, get_internal_ip
 from marie.importer import ImportExtensions
-from marie.job.common import JobInfoStorageClient, JobStatus
+from marie.job.common import RUNTIME_PARAMETER_KEYS, JobInfoStorageClient, JobStatus
 from marie.job.lease_cache import LeaseCache, is_poisoned_lease_client_error
 from marie.proto import jina_pb2
 from marie.serve.discovery.base import ConnectionState
@@ -597,6 +597,11 @@ class WorkerRequestHandler:
         specific_parameters = parsed_params.get(executor_name, None)
         if specific_parameters:
             parsed_params.update(**specific_parameters)
+            for key in RUNTIME_PARAMETER_KEYS:
+                if key in parameters:
+                    parsed_params[key] = parameters[key]
+                else:
+                    parsed_params.pop(key, None)
 
         return parsed_params
 

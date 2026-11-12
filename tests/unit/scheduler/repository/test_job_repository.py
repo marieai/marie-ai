@@ -12,7 +12,10 @@ import pytest
 from marie.query_planner.base import QueryPlan
 from marie.scheduler.models import WorkInfo
 from marie.scheduler.repository import JobRepository
-from marie.scheduler.repository.async_job_repository import _routing_digest
+from marie.scheduler.repository.async_job_repository import (
+    SCHEDULER_SCHEMA_VERSION,
+    _routing_digest,
+)
 from marie.scheduler.state import WorkState
 from marie.serve.runtimes.gateway.marie.dispatch_policy import (
     build_policy_generation_snapshot,
@@ -313,7 +316,7 @@ async def test_create_tables_includes_gateway_runtime_tables() -> None:
         in schema_query
     )
     assert "VALUES ('default')" in schema_query
-    assert "VALUES ('96')" in schema_query
+    assert f"VALUES ('{SCHEDULER_SCHEMA_VERSION}')" in schema_query
     assert (
         "CREATE OR REPLACE FUNCTION marie_scheduler.monitor_system_throughput("
         in schema_query
@@ -1502,3 +1505,26 @@ async def test_recover_expired_run_leases_applies_python_policy(monkeypatch) -> 
     assert "run_owner = %s" in update_query
     assert "run_attempt_id = %s::uuid" in update_query
     assert "run_lease_expires_at <= now()" in update_query
+
+
+@pytest.mark.asyncio
+async def test_submission_callback_runs_inside_transaction_and_failure_rolls_back():
+    dag_id = "00000000-0000-0000-0000-000000000099"
+    job = build_dag_job(dag_id, 1)
+    connection = FakeConnection(fetchrow=[(dag_id,)])
+    repository = build_repository(connection)
+
+    async def fail(conn):
+        assert conn is connection and connection.transactions[0].entered
+        assert [call[0] for call in connection.calls] == [
+            'fetchrow',
+            'execute',
+            'execute',
+        ]
+        raise RuntimeError('application persistence failed')
+
+    with pytest.raises(RuntimeError, match='application persistence failed'):
+        await repository.create_dag_with_jobs(
+            dag_id, QueryPlan(nodes=[]), [job], job, transaction_callback=fail
+        )
+    assert isinstance(connection.transactions[0].error, RuntimeError)

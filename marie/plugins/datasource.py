@@ -52,7 +52,7 @@ async def load_datasource_binding(
                       provider.id AS provider_id
                FROM marie_scheduler.kb_source s
                JOIN marie_scheduler.kb_index k ON k.id=s.index_id
-               JOIN marie_studio.tenant t ON t.id=k.tenant_id
+               JOIN marie_runtime.tenant t ON t.id=k.tenant_id
                JOIN marie_studio.extension_installs i ON i.id=s.extension_install_id
                JOIN marie_studio.extension_packages p ON p.id=i.package_id
                JOIN marie_studio.extension_datasources d ON d.package_id=p.id AND d.datasource_ref=s.datasource_ref

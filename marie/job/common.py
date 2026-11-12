@@ -11,6 +11,20 @@ from marie.storage.kv.storage_client import StorageArea
 JOB_ID_METADATA_KEY = "job_submission_id"
 JOB_NAME_METADATA_KEY = "job_name"
 
+RUNTIME_PARAMETER_KEYS = frozenset(
+    {
+        'job_id',
+        'payload',
+        'dag_id',
+        'node_task_id',
+        'partition_key',
+        'run_owner',
+        'run_attempt_id',
+        'submission_trace_context',
+        '__results__',
+    }
+)
+
 INTERNAL_NAMESPACE_PREFIX = "marie_internal"
 JOB_STATUS_KEY = f"{INTERNAL_NAMESPACE_PREFIX}/job_status"
 

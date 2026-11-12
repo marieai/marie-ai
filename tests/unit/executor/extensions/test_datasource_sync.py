@@ -34,7 +34,7 @@ async def sync(tmp_path, monkeypatch):
         autocommit=True,
     )
     await pool.execute(
-        'DROP SCHEMA IF EXISTS marie_studio CASCADE; CREATE SCHEMA marie_studio; CREATE SCHEMA IF NOT EXISTS marie_scheduler'
+        'DROP SCHEMA IF EXISTS marie_studio CASCADE; CREATE SCHEMA marie_studio; CREATE SCHEMA IF NOT EXISTS marie_runtime; DROP TABLE IF EXISTS marie_runtime.tenant; CREATE SCHEMA IF NOT EXISTS marie_scheduler'
     )
     await pool.execute(
         'DROP TABLE IF EXISTS marie_scheduler.kb_source,marie_scheduler.kb_index CASCADE; DROP TABLE IF EXISTS marie_scheduler.kb_text_section CASCADE; DROP TABLE IF EXISTS marie_scheduler.kb_item_state CASCADE; DROP TABLE IF EXISTS marie_scheduler.job CASCADE'
@@ -49,7 +49,7 @@ async def sync(tmp_path, monkeypatch):
             .replace('{schema}', 'marie_scheduler')
         )
     await pool.execute(
-        '''CREATE TABLE marie_studio.tenant(id uuid PRIMARY KEY,organization_id uuid,status text);
+        '''CREATE TABLE marie_runtime.tenant(id uuid PRIMARY KEY,organization_id uuid,status text);
     CREATE TABLE IF NOT EXISTS marie_scheduler.resource_workflow_binding(resource_type text,resource_id uuid,tenant_id uuid,run_params jsonb);
     TRUNCATE marie_scheduler.resource_workflow_binding;
     CREATE TABLE marie_studio."user"(id uuid PRIMARY KEY,is_active boolean);
@@ -103,7 +103,7 @@ async def sync(tmp_path, monkeypatch):
     digest = sha256(archive.read_bytes()).hexdigest()
     archive.rename(folder / f'{digest}.zip')
     await pool.execute(
-        'INSERT INTO marie_studio.tenant VALUES ($1,$2,\'active\')',
+        'INSERT INTO marie_runtime.tenant VALUES ($1,$2,\'active\')',
         ids['tenant'],
         ids['organization'],
     )

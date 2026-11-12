@@ -13,6 +13,7 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "parse_status": { "enum": ["ready", "partial"] },
     "references": {
       "type": "array",
       "items": {

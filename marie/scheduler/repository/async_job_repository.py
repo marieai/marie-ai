@@ -7,6 +7,7 @@ import os
 import random
 import re
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
@@ -48,12 +49,15 @@ from marie.scheduler.repository.plans import (
 from marie.scheduler.search_documents import build_job_search_documents
 from marie.scheduler.state import WorkState
 from marie.scheduler.util import validate_queue_scope
-from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
+from marie.storage.database.postgres_pool import (
+    AsyncPostgresConnection,
+    AsyncPostgresConnectionPool,
+)
 from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-SCHEDULER_SCHEMA_VERSION = 101
+SCHEDULER_SCHEMA_VERSION = 103
 
 _WORK_INFO_COLUMNS = (
     "id, name, priority, state, retry_limit, start_after, "
@@ -2921,6 +2925,10 @@ class AsyncJobRepository:
         dag_nodes: List[WorkInfo],
         work_info: WorkInfo,
         llm_routes: Sequence[PlannedLlmRoute] = (),
+        *,
+        transaction_callback: (
+            Callable[[AsyncPostgresConnection], Awaitable[None]] | None
+        ) = None,
     ) -> Tuple[bool, Optional[str]]:
         if not work_info.name or not dag_nodes:
             raise ValueError("A DAG requires a nonempty submission queue and children")
@@ -2970,11 +2978,8 @@ class AsyncJobRepository:
                     insert_job_search_documents(DEFAULT_SCHEMA),
                     Jsonb([asdict(document) for document in search_documents]),
                 )
-                from marie.kb.item_state import bind_upstream_input
-
-                await bind_upstream_input(
-                    conn, dag_id, metadata, planner or work_info.name
-                )
+                if transaction_callback is not None:
+                    await transaction_callback(conn)
                 if route_records:
                     inserted = await conn.fetch(
                         insert_llm_routes(DEFAULT_SCHEMA), Jsonb(route_records)
@@ -2982,19 +2987,6 @@ class AsyncJobRepository:
                     if len(inserted) != len(route_records):
                         raise RuntimeError('routing_manifest_insert_incomplete')
         return True, str(row[0])
-
-    async def resolve_kb_indexing_metadata(
-        self, metadata: dict[str, Any]
-    ) -> dict[str, Any]:
-        from marie.kb.item_state import item_indexing_run, resolve_indexing_parameters
-
-        scope, _ = item_indexing_run(metadata)
-        item = await self._pool.fetchval(
-            '''SELECT to_jsonb(item) FROM marie_scheduler.kb_item_state item
-               WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND item_id=$4''',
-            *scope.values(),
-        )
-        return resolve_indexing_parameters(item, metadata)
 
     async def read_llm_job_route(self, work_unit_id: str) -> Dict[str, Any] | None:
         async with self._pool.acquire() as conn:

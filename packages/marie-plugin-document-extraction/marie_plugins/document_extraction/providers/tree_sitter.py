@@ -27,6 +27,7 @@ _IMPORT_NODES = {
     'python': {'import_statement', 'import_from_statement'},
     'javascript': {'import_statement'},
     'typescript': {'import_statement'},
+    'tsx': {'import_statement'},
     'go': {'import_declaration'},
     'java': {'import_declaration'},
     'rust': {'use_declaration'},
@@ -60,7 +61,10 @@ def _grammar_ready(canonical_format: str) -> bool:
 
         Query(
             get_language(canonical_format),
-            (_QUERIES_DIR / f'{canonical_format}-tags.scm').read_text(),
+            (
+                _QUERIES_DIR
+                / f"{'typescript' if canonical_format == 'tsx' else canonical_format}-tags.scm"
+            ).read_text(),
         )
         ready = True
     except Exception:
@@ -71,7 +75,7 @@ def _grammar_ready(canonical_format: str) -> bool:
 
 class TreeSitterProvider:
     provider_id = 'tree-sitter'
-    formats = _query_languages()
+    formats = _query_languages() | {'tsx'}
     output_formats = frozenset({'markdown', 'json', 'cst', 'nodes'})
 
     def is_ready(self, canonical_format: str) -> bool:
@@ -101,7 +105,8 @@ class TreeSitterProvider:
         source = Path(path)
         code = source.read_bytes()
         tree = get_parser(canonical_format).parse(code)
-        scm = (_QUERIES_DIR / f'{canonical_format}-tags.scm').read_text()
+        query_format = 'typescript' if canonical_format == 'tsx' else canonical_format
+        scm = (_QUERIES_DIR / f'{query_format}-tags.scm').read_text()
         matches = QueryCursor(Query(get_language(canonical_format), scm)).matches(
             tree.root_node
         )
@@ -114,7 +119,7 @@ class TreeSitterProvider:
         include_cst = bool(request_options.get('include_cst'))
         include_markdown = bool(request_options.get('include_markdown'))
         include_anonymous = bool(request_options.get('include_anonymous'))
-        if output_format != 'cst' and not symbols and not imports:
+        if output_format not in ('cst', 'json') and not symbols and not imports:
             raise ProviderNotExtractableError(
                 f'Tree-sitter found no symbols or imports in {source.name}'
             )
@@ -134,6 +139,7 @@ class TreeSitterProvider:
                 'file_name': source.name,
                 'symbols': symbols,
                 'imports': imports,
+                'parse_status': 'partial' if tree.root_node.has_error else 'ready',
             }
             if include_references:
                 body['references'] = references
@@ -157,7 +163,7 @@ class TreeSitterProvider:
             result_kind=result_kind,
             provider=self.provider_id,
             provider_version=metadata.version('tree-sitter-language-pack'),
-            backend=f'{canonical_format}-tags.scm',
+            backend=f'{query_format}-tags.scm',
             metadata={
                 'language': canonical_format,
                 'symbol_count': len(symbols),

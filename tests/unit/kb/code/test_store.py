@@ -33,16 +33,21 @@ async def code_store(zoekt, repo):
         autocommit=True,
     )
     await pool.execute(
-        'CREATE SCHEMA IF NOT EXISTS marie_studio; CREATE SCHEMA IF NOT EXISTS marie_scheduler'
+        'CREATE SCHEMA IF NOT EXISTS marie_studio; CREATE SCHEMA IF NOT EXISTS marie_runtime; CREATE SCHEMA IF NOT EXISTS marie_scheduler'
     )
     await pool.execute(
-        '''DROP TABLE IF EXISTS marie_scheduler.kb_source,marie_scheduler.kb_index,marie_studio.tenant,marie_studio.git_repositories CASCADE;
-        CREATE TABLE marie_studio.tenant(id uuid primary key,organization_id uuid,status text);
+        '''DROP TABLE IF EXISTS marie_scheduler.kb_code_navigation,marie_scheduler.kb_source,marie_scheduler.kb_index,marie_runtime.tenant,marie_runtime.git_repositories CASCADE;
+        CREATE TABLE marie_runtime.tenant(id uuid primary key,organization_id uuid,status text);
         CREATE TABLE marie_scheduler.kb_index(id uuid primary key,tenant_id uuid,workspace_id uuid,metadata jsonb);
-        CREATE TABLE marie_studio.git_repositories(id uuid primary key,path text,name text,is_enabled boolean,git_enabled boolean,organization_id uuid,visibility text);
+        CREATE TABLE marie_runtime.git_repositories(id uuid primary key,path text,name text,is_enabled boolean,git_enabled boolean,organization_id uuid,visibility text);
         CREATE TABLE marie_scheduler.kb_source(id uuid primary key,index_id uuid,name text,source_type text,status text,metadata jsonb,dataset_inputs jsonb,updated_at timestamptz default now());'''
     )
     schema = Path(__file__).parents[4] / 'config/psql/schema'
+    await pool.execute(
+        (schema / '103_kb_code_navigation.sql')
+        .read_text()
+        .replace('{schema}', 'marie_scheduler')
+    )
     await pool.execute(
         'DROP TABLE IF EXISTS marie_scheduler.job CASCADE; DROP TABLE IF EXISTS marie_scheduler.dag CASCADE'
     )
@@ -69,7 +74,7 @@ async def code_store(zoekt, repo):
     }
     repository_id = str(uuid4())
     await pool.execute(
-        "INSERT INTO marie_studio.tenant VALUES($1,$2,'active')",
+        "INSERT INTO marie_runtime.tenant VALUES($1,$2,'active')",
         UUID(scope['tenant_id']),
         UUID(scope['organization_id']),
     )
@@ -80,7 +85,7 @@ async def code_store(zoekt, repo):
         UUID(scope['workspace_id']),
     )
     await pool.execute(
-        "INSERT INTO marie_studio.git_repositories VALUES($1,$2,'fixture',true,true,$3,'organization')",
+        "INSERT INTO marie_runtime.git_repositories VALUES($1,$2,'fixture',true,true,$3,'organization')",
         UUID(repository_id),
         str(repo),
         UUID(scope['organization_id']),
@@ -183,7 +188,7 @@ async def test_two_repositories_same_paths_and_branch_are_separate(
     other_id = uuid4()
     repo_id = uuid4()
     await pool.execute(
-        "INSERT INTO marie_studio.git_repositories VALUES($1,$2,'other',true,true,$3,'organization')",
+        "INSERT INTO marie_runtime.git_repositories VALUES($1,$2,'other',true,true,$3,'organization')",
         repo_id,
         str(other),
         UUID(scope['organization_id']),
@@ -319,7 +324,7 @@ async def test_source_scope_failure_and_stale_dag_never_select_or_retire(code_st
         await store.search(
             {**scope, 'organization_id': str(uuid4())}, 'alpha', 'literal'
         )
-    await pool.execute("UPDATE marie_studio.git_repositories SET is_enabled=false")
+    await pool.execute("UPDATE marie_runtime.git_repositories SET is_enabled=false")
     with pytest.raises(PermissionError):
         await store.search(scope, 'alpha', 'literal')
 
@@ -349,7 +354,7 @@ async def test_two_marie_repositories_qualification(code_store):
             ]
         )
         await pool.execute(
-            "INSERT INTO marie_studio.git_repositories VALUES($1,$2,$3,true,true,$4,'organization')",
+            "INSERT INTO marie_runtime.git_repositories VALUES($1,$2,$3,true,true,$4,'organization')",
             repo_id,
             str(path),
             path.name,
@@ -383,8 +388,23 @@ async def test_two_marie_repositories_qualification(code_store):
         assert (await store.open(scope, hits['results'][0]['citation']))[
             'outcome'
         ] == 'ready'
+        outline = await store.navigate(scope, hits['results'][0]['citation'], 'outline')
+        assert outline['outcome'] == 'ready'
+        assert outline['results'], 'Real source capture must produce navigation records'
+        candidate = outline['results'][0]
+        definitions = await store.navigate(
+            scope, candidate['citation'], 'definitions', candidate['name']
+        )
+        assert definitions['outcome'] == 'ready' and definitions['results']
+        assert (await store.open(scope, candidate['citation']))['outcome'] == 'ready'
         results.append(
             {
+                'navigation': {
+                    'coverage': outline['coverage'],
+                    'outlineCandidates': len(outline['results']),
+                    'definitionCandidates': len(definitions['results']),
+                    'candidate': candidate,
+                },
                 'repository': path.name,
                 'sourceId': str(source_id),
                 'scope': dict(scope),

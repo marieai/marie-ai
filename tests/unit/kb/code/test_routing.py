@@ -72,3 +72,37 @@ def test_gateway_routes_code_to_cpu_executor_and_keeps_search_coverage(monkeypat
     request = streamer.process_single_data.call_args.kwargs['request']
     assert request.header.target_executor == 'repository_executor'
     assert request.header.exec_endpoint == '/code_search'
+
+
+def test_gateway_preserves_navigation_candidates_and_coverage(monkeypatch):
+    from marie.auth.api_key_manager import APIKeyManager
+    from tests.unit.kb.test_kb_gateway_routes import AUTH, _client, _streamer_returning
+
+    monkeypatch.setattr(APIKeyManager, 'is_valid', staticmethod(lambda token: True))
+    payload = {
+        'outcome': 'ready',
+        'results': [],
+        'coverage': {'partial': 1},
+        'heuristic': True,
+    }
+    streamer = _streamer_returning(payload)
+    client = _client(
+        streamer, {'executor': 'vectors', 'code_executor': 'repository_executor'}
+    )
+    response = client.post(
+        '/api/v1/kb/code_navigation',
+        json={
+            'tenant_id': 'tenant',
+            'index_id': 'index',
+            'source_id': 'source',
+            'organization_id': 'org',
+            'citation': {'path': 'same.py'},
+            'mode': 'outline',
+        },
+        headers=AUTH,
+    )
+    assert response.status_code == 200
+    assert response.json()['result'] == payload
+    request = streamer.process_single_data.call_args.kwargs['request']
+    assert request.header.target_executor == 'repository_executor'
+    assert request.header.exec_endpoint == '/code_navigation'

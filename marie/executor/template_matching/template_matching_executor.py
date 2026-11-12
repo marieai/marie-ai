@@ -97,7 +97,7 @@ class TemplateMatchingExecutor(Executor):
     ):
         print("TEMPLATE MATCHING EXECUTOR")
         if docs is None or len(docs) == 0:
-            return {"error": "empty payload"}
+            return {"status": "error", "error": "empty payload"}
 
         print("Dumping docs:")
         if False:
@@ -105,7 +105,7 @@ class TemplateMatchingExecutor(Executor):
                 print(doc)
 
         if len(docs) > 1:
-            return {"error": "expected single document"}
+            return {"status": "error", "error": "expected single document"}
         pages = docs[0].pages
         if docs[0].pages is None or len(docs[0].pages) == 0 or docs[0].pages[0] == -1:
             pages = None

@@ -407,12 +407,15 @@ async def test_persist_keeps_dag_successful_when_post_commit_effects_fail(
     service._notify_callback.assert_awaited_once_with()
 
 
-async def test_persist_resolves_registered_kb_settings_before_planning(monkeypatch):
+async def test_persist_runs_injected_preparation_before_planning(monkeypatch):
     service = build_service()
-    saved = {'planner': 'kb_indexing', 'item_id': 'item', 'run_params': {'parse_mode': 'auto'}}
-    service.repository.resolve_kb_indexing_metadata = AsyncMock(return_value=saved)
+    saved = {'application': 'custom', 'settings': {'mode': 'saved'}}
+
+    async def prepare(work):
+        work.data['metadata'] = saved
+
+    service._prepare_submission_callback = prepare
     submitted = work_item('dag-1')
-    submitted.data['metadata'] = {'planner': 'kb_indexing', 'item_id': 'item'}
     planned = []
 
     def plan(work):
@@ -422,6 +425,24 @@ async def test_persist_resolves_registered_kb_settings_before_planning(monkeypat
     monkeypatch.setattr(submission_module, 'query_plan_work_items', plan)
     await service.persist(submitted)
     assert planned == [saved]
+
+
+async def test_persist_supplies_injected_transaction_callback(monkeypatch):
+    service = build_service()
+    service._persist_submission_callback = AsyncMock()
+    submitted = work_item('dag-1')
+    monkeypatch.setattr(
+        submission_module,
+        'query_plan_work_items',
+        MagicMock(return_value=(QueryPlan(nodes=[]), [SimpleNamespace(dag_id=None)])),
+    )
+    await service.persist(submitted)
+    callback = service.repository.create_dag_with_jobs.call_args.kwargs[
+        'transaction_callback'
+    ]
+    connection = object()
+    await callback(connection)
+    service._persist_submission_callback.assert_awaited_once_with(connection, submitted)
 
 
 @pytest.mark.asyncio

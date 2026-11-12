@@ -59,6 +59,10 @@ _KB_ACTIONS: Dict[str, tuple[str, tuple[str, ...]]] = {
         '/open_code',
         ('tenant_id', 'index_id', 'source_id', 'organization_id', 'citation'),
     ),
+    'code_navigation': (
+        '/code_navigation',
+        ('tenant_id', 'index_id', 'source_id', 'organization_id', 'citation', 'mode'),
+    ),
     'open_text': (
         '/open_text',
         (
@@ -131,12 +135,13 @@ def register_kb_routes(
         """Validate *body* and forward the action to the KB executor."""
         target = (
             code_executor
-            if action in ('code_search', 'open_code', 'delete_code_source')
+            if action
+            in ('code_search', 'open_code', 'delete_code_source', 'code_navigation')
             else executor
         )
         if not target:
             return _error(
-                f"kb service not configured (missing kb.{'code_executor' if action in ('code_search', 'open_code', 'delete_code_source') else 'executor'} in gateway config)",
+                f"kb service not configured (missing kb.{'code_executor' if action in ('code_search', 'open_code', 'delete_code_source', 'code_navigation') else 'executor'} in gateway config)",
                 status_code=503,
             )
 
@@ -173,7 +178,11 @@ def register_kb_routes(
 
         # Search-style payloads carry the row list under "results"; surface
         # that list as the result to keep the client contract flat.
-        result = payload if action == 'code_search' else payload.get("results", payload)
+        result = (
+            payload
+            if action in ('code_search', 'code_navigation')
+            else payload.get("results", payload)
+        )
         return {"status": "ok", "result": result}
 
     async def _body(request: Request) -> Dict[str, Any]:
@@ -214,6 +223,10 @@ def register_kb_routes(
         'Withdraw a repository source and retire its owned indexes',
     )
     _mount('open_code', 'Open a digest-checked captured code range')
+    _mount(
+        'code_navigation',
+        'Read bounded code syntax candidates from a captured repository',
+    )
     _mount('open_text', 'Open a digest-checked current saved passage')
     _mount('delete_text_item', 'Withdraw one item and clean up its indexed text')
     _mount('delete_text_index', 'Withdraw an index and clean up its indexed text')

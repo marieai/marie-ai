@@ -28,7 +28,9 @@ async def legacy():
         ),
         autocommit=True,
     )
-    await pool.execute(f'CREATE SCHEMA {source}; CREATE SCHEMA {target}')
+    await pool.execute(
+        f'CREATE SCHEMA {source}; CREATE SCHEMA {target}; CREATE SCHEMA {source}_runtime'
+    )
     try:
         await pool.execute(
             (SQL_DIRECTORY / '101_kb_catalog.sql')
@@ -39,9 +41,9 @@ async def legacy():
             f'''ALTER TABLE {source}.kb_index DROP COLUMN organization_id CASCADE;
             ALTER TABLE {source}.kb_audit_log DROP COLUMN organization_id CASCADE;
             ALTER TABLE {source}.kb_audit_log DROP COLUMN index_id CASCADE;
-            CREATE TABLE {source}.tenant(id uuid PRIMARY KEY,organization_id uuid NOT NULL);
+            CREATE TABLE {source}_runtime.tenant(id uuid PRIMARY KEY,organization_id uuid NOT NULL);
             CREATE TABLE {source}."user"(id uuid PRIMARY KEY);
-            ALTER TABLE {source}.kb_index ADD CONSTRAINT tenant_fk FOREIGN KEY(tenant_id) REFERENCES {source}.tenant(id);
+            ALTER TABLE {source}.kb_index ADD CONSTRAINT tenant_fk FOREIGN KEY(tenant_id) REFERENCES {source}_runtime.tenant(id);
             ALTER TABLE {source}.kb_document ADD CONSTRAINT creator_fk FOREIGN KEY(created_by) REFERENCES {source}."user"(id);
             ALTER TABLE {source}.kb_audit_log ADD CONSTRAINT actor_fk FOREIGN KEY(user_id) REFERENCES {source}."user"(id);
             CREATE TYPE {source}.segmentation_mode AS ENUM('page','paragraph','semantic');
@@ -57,7 +59,7 @@ async def legacy():
         yield pool, source, target
     finally:
         await pool.execute(
-            f'DROP SCHEMA {source} CASCADE; DROP SCHEMA {target} CASCADE'
+            f'DROP SCHEMA {source} CASCADE; DROP SCHEMA {target} CASCADE; DROP SCHEMA {source}_runtime CASCADE'
         )
         await pool.close()
 
@@ -68,7 +70,7 @@ async def test_handoff_preserves_catalog_objects_incoming_fks_and_row_identity(l
         uuid4() for _ in range(8)
     ]
     await pool.execute(
-        f'INSERT INTO {source}.tenant VALUES($1,$2);', tenant, organization
+        f'INSERT INTO {source}_runtime.tenant VALUES($1,$2);', tenant, organization
     )
     await pool.execute(f'INSERT INTO {source}."user" VALUES($1)', actor)
     await pool.execute(
@@ -111,6 +113,7 @@ async def test_handoff_preserves_catalog_objects_incoming_fks_and_row_identity(l
         HANDOFF.read_text()
         .replace('marie_studio', source)
         .replace('marie_scheduler', target)
+        .replace('marie_runtime', f'{source}_runtime')
     )
     await pool.execute(statement)
     assert (
@@ -178,6 +181,7 @@ async def test_handoff_refuses_dual_catalogs_without_moving_any_source(legacy):
         HANDOFF.read_text()
         .replace('marie_studio', source)
         .replace('marie_scheduler', target)
+        .replace('marie_runtime', f'{source}_runtime')
     )
     with pytest.raises(RaiseException, match='already exists'):
         await pool.execute(statement)
@@ -206,6 +210,7 @@ async def test_handoff_missing_tenant_authority_rolls_back_all_changes(legacy):
             HANDOFF.read_text()
             .replace('marie_studio', source)
             .replace('marie_scheduler', target)
+            .replace('marie_runtime', f'{source}_runtime')
         )
     assert (
         await pool.fetchval('SELECT to_regclass($1)', f'{source}.kb_index') is not None

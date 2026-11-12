@@ -21,8 +21,8 @@ BEGIN
 
     ALTER TABLE marie_studio.kb_index ADD COLUMN IF NOT EXISTS organization_id UUID;
     UPDATE marie_studio.kb_index k SET organization_id=t.organization_id
-        FROM marie_studio.tenant t WHERE t.id=k.tenant_id AND k.organization_id IS NULL;
-    IF EXISTS(SELECT 1 FROM marie_studio.kb_index k LEFT JOIN marie_studio.tenant t ON t.id=k.tenant_id
+        FROM marie_runtime.tenant t WHERE t.id=k.tenant_id AND k.organization_id IS NULL;
+    IF EXISTS(SELECT 1 FROM marie_studio.kb_index k LEFT JOIN marie_runtime.tenant t ON t.id=k.tenant_id
               WHERE k.organization_id IS NULL OR k.organization_id IS DISTINCT FROM t.organization_id) THEN
         RAISE EXCEPTION 'KB tenant organization authority is missing or inconsistent; no tables were moved';
     END IF;
@@ -53,8 +53,8 @@ BEGIN
     ALTER TABLE marie_studio.kb_audit_log ADD COLUMN IF NOT EXISTS organization_id UUID;
     ALTER TABLE marie_studio.kb_audit_log ADD COLUMN IF NOT EXISTS index_id UUID;
     UPDATE marie_studio.kb_audit_log a SET organization_id=t.organization_id
-        FROM marie_studio.tenant t WHERE t.id=a.tenant_id AND a.organization_id IS NULL;
-    IF EXISTS(SELECT 1 FROM marie_studio.kb_audit_log a LEFT JOIN marie_studio.tenant t ON t.id=a.tenant_id
+        FROM marie_runtime.tenant t WHERE t.id=a.tenant_id AND a.organization_id IS NULL;
+    IF EXISTS(SELECT 1 FROM marie_studio.kb_audit_log a LEFT JOIN marie_runtime.tenant t ON t.id=a.tenant_id
               WHERE a.organization_id IS NULL OR a.organization_id IS DISTINCT FROM t.organization_id) THEN
         RAISE EXCEPTION 'KB audit organization authority is missing or inconsistent; no tables were moved';
     END IF;

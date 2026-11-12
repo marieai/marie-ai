@@ -92,10 +92,22 @@ class TextIndexStore:
         return len(records)
 
     async def search(
-        self, tenant_id: str, index_id: str, query: str, *, top_k: int = 10
+        self,
+        tenant_id: str,
+        index_id: str,
+        query: str,
+        *,
+        top_k: int = 10,
+        source_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if not query.strip() or len(query) > 2000 or not 1 <= top_k <= 50:
             raise ValueError('A query and supported result limit are required')
+        if source_ids is not None and (
+            not isinstance(source_ids, list)
+            or len(source_ids) > 20
+            or any(not isinstance(source, str) or not source for source in source_ids)
+        ):
+            raise ValueError('Source selection must contain at most 20 source IDs')
         rows = await self.pool.fetch(
             '''SELECT section_id,item_id,source_id,indexed_dag_id,content,
                 source_digest,start_offset,end_offset,item_state,refresh_error,
@@ -103,11 +115,13 @@ class TextIndexStore:
                 ts_rank_cd(search_vector,plainto_tsquery('english',$3)) AS score
             FROM marie_scheduler.kb_text_section_current
             WHERE tenant_id=$1 AND index_id=$2 AND search_vector @@ plainto_tsquery('english',$3)
+              AND ($5::text[] IS NULL OR source_id=ANY($5::text[]))
             ORDER BY score DESC,item_id,section_id LIMIT $4''',
             UUID(tenant_id),
             UUID(index_id),
             query,
             top_k,
+            source_ids,
         )
         return [{**row, 'indexed_dag_id': str(row['indexed_dag_id'])} for row in rows]
 

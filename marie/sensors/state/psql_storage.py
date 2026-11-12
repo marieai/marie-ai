@@ -106,8 +106,8 @@ class PostgreSQLSensorStorage(SensorStateStorage):
                 await connection.fetchval(
                     '''SELECT 1 FROM marie_scheduler.kb_source s
                    JOIN marie_scheduler.kb_index k ON k.id=s.index_id
-                   JOIN marie_studio.tenant t ON t.id=k.tenant_id
-                   JOIN marie_studio.git_repositories r ON r.id=(s.dataset_inputs->>'repositoryId')::uuid
+                   JOIN marie_runtime.tenant t ON t.id=k.tenant_id
+                   JOIN marie_runtime.git_repositories r ON r.id=(s.dataset_inputs->>'repositoryId')::uuid
                    WHERE s.id=$1 AND k.id=$2 AND t.id=$3 AND t.organization_id=$4 AND k.workspace_id=$5
                      AND s.trigger_config_id=$6 AND s.sync_mode='scheduled' AND s.source_type='repository'
                      AND s.status <> 'disabled' AND t.status='active' AND r.is_enabled AND r.git_enabled

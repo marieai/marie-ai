@@ -38,6 +38,49 @@ def reference(text):
     }
 
 
+async def test_source_selection_filters_before_ranking_and_empty_scope_returns_nothing(
+    state, text_store
+):
+    items, _, scope, attempt = state
+    other = KbItemScope(scope.tenant_id, scope.index_id, str(uuid4()), 'a-first')
+    other_attempt = str(uuid4())
+    await items.register(
+        other,
+        indexing_dag_id=other_attempt,
+        owner_type='record',
+        owner_id='two',
+        uri='s3://fixture/two.md',
+        run_params={},
+        backend='postgresql_text',
+        store_name='kb_text_section',
+    )
+    for current_scope, current_attempt in [(scope, attempt), (other, other_attempt)]:
+        await text_store.replace(
+            current_scope,
+            current_attempt,
+            'emergency coverage',
+            reference('emergency coverage'),
+        )
+    unrestricted = await text_store.search(
+        scope.tenant_id, scope.index_id, 'emergency', top_k=1
+    )
+    assert unrestricted[0]['source_id'] == other.source_id
+    selected = await text_store.search(
+        scope.tenant_id,
+        scope.index_id,
+        'emergency',
+        top_k=1,
+        source_ids=[scope.source_id],
+    )
+    assert selected[0]['source_id'] == scope.source_id
+    assert not await text_store.search(
+        scope.tenant_id, scope.index_id, 'emergency', source_ids=[]
+    )
+    assert not await text_store.search(
+        scope.tenant_id, scope.index_id, 'emergency', source_ids=[str(uuid4())]
+    )
+
+
 async def test_saved_markdown_is_searchable_without_vectors_and_has_exact_offsets(
     state, text_store
 ):
@@ -168,11 +211,13 @@ async def test_index_cleanup_batches_and_captured_cleanup_cannot_delete_relinked
         FROM marie_scheduler.kb_item_state CROSS JOIN generate_series(1,501) n WHERE item_id=$1""",
         scope.item_id,
     )
-    await pool.execute("""INSERT INTO marie_scheduler.kb_text_section
+    await pool.execute(
+        """INSERT INTO marie_scheduler.kb_text_section
         (tenant_id,index_id,source_id,item_id,section_id,indexed_dag_id,content,source_digest,input_ref,start_offset,end_offset)
         SELECT k.tenant_id,k.index_id,k.source_id,k.item_id,s.section_id,k.indexing_dag_id,s.content,s.source_digest,s.input_ref,s.start_offset,s.end_offset
         FROM marie_scheduler.kb_item_state k JOIN marie_scheduler.kb_text_section s USING (tenant_id,index_id,source_id)
-        WHERE k.item_id<>s.item_id""")
+        WHERE k.item_id<>s.item_id"""
+    )
     assert await text_store.delete_index(scope.tenant_id, scope.index_id) == 502
     assert (
         await pool.fetchval(
@@ -272,7 +317,9 @@ async def test_rerun_upstream_cannot_replace_previous_text(state, text_store):
         scope, attempt, 'emergency old', reference('emergency old')
     )
     new_attempt = str(uuid4())
-    await items.reindex(scope, expected_indexing_dag_id=attempt, indexing_dag_id=new_attempt)
+    await items.reindex(
+        scope, expected_indexing_dag_id=attempt, indexing_dag_id=new_attempt
+    )
     upstream = uuid4()
     await pool.execute(
         'CREATE TABLE IF NOT EXISTS marie_scheduler.dag (id uuid PRIMARY KEY,state text,completed_on timestamptz)'

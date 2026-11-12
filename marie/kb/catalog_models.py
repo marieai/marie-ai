@@ -178,6 +178,7 @@ class ScheduleConfig(BaseModel):
 
 class SaveSource(IndexScope):
     expectedConfigurationRevision: Revision
+    workspaceId: UUID | None = None
     sourceId: UUID | None = None
     name: Annotated[str, Field(min_length=1, max_length=255)]
     sourceType: Literal[

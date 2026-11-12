@@ -48,6 +48,11 @@ top-level schema files alone does not prove that the bundle is complete.
 
 ## Prepare the current KB indexing path
 
+Organization, tenant hierarchy and repository registration are shared in
+`marie_runtime`. Before upgrading an installation that still keeps those tables in
+Studio, complete the [shared platform transfer](shared-platform-registry.md).
+Both services use the same IDs and records; no second identity catalog is created.
+
 See [KB indexing recovery](kb-indexing-recovery.md) for existing scheduler recovery,
 KB status interpretation and the operator-controlled restore procedure.
 
@@ -66,8 +71,10 @@ The unreleased KB SQL is consolidated into its final definitions:
 | `094_kb_item_state.sql` | Current item guard, saved workflow input and completion sensor. |
 | `099_kb_text_index.sql` | Text sections, search index and ordinary current-result view. |
 | `101_kb_catalog.sql` | Backend-owned KB catalog and audit tables. |
+| `102_shared_platform_registry.sql` | Shared organization, tenant hierarchy and repository registry. |
+| `103_kb_code_navigation.sql` | Capture-scoped code navigation artifacts. |
 
-The current scheduler schema version is **101**. `indexing_dag_id` and
+The current scheduler schema version is **103**. `indexing_dag_id` and
 `indexed_dag_id` are created directly. There is no rename-only schema100,
 separate workflow-input schema098, dynamic view replay guard or duplicate
 Studio KB migration chain. Use the complete matching SQL bundle: retaining
@@ -103,7 +110,8 @@ explicit binding transition rather than matching another execution by URI alone.
 The KB catalog, scheduler and managed PostgreSQL vector/text output share the
 backend database so registration, execution ownership and output replacement
 can commit atomically. Studio is an API client for KB persistence. Existing
-platform tenant, extension and Git registry authority remains in place; the
+shared organization, tenant and Git registry authority lives in `marie_runtime`;
+extension installation authority remains in place. The
 runtime no longer reads or writes `marie_studio.kb_*` tables.
 The managed vector table is `kb_vectors` in this slice. A different executor
 `table_name` is rejected at startup; configurable store profiles remain in F15.

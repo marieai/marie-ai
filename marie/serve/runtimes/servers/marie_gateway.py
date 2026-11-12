@@ -42,6 +42,7 @@ from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
 from marie.kb.catalog_routes import register_kb_catalog_routes
 from marie.kb.gateway_routes import register_kb_routes
+from marie.kb.submission import KbSubmissionHooks
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import Toast, mark_as_accepted, mark_as_failed
 from marie.messaging.events import (
@@ -469,10 +470,13 @@ class MarieServerGateway(CompositeServer):
                 job_scheduler_kwargs.get("job_event_queue_size", 1024)
             ),
         )
+        kb_submission = KbSubmissionHooks(lambda: self.job_scheduler.repository._pool)
         self.job_scheduler = PostgreSQLJobScheduler(
             config=job_scheduler_kwargs,
             job_manager=self.job_manager,
             gateway_ready_event=self.ready_event,
+            prepare_submission_callback=kb_submission.prepare,
+            persist_submission_callback=kb_submission.persist,
         )
 
         # perform monkey patching

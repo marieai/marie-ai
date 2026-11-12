@@ -921,6 +921,21 @@ class KbCatalog:
     ) -> dict[str, Any]:
         index = await self._index(connection, command, command.indexId, lock=True)
         revision = self._revision(index, command.expectedConfigurationRevision)
+        if command.workspaceId is not None:
+            if command.sourceType not in ('datasource', 'repository'):
+                raise CatalogError(
+                    'Only executable sources can assign a workspace', 400
+                )
+            if index['workspace_id'] not in (None, command.workspaceId):
+                raise CatalogError('Knowledge base workspace cannot change', 409)
+            if index['workspace_id'] is None:
+                index = await connection.fetchrow(
+                    f'''UPDATE {self.schema}.kb_index SET workspace_id=$2,updated_by=$3,
+                        updated_at=clock_timestamp() WHERE id=$1 RETURNING *''',
+                    index['id'],
+                    command.workspaceId,
+                    command.actor_id,
+                )
         existing = (
             await self._source(connection, index, command.sourceId, lock=True)
             if command.sourceId

@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from marie.kb.item_state import KbItemScope, KbItemStore
+from marie.kb.submission import KbSubmissionHooks
 from marie.sensors.context import SensorEvaluationContext
 from marie.sensors.daemon.worker import SensorWorker
 from marie.sensors.definitions.kb_document_sensor import KbDocumentSensor
@@ -17,6 +18,13 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get('MARIE_SENSOR_TEST_PORT'),
     reason='Requires disposable scheduler PostgreSQL',
 )
+
+
+@pytest.fixture(autouse=True)
+def kb_submission_hooks(runtime):
+    hooks = KbSubmissionHooks(lambda: runtime.scheduler.repository._pool)
+    runtime.submission_service._prepare_submission_callback = hooks.prepare
+    runtime.submission_service._persist_submission_callback = hooks.persist
 
 
 async def test_native_admission_recovers_after_scheduler_acceptance(

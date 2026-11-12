@@ -10,39 +10,11 @@ from marie.instrumentation.context import using_attributes
 from marie.api import ASSET_PAYLOAD_KEYS, AssetKeyDoc, parse_payload_to_docs
 from marie.constants import __default_endpoint__
 from marie.excepts import ExecutorError, InternalNetworkError
-from marie.job.common import JobInfo, JobStatus
+from marie.job.common import RUNTIME_PARAMETER_KEYS, JobInfo, JobStatus
 from marie.job.job_distributor import DocumentArray, JobDistributor, SendCb
 from marie.logging_core.logger import MarieLogger
 from marie.serve.runtimes.gateway.streamer import GatewayStreamer
 from marie.types_core.request.data import DataRequest, Request
-
-MOCK_EXECUTOR_PARAMETER_KEYS = (
-    "failure_rate",
-    "failure_mode",
-    "force_fail",
-    "process_time",
-    "randomize_time",
-)
-
-# spec A0.2: identity fields promoted from the metadata envelope to
-# top-level executor parameters (e.g. VectorStoreExecutor.embed_and_store
-# requires a top-level source_id).
-IDENTITY_PARAMETER_KEYS = (
-    'input_ref',
-    'upstream',
-    'index_id',
-    'item_id',
-    'kb_indexing_dag_id',
-    'kb_attempt_id',
-    'owner_type',
-    'owner_id',
-    "source_id",
-    "index_name",
-    "tenant_id",
-    "ref_id",
-    "ref_type",
-    "uri",
-)
 
 
 class GatewayJobDistributor(JobDistributor):
@@ -112,42 +84,23 @@ class GatewayJobDistributor(JobDistributor):
     async def _build_payload(self, submission_id: str, job_info: JobInfo):
         # The parser removes the datasource key; isolate that from retry metadata.
         metadata = dict(job_info.metadata.get("metadata", {}))
-        identity_values = {
-            key: metadata[key] for key in IDENTITY_PARAMETER_KEYS if key in metadata
-        }
-        run_params = metadata.get("run_params")
-        if job_info.entrypoint == "plugin_daemon_executor://execute" and not any(
-            key in metadata for key in ASSET_PAYLOAD_KEYS
-        ):
-            parameters, asset_doc = {}, None
+        if any(key in metadata for key in ASSET_PAYLOAD_KEYS):
+            asset_parameters, asset_doc = await parse_payload_to_docs(metadata)
         else:
-            parameters, asset_doc = await parse_payload_to_docs(metadata)
+            asset_parameters, asset_doc = {}, None
+        parameters = {
+            key: value
+            for key, value in metadata.items()
+            if key not in ASSET_PAYLOAD_KEYS and key not in RUNTIME_PARAMETER_KEYS
+        }
+        parameters.update(asset_parameters)
+        if asset_doc is not None:
+            parameters["uri"] = asset_doc.asset_key
         parameters["job_id"] = submission_id
         parameters["payload"] = metadata
-        for key in MOCK_EXECUTOR_PARAMETER_KEYS:
-            if key in metadata:
-                parameters[key] = metadata[key]
-        for key, value in identity_values.items():
-            if key not in parameters:
-                parameters[key] = value
-        # promote run_params (e.g. chunk_size/chunk_overlap/segmentation_mode,
-        # multimodal) so executors like VectorStoreExecutor._run_param can
-        # find them at the top level, matching how IDENTITY_PARAMETER_KEYS
-        # are promoted above - without this, run_params only survives nested
-        # under parameters["payload"]["run_params"].
-        if run_params:
-            parameters["run_params"] = run_params
 
-        # Pass through DAG and run-attempt identity for asset materialization
-        # These are set by the scheduler when dispatching DAG jobs
-        for key in (
-            "dag_id",
-            "node_task_id",
-            "partition_key",
-            "run_owner",
-            "run_attempt_id",
-            "submission_trace_context",
-        ):
+        # Runtime identity comes from the scheduler envelope.
+        for key in RUNTIME_PARAMETER_KEYS - {'job_id', 'payload', '__results__'}:
             if key in job_info.metadata:
                 parameters[key] = job_info.metadata[key]
 

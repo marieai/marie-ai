@@ -6,6 +6,7 @@ import traceback
 import uuid as _uuid
 from asyncio import Queue
 from collections import Counter, defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -61,7 +62,10 @@ from marie.serve.discovery.registry import _is_known_connection_error
 from marie.serve.runtimes.servers.cluster_state import ClusterState
 from marie.state.semaphore_store import SemaphoreStore
 from marie.state.slot_capacity_manager import SlotCapacityManager
-from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
+from marie.storage.database.postgres_pool import (
+    AsyncPostgresConnection,
+    AsyncPostgresConnectionPool,
+)
 from marie.utils.scheduler_trace import scheduler_trace, scheduler_trace_enabled
 from marie.utils.utils import current_milli_time
 
@@ -179,6 +183,13 @@ class PostgreSQLJobScheduler(JobScheduler):
         config: Dict[str, Any],
         job_manager: JobManager,
         gateway_ready_event: asyncio.Event = None,
+        *,
+        prepare_submission_callback: (
+            Callable[[WorkInfo], Awaitable[None]] | None
+        ) = None,
+        persist_submission_callback: (
+            Callable[[Any, WorkInfo], Awaitable[None]] | None
+        ) = None,
     ):
         super().__init__()
         self.logger = MarieLogger(PostgreSQLJobScheduler.__name__)
@@ -186,6 +197,8 @@ class PostgreSQLJobScheduler(JobScheduler):
             raise BadConfigSource("job_manager argument is required for JobScheduler")
 
         self._gateway_ready_event = gateway_ready_event
+        self._prepare_submission_callback = prepare_submission_callback
+        self._persist_submission_callback = persist_submission_callback
         scheduler_config = self.validate_config(config)
         self.scheduler_config = scheduler_config
         self.config = config  # Store config for listener setup
@@ -375,6 +388,8 @@ class PostgreSQLJobScheduler(JobScheduler):
             ),
             logger=self.logger,
             initial_submission_count=initial_submission_count,
+            prepare_submission_callback=self._prepare_submission_callback,
+            persist_submission_callback=self._persist_submission_callback,
         )
 
     def _build_diagnostics(self) -> SchedulerDiagnostics:

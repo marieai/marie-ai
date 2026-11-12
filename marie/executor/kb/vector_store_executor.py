@@ -284,6 +284,7 @@ class VectorStoreExecutor(MarieExecutor):
                 index,
                 parameters.get('query', ''),
                 top_k=int(parameters.get('top_k', 10)),
+                source_ids=parameters.get('source_ids'),
             )
         }
 

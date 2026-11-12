@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from docarray import DocList
 from docarray.documents import TextDoc
@@ -48,13 +48,13 @@ class RepositoryExecutor(MarieExecutor):
     @requests(on='/refresh_repository')
     async def refresh_repository(
         self, docs: DocList[TextDoc], parameters: dict[str, Any], **kwargs: Any
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return await (await self._ensure_store()).refresh(parameters)
 
     @requests(on='/code_search')
     async def code_search(
         self, docs: DocList[TextDoc], parameters: dict[str, Any], **kwargs: Any
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return await (await self._ensure_store()).search(
             parameters,
             parameters.get('query', ''),
@@ -65,7 +65,7 @@ class RepositoryExecutor(MarieExecutor):
     @requests(on='/open_code')
     async def open_code(
         self, docs: DocList[TextDoc], parameters: dict[str, Any], **kwargs: Any
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return await (await self._ensure_store()).open(
             parameters, parameters['citation']
         )
@@ -73,8 +73,20 @@ class RepositoryExecutor(MarieExecutor):
     @requests(on='/delete_code_source')
     async def delete_code_source(
         self, docs: DocList[TextDoc], parameters: dict[str, Any], **kwargs: Any
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return await (await self._ensure_store()).remove(parameters)
+
+    @requests(on='/code_navigation')
+    async def code_navigation(
+        self, docs: DocList[TextDoc], parameters: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        return await (await self._ensure_store()).navigate(
+            parameters,
+            parameters['citation'],
+            parameters['mode'],
+            parameters.get('name', ''),
+            int(parameters.get('limit', 20)),
+        )
 
     async def close(self) -> None:
         if self._store:

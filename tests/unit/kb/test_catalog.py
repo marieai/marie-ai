@@ -308,9 +308,10 @@ async def test_submission_admission_fans_out_atomically_and_revokes_memberships(
     unlinked = await service.call('get_index', listing)
     assert unlinked['documentCount'] == 0
     assert unlinked['sources'][0]['documentCount'] == 0
-    assert len(
-        await service.call('list_documents', {**identity, 'indexId': two['id']})
-    ) == 1
+    assert (
+        len(await service.call('list_documents', {**identity, 'indexId': two['id']}))
+        == 1
+    )
     restored = await service.call('set_submission_destinations', command)
     original = next(
         document
@@ -948,3 +949,44 @@ async def test_reindex_repairs_legacy_registration_without_reusing_removed_items
     assert repaired['itemState']['owner_id'] == document['id']
     if legacy_state == 'removed':
         assert repaired['metadata']['kbItem']['itemId'] != original
+
+
+async def test_first_repository_source_binds_workspace_atomically_and_cannot_rebind(
+    catalog,
+):
+    from marie.kb.catalog import CatalogError
+
+    service, pool, schema = catalog
+    identity = scope()
+    index = await service.call('create_index', {**identity, 'name': 'code-workspace'})
+    workspace = str(uuid4())
+    source = {
+        'indexId': index['id'],
+        'expectedConfigurationRevision': 0,
+        'name': 'Code',
+        'sourceType': 'repository',
+        'workspaceId': workspace,
+    }
+    saved = await service.call('save_source', {**identity, **source})
+    current = await service.call('get_index', {**identity, 'indexId': index['id']})
+    assert current['workspaceId'] == workspace and current['configurationRevision'] == 1
+    with pytest.raises(CatalogError) as mismatch:
+        await service.call(
+            'save_source',
+            {
+                **identity,
+                **source,
+                'sourceId': saved['source']['id'],
+                'expectedConfigurationRevision': 1,
+                'workspaceId': str(uuid4()),
+            },
+        )
+    assert mismatch.value.status_code == 409
+    second = await service.call('create_index', {**identity, 'name': 'failed-binding'})
+    with pytest.raises(CatalogError):
+        await service.call(
+            'save_source',
+            {**identity, **source, 'indexId': second['id'], 'sourceId': str(uuid4())},
+        )
+    second = await service.call('get_index', {**identity, 'indexId': second['id']})
+    assert second['workspaceId'] is None and second['configurationRevision'] == 0

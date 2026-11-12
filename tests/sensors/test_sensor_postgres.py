@@ -98,7 +98,7 @@ async def runtime(monkeypatch):
     worker._registry.register(SensorType.SCHEDULE, ScheduleSensor)
     try:
         yield SimpleNamespace(
-            pool=pool, storage=storage, scheduler=scheduler, worker=worker
+            pool=pool, storage=storage, scheduler=scheduler, worker=worker, submission_service=service
         )
     finally:
         await repo_pool.close()

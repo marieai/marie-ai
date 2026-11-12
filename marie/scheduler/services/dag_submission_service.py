@@ -19,6 +19,7 @@ from marie.scheduler.llm_routing import (
 from marie.scheduler.models import ExistingWorkPolicy, WorkInfo
 from marie.scheduler.planner_util import query_plan_work_items
 from marie.scheduler.repository import JobRepository
+from marie.storage.database.postgres_pool import AsyncPostgresConnection
 from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
@@ -38,6 +39,12 @@ class DagSubmissionService:
         submission_processed_callback: Callable[[int], Awaitable[None]] | None,
         logger: MarieLogger,
         initial_submission_count: int = 0,
+        prepare_submission_callback: (
+            Callable[[WorkInfo], Awaitable[None]] | None
+        ) = None,
+        persist_submission_callback: (
+            Callable[[AsyncPostgresConnection, WorkInfo], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         self.repository = repository
         self._dag_admission_callback = dag_admission_callback
@@ -47,6 +54,8 @@ class DagSubmissionService:
         self._submission_processed_callback = submission_processed_callback
         self.logger = logger
         self.submission_count = initial_submission_count
+        self._prepare_submission_callback = prepare_submission_callback
+        self._persist_submission_callback = persist_submission_callback
 
     async def submit(self, work_info: WorkInfo, overwrite: bool = True) -> str:
         self.logger.debug(f'Submitting job : {work_info.id}')
@@ -86,14 +95,8 @@ class DagSubmissionService:
                 f'For work item : {work_info}.'
             )
 
-        metadata = work_info.data.get('metadata', {})
-        if metadata.get('planner', work_info.name) in (
-            'kb_indexing',
-            'kb_index_content',
-        ) and (metadata.get('item_id') or metadata.get('ref_type') == 'kb_item'):
-            work_info.data[
-                'metadata'
-            ] = await self.repository.resolve_kb_indexing_metadata(metadata)
+        if self._prepare_submission_callback is not None:
+            await self._prepare_submission_callback(work_info)
         plan, dag_nodes = query_plan_work_items(work_info)
         scheduler_trace(
             'dag_plan_built',
@@ -131,12 +134,21 @@ class DagSubmissionService:
             job_name=work_info.name,
             job_count=len(dag_nodes),
         )
+        persistence_options = {}
+        persist_callback = self._persist_submission_callback
+        if persist_callback is not None:
+
+            async def in_transaction(connection: AsyncPostgresConnection) -> None:
+                await persist_callback(connection, work_info)
+
+            persistence_options['transaction_callback'] = in_transaction
         new_key_added, new_dag_key = await self.repository.create_dag_with_jobs(
             dag_id=submission_id,
             plan=plan,
             dag_nodes=dag_nodes,
             work_info=work_info,
             llm_routes=llm_routes,
+            **persistence_options,
         )
         if not new_key_added:
             raise ValueError(

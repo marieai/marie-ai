@@ -117,9 +117,9 @@ class DocumentAnnotatorExecutor(MarieExecutor, StorageMixin):
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
     ):
         if len(docs) == 0:
-            return {"error": "empty payload"}
+            return {"status": "error", "error": "empty payload"}
         if len(docs) > 1:
-            return {"error": "expected single document"}
+            return {"status": "error", "error": "expected single document"}
 
         if parameters is None or "job_id" not in parameters:
             self.logger.warning(f"Job ID is not present in parameters")

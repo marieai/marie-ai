@@ -105,7 +105,7 @@ with:
     run_lease_renewal_interval_seconds: 20
     max_pool_size: 5
     max_connections: 5
-    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench,kb_indexing,kb_index_content] # Consumer subscriptions; omit to consume all queues
+    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench,kb_indexing,kb_index_content,kb_repository_refresh] # Consumer subscriptions; omit to consume all queues
 
     # DAG Concurrency Management
     dag_manager:
@@ -191,6 +191,10 @@ with:
   # Document Storage
   # The storage service is used to store the data that is being processed
   # Storage can be backed by S3 compatible
+
+  kb:
+    executor: vector_store_executor
+    code_executor: repository_executor
 
   storage:
     # S3 configuration. Will be used only if value of backend is "s3"

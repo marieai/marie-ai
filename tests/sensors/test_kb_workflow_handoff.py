@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from marie.kb.item_state import KbItemScope, KbItemStore
+from marie.kb.submission import KbSubmissionHooks
 from marie.query_planner.base import QueryPlanRegistry
 from marie.query_planner.kb_indexing_planner import (
     query_planner_kb_index_content,
@@ -26,6 +27,9 @@ pytestmark = pytest.mark.skipif(not os.environ.get('MARIE_SENSOR_TEST_PORT'), re
 @pytest.fixture
 async def handoff(completions):
     runtime, definition = completions
+    hooks = KbSubmissionHooks(lambda: runtime.scheduler.repository._pool)
+    runtime.submission_service._prepare_submission_callback = hooks.prepare
+    runtime.submission_service._persist_submission_callback = hooks.persist
     directory = Path(__file__).parents[2] / 'config/psql/schema'
     await runtime.pool.execute((directory / '094_kb_item_state.sql').read_text().replace('{schema}', 'marie_scheduler'))
     for name in ['099_kb_text_index.sql']:
@@ -289,3 +293,18 @@ async def test_source_admission_waits_for_overlapping_registration(handoff):
             assert blocked
     dag_id = await source
     assert (await store.get(scopes[0]))['input_ref']['dag_id'] == dag_id
+
+
+async def test_kb_persistence_failure_rolls_back_dag_jobs_and_binding(handoff):
+    runtime, definition, store, scopes, uri = handoff
+    original = runtime.submission_service._persist_submission_callback
+    async def fail(connection, work):
+        await original(connection, work)
+        raise RuntimeError('KB binding rejected')
+    runtime.submission_service._persist_submission_callback = fail
+    with pytest.raises(RuntimeError, match='KB binding rejected'):
+        await extraction(runtime, scopes[0], uri)
+    assert await runtime.pool.fetchval('SELECT count(*) FROM marie_scheduler.dag') == 0
+    assert await runtime.pool.fetchval('SELECT count(*) FROM marie_scheduler.job') == 0
+    for scope in scopes:
+        assert 'dag_id' not in (await store.get(scope))['input_ref']

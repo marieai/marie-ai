@@ -121,9 +121,9 @@ class DocumentClassificationExecutor(MarieExecutor):
         :return:
         """
         if len(docs) == 0:
-            return {"error": "empty payload"}
+            return {"status": "error", "error": "empty payload"}
         if len(docs) > 1:
-            return {"error": "expected single document"}
+            return {"status": "error", "error": "expected single document"}
 
         # load documents from specified document asset key
         doc = docs[0]

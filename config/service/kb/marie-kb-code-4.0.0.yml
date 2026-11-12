@@ -1,0 +1,143 @@
+# CPU repository capture, exact search and syntax navigation.
+# Use the existing KB service connection/auth settings and mount registered checkouts under /repositories.
+jtype: Flow
+version: '1'
+shared_config:
+  storage:
+    psql:
+      provider: postgresql
+      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+      port: 5432
+      username: ${{ ENV.POSTGRES_USER }}
+      password: ${{ ENV.POSTGRES_PASSWORD }}
+      database: postgres
+      default_table: shared_docs
+  message:
+    amazon_mq:
+      provider: amazon-rabbitmq
+      hostname: ${{ ENV.AWS_MQ_HOSTNAME }}`
+      port: 5671
+      username: ${{ ENV.AWS_MQ_USERNAME }}
+      password: ${{ ENV.AWS_MQ_PASSWORD }}
+      tls: true
+      virtualhost: /
+    rabbitmq:
+      provider: rabbitmq
+      hostname: ${{ ENV.RABBIT_MQ_HOSTNAME }}
+      port: ${{ ENV.RABBIT_MQ_PORT }}
+      username: ${{ ENV.RABBIT_MQ_USERNAME }}
+      password: ${{ ENV.RABBIT_MQ_PASSWORD }}
+      tls: false
+      virtualhost: /
+toast:
+  native:
+    enabled: true
+    path: /tmp/marie/events.json
+  rabbitmq:
+    provider: rabbitmq
+    hostname: ${{ ENV.RABBIT_MQ_HOSTNAME }}
+    port: ${{ ENV.RABBIT_MQ_PORT }}
+    username: ${{ ENV.RABBIT_MQ_USERNAME }}
+    password: ${{ ENV.RABBIT_MQ_PASSWORD }}
+    tls: false
+    virtualhost: /
+    enabled: true
+  psql:
+    provider: postgresql
+    hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+    port: 5432
+    username: ${{ ENV.POSTGRES_USER }}
+    password: ${{ ENV.POSTGRES_PASSWORD }}
+    database: postgres
+    default_table: event_tracking
+    enabled: true
+storage:
+  s3:
+    enabled: true
+    metadata_only: false
+    endpoint_url: ${{ ENV.S3_ENDPOINT_URL }}
+    access_key_id: ${{ ENV.S3_ACCESS_KEY_ID }}
+    secret_access_key: ${{ ENV.S3_SECRET_ACCESS_KEY }}
+    bucket_name: ${{ ENV.S3_BUCKET_NAME }}
+    region: ${{ ENV.S3_REGION }}
+    insecure: true
+    addressing_style: path
+  psql:
+    provider: postgresql
+    hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+    port: 5432
+    username: ${{ ENV.POSTGRES_USER }}
+    password: ${{ ENV.POSTGRES_PASSWORD }}
+    database: postgres
+    default_table: store_metadata
+    enabled: false
+scheduler:
+  psql:
+    provider: postgresql
+    hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+    port: 5432
+    username: ${{ ENV.POSTGRES_USER }}
+    password: ${{ ENV.POSTGRES_PASSWORD }}
+    database: postgres
+    default_table: job_queue
+    enabled: true
+with:
+  protocol:
+  - grpc
+  discovery: true
+  discovery_host: 0.0.0.0
+  discovery_port: 2379
+  discovery_watchdog_interval: 2
+  discovery_service_name: gateway/marie
+  kv_store_kwargs:
+    provider: postgresql
+    hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+    port: 5432
+    username: ${{ ENV.POSTGRES_USER }}
+    password: ${{ ENV.POSTGRES_PASSWORD }}
+    database: postgres
+    default_table: kv_store_worker
+    schema: marie_scheduler
+    max_pool_size: 10
+    max_connections: 10
+  host: 0.0.0.0
+  tracing: false
+  traces_exporter_host: http://0.0.0.0
+  traces_exporter_port: 4317
+  metrics: false
+  metrics_exporter_host: http://0.0.0.0
+  metrics_exporter_port: 4317
+  event_tracking: true
+prefetch: 1
+executors:
+- name: repository_executor
+  timeout_ready: 300000
+  replicas: 1
+  uses:
+    jtype: RepositoryExecutor
+    py_modules:
+    - marie.executor.kb.repository_executor
+    with:
+      storage:
+        psql:
+          provider: postgresql
+          hostname: ${{ ENV.POSTGRES_HOSTNAME }}
+          port: 5432
+          username: ${{ ENV.POSTGRES_USER }}
+          password: ${{ ENV.POSTGRES_PASSWORD }}
+          database: postgres
+          default_table: shared_docs
+          enabled: false
+          asset_tracking_enabled: false
+      code_search:
+        root: ${{ ENV.MARIE_DEFAULT_MOUNT }}/kb-code
+        url: http://127.0.0.1:6070
+        indexer: ${{ ENV.MARIE_DEFAULT_MOUNT }}/bin/zoekt-index
+        coverage_timeout_seconds: 90
+        repository_roots:
+        - /repositories
+auth:
+  keys:
+  - name: kb-code-worker
+    api_key: ${{ ENV.MARIE_API_KEY }}
+    enabled: true
