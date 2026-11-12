@@ -154,19 +154,30 @@ class TrOCRModel(FairseqEncoderDecoderModel):
             
             pretrained_model = getattr(args, "decoder_pretrained", None)
             specified = pretrained_model.find('-')!=-1
+            tokenizer_overrides = {
+                name: getattr(args, name)
+                for name in ('gpt2_encoder_json', 'gpt2_vocab_bpe')
+                if getattr(args, name, None)
+            }
 
             if 'LOCAL_RANK' in os.environ and os.environ['LOCAL_RANK'] != '0':
                 torch.distributed.barrier()
             if specified:
                 pretrained_model = pretrained_model.replace('-', '.')
                 logger.info('Load pre-trained decoder parameters from {}'.format(pretrained_model))
-                roberta = torch.hub.load('pytorch/fairseq:main', pretrained_model)
+                roberta = torch.hub.load(
+                    'pytorch/fairseq:main', pretrained_model, **tokenizer_overrides
+                )
             elif args.decoder_layers == 6:
                 logger.info('Load pre-trained decoder parameters from roberta.base')
-                roberta = torch.hub.load('pytorch/fairseq:main', 'roberta.base')
+                roberta = torch.hub.load(
+                    'pytorch/fairseq:main', 'roberta.base', **tokenizer_overrides
+                )
             elif args.decoder_layers == 12:
                 logger.info('Load pre-trained decoder parameters from roberta.large')                    
-                roberta = torch.hub.load('pytorch/fairseq:main', 'roberta.large')
+                roberta = torch.hub.load(
+                    'pytorch/fairseq:main', 'roberta.large', **tokenizer_overrides
+                )
             else:
                 raise AttributeError('Cannot determined the pre-trained model')
 
