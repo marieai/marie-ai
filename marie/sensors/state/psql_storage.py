@@ -104,8 +104,8 @@ class PostgreSQLSensorStorage(SensorStateStorage):
         async with self._connection() as connection:
             return bool(
                 await connection.fetchval(
-                    '''SELECT 1 FROM marie_studio.kb_source s
-                   JOIN marie_studio.kb_index k ON k.id=s.index_id
+                    '''SELECT 1 FROM marie_scheduler.kb_source s
+                   JOIN marie_scheduler.kb_index k ON k.id=s.index_id
                    JOIN marie_studio.tenant t ON t.id=k.tenant_id
                    JOIN marie_studio.git_repositories r ON r.id=(s.dataset_inputs->>'repositoryId')::uuid
                    WHERE s.id=$1 AND k.id=$2 AND t.id=$3 AND t.organization_id=$4 AND k.workspace_id=$5

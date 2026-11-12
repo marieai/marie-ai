@@ -1,6 +1,7 @@
 import pytest
 
-from marie.job.common import JobStatus
+from marie._docarray import DocumentArray, LegacyDocument, docarray_v2
+from marie.job.common import JobInfo, JobStatus
 from marie.logging_core.logger import MarieLogger
 from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 
@@ -8,8 +9,15 @@ from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
 class RecordingJobInfoClient:
     def __init__(self):
         self.calls = []
+        self.stored: dict[str, JobInfo] = {}
 
     async def put_status(self, job_id, status, **kwargs):
+        job_info = JobInfo(
+            status=status,
+            entrypoint='test-worker',
+            **kwargs['jobinfo_replace_kwargs'],
+        )
+        self.stored[job_id] = JobInfo.from_json(job_info.to_json())
         self.calls.append(
             {
                 "job_id": job_id,
@@ -19,7 +27,15 @@ class RecordingJobInfoClient:
         )
 
 
-async def test_success_persists_a_bounded_typed_output_for_workflow_handoff():
+@pytest.mark.parametrize(
+    'output',
+    [
+        {'games': [{'id': 'one', 'moves': ['e4']}]},
+        [{'id': 'one', 'moves': ['e4']}],
+        [],
+    ],
+)
+async def test_success_persists_a_bounded_typed_output_for_workflow_handoff(output):
     handler = object.__new__(WorkerRequestHandler)
     handler.logger = MarieLogger('test-successful-output')
     handler._deployment = 'worker-one'
@@ -28,10 +44,45 @@ async def test_success_persists_a_bounded_typed_output_for_workflow_handoff():
     handler._request_attributes = lambda _requests: {'source': 'test'}
     handler._schedule_deployment_ready_after_terminal = lambda **_kwargs: None
     handler.is_dry_run = lambda _requests: False
-    output = {'games': [{'id': 'one', 'moves': ['e4']}]}
     await handler._record_successful_job('job-one', [], {}, return_data=output)
-    result = handler._job_info_client.calls[0]['kwargs']['jobinfo_replace_kwargs']['runtime_env']['output']
+    result = handler._job_info_client.stored['job-one'].runtime_env['output']
     assert result == output
+
+
+@pytest.mark.skipif(not docarray_v2, reason='LegacyDocument requires docarray v2')
+async def test_success_persists_transport_documents_through_job_info_serialization() -> None:
+    handler = object.__new__(WorkerRequestHandler)
+    handler.logger = MarieLogger('test-document-output')
+    handler._deployment = 'worker-one'
+    handler._job_info_client = RecordingJobInfoClient()
+    handler._sem_untrack = lambda *_args, **_kwargs: True
+    handler._request_attributes = lambda _requests: {'source': 'test'}
+    handler._schedule_deployment_ready_after_terminal = lambda **_kwargs: None
+    handler.is_dry_run = lambda _requests: False
+    docs = DocumentArray[LegacyDocument](
+        [LegacyDocument(id='document-one', text='indexed document', tags={'chunks': 1})]
+    )
+
+    await handler._record_successful_job('job-one', [], {}, return_data=docs)
+
+    job_info = handler._job_info_client.stored.get('job-one')
+    assert job_info is not None
+    assert job_info.status == JobStatus.SUCCEEDED
+    assert job_info.runtime_env['attributes'] == {'source': 'test'}
+    assert job_info.runtime_env['output'] == [
+        {
+            'id': 'document-one',
+            'tensor': None,
+            'blob': None,
+            'text': 'indexed document',
+            'url': None,
+            'embedding': None,
+            'tags': {'chunks': 1},
+            'scores': None,
+            'chunks': None,
+            'matches': None,
+        }
+    ]
 
 
 async def test_extraction_handoff_persists_the_reference_without_repeating_document_content():
@@ -47,7 +98,7 @@ async def test_extraction_handoff_persists_the_reference_without_repeating_docum
     await handler._record_successful_job('job-one', [], {}, return_data={
         'status': 'succeeded', 'input_ref': reference, 'metadata': {'ocr': 'large saved output'},
     })
-    output = handler._job_info_client.calls[0]['kwargs']['jobinfo_replace_kwargs']['runtime_env']['output']
+    output = handler._job_info_client.stored['job-one'].runtime_env['output']
     assert output == {'input_ref': reference}
 
 

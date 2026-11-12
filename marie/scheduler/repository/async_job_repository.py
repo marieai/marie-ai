@@ -53,7 +53,7 @@ from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 
 DEFAULT_SCHEMA = "marie_scheduler"
-SCHEDULER_SCHEMA_VERSION = 100
+SCHEDULER_SCHEMA_VERSION = 101
 
 _WORK_INFO_COLUMNS = (
     "id, name, priority, state, retry_limit, start_after, "
@@ -3850,6 +3850,13 @@ class AsyncJobRepository:
             for path in glob.glob(os.path.join(schema_dir, "*.sql"))
             if re.match(r"^\d{3}_", os.path.basename(path))
         )
+        if not any(
+            name.startswith(f"{SCHEDULER_SCHEMA_VERSION:03}_") for name in numbered
+        ):
+            raise RuntimeFailToStart(
+                f"Scheduler schema revision {SCHEDULER_SCHEMA_VERSION} is missing from {schema_dir}. "
+                "Deploy the complete SQL bundle matching this gateway revision."
+            )
         migrations = [
             (name, create_sql_from_file(schema, os.path.join(schema_dir, name)))
             for name in numbered

@@ -25,11 +25,12 @@ async def test_native_admission_recovers_after_scheduler_acceptance(
     from marie.query_planner.base import QueryPlanRegistry
     from marie.query_planner.kb_indexing_planner import query_planner_kb_indexing
 
-    QueryPlanRegistry.register('kb_indexing', query_planner_kb_indexing)
+    if 'kb_indexing' not in QueryPlanRegistry.list_planners():
+        QueryPlanRegistry.register('kb_indexing', query_planner_kb_indexing)
     sql = Path(__file__).parents[2] / 'config/psql/schema/094_kb_item_state.sql'
     await runtime.pool.execute((sql.parent / '068_data_sink_enum.sql').read_text())
     await runtime.pool.execute(sql.read_text().replace('{schema}', 'marie_scheduler'))
-    for name in ['098_kb_workflow_inputs.sql','099_kb_text_index.sql','100_kb_indexing_dag_names.sql']:
+    for name in ['099_kb_text_index.sql']:
         await runtime.pool.execute((sql.parent/name).read_text().replace('{schema}','marie_scheduler'))
     await runtime.pool.execute('TRUNCATE marie_scheduler.kb_item_state')
     await runtime.pool.execute(

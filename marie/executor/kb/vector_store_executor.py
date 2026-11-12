@@ -69,7 +69,7 @@ def _has_usable_text(doc: Any) -> bool:
 
 
 def _run_param(parameters: Dict[str, Any], key: str, default: Any = None) -> Any:
-    """Look up ``key`` in ``parameters["run_params"]`` (nested, studio-sent)
+    """Look up ``key`` in ``parameters["run_params"]`` (nested, studivalidate_auth_at_startupo-sent)
     first, falling back to a top-level ``parameters[key]``."""
     run_params = parameters.get("run_params") or {}
     if key in run_params:
@@ -1142,7 +1142,12 @@ class VectorStoreExecutor(MarieExecutor):
             ('embedding_model', self._embedding_model),
             ('embedding_dim', self._embedding_dim),
         ):
-            if parameters.get(key) is not None and parameters[key] != actual:
+            saved = parameters.get(key)
+            if key == 'embedding_model':
+                actual = actual.removeprefix('hf://')
+                if isinstance(saved, str):
+                    saved = saved.removeprefix('hf://')
+            if saved is not None and saved != actual:
                 raise ValueError(
                     f'Saved embedding profile {key}={parameters[key]!r} does not match '
                     f'this executor ({actual!r})'

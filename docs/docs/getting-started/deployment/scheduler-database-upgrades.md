@@ -51,17 +51,42 @@ top-level schema files alone does not prove that the bundle is complete.
 See [KB indexing recovery](kb-indexing-recovery.md) for existing scheduler recovery,
 KB status interpretation and the operator-controlled restore procedure.
 
-The KB feature worktree adds `schema/094_kb_item_state.sql` and the matching
-Studio migration `20261105_kb_item_state`. They define the same flat current-item
-guard in `marie_scheduler`; deploy matching AI and Studio revisions and SQL
-bundles together. Updating a mounted SQL directory does not apply a migration.
-Use the existing backup and migration procedure before starting the new workers.
+Marie-AI owns the KB catalog and lifecycle in the existing backend database:
+`marie_scheduler.kb_index`, `kb_source`, `kb_document`, `kb_audit_log`,
+`kb_item_state` and `kb_text_section`. Studio uses the authenticated
+`/api/v1/kb/catalog/{operation}` API. Its Prisma catalog models are declared
+externally managed for type/reference compatibility; Studio does not install
+or mutate these KB tables through Prisma.
 
-Workflow-fed KB items also require `schema/098_kb_workflow_inputs.sql` and Studio
-migration `20261106_kb_workflow_inputs`. The migration stores the saved input
-reference, installs the completion sensor, and retains completion receipts while
-the corresponding scheduler history can still be replayed. Keep these revisions
-together; starting the new sensor code against the older schema is unsupported.
+The unreleased KB SQL is consolidated into its final definitions:
+
+| SQL file | Responsibility |
+| --- | --- |
+| `055_sensor_retention.sql` | Existing generic receipt cleanup, preserving replayable run-status receipts. |
+| `094_kb_item_state.sql` | Current item guard, saved workflow input and completion sensor. |
+| `099_kb_text_index.sql` | Text sections, search index and ordinary current-result view. |
+| `101_kb_catalog.sql` | Backend-owned KB catalog and audit tables. |
+
+The current scheduler schema version is **101**. `indexing_dag_id` and
+`indexed_dag_id` are created directly. There is no rename-only schema100,
+separate workflow-input schema098, dynamic view replay guard or duplicate
+Studio KB migration chain. Use the complete matching SQL bundle: retaining
+removed files from an older feature bundle would reintroduce the old definitions.
+
+For an empty installation, start the matching gateway/scheduler with the current
+SQL paths; scheduler startup installs the backend schema. The catalog API is
+available independently of the embedding executor. Start the extraction and KB
+executors after schema validation, then use the matching Studio version.
+
+If the gateway sets `job_scheduler_kwargs.queue_names`, include both
+`kb_indexing` and `kb_index_content` alongside its existing subscriptions.
+Otherwise the sensor can submit a KB DAG that the scheduler never admits.
+Restart the gateway after changing these startup subscriptions.
+
+For an existing Studio KB catalog, complete the explicit ownership handoff below
+**before** starting the new gateway. Updating files alone does not move records.
+If KB runtime tables already exist, also check their column layout using the
+runtime conversion procedure below before replaying the consolidated SQL.
 
 For submissions with a configured extraction workflow, registration waits for
 that workflow's saved output. The completion sensor submits one ordinary
@@ -75,11 +100,11 @@ The source binding honors the template's published fabrics when configured and
 pins the accepted source fabric for later refreshes. Changing fabric requires an
 explicit binding transition rather than matching another execution by URI alone.
 
-This implementation requires Studio's KB records, the scheduler and the managed
-PostgreSQL vector store to share one database. The final output replacement locks
-the current item and its actual scheduler execution in that database. A Studio
-metadata mapping does not authorize a write in a different database; separate
-database handoff is not supported by this path.
+The KB catalog, scheduler and managed PostgreSQL vector/text output share the
+backend database so registration, execution ownership and output replacement
+can commit atomically. Studio is an API client for KB persistence. Existing
+platform tenant, extension and Git registry authority remains in place; the
+runtime no longer reads or writes `marie_studio.kb_*` tables.
 The managed vector table is `kb_vectors` in this slice. A different executor
 `table_name` is rejected at startup; configurable store profiles remain in F15.
 
@@ -102,11 +127,9 @@ tests do not qualify an embedding model, a production migration or live search.
 
 ## Prepare optional PostgreSQL full-text retrieval
 
-The text pilot adds `schema/099_kb_text_index.sql` and matching Studio migration
-`20261106_kb_text_index`. They create `marie_scheduler.kb_text_section`, its GIN
-search index and a current-result view joined to the existing item guard. The
-scheduler schema revision is 99. Deploy matching source, SQL mounts and Studio
-migrations together through the backup/upgrade procedure; copying SQL files does
+The text pilot uses backend-owned `schema/099_kb_text_index.sql`. It creates `marie_scheduler.kb_text_section`, its GIN
+search index and a current-result view joined to the existing item guard. Deploy matching source, SQL mounts and Studio
+code together through the backup/upgrade procedure; copying SQL files does
 not migrate the database. Do not edit historical migrations.
 
 Choose **Full-text search** in the Studio KB editor to save
@@ -142,36 +165,86 @@ and internal preview UI. Serving to tenants still requires F04a/audit-12 evidenc
 legacy adoption requires F04b. This does not qualify real vector models, plugin
 acquisition, code/structured-record adapters or deployed gateway capacity.
 
-## Upgrade KB DAG field names
+## Move an existing Studio KB catalog
 
-Schema `100_kb_indexing_dag_names.sql` and Studio migration
-`20261106_kb_workflow_run_names` rename the KB pointers without changing their UUIDs:
+Back up the full database using the procedure below, stop legacy KB writers and
+the gateway, and rehearse the handoff against an isolated restored copy first.
+`tools/kb/kb-backend-handoff.sql` is an explicit operator utility, outside runtime
+bootstrap. It moves the four existing catalog tables with `ALTER TABLE ... SET
+SCHEMA`, preserving UUIDs, table object IDs and incoming submission references.
+It supplies organization ownership, missing datasource fields and final saved
+DAG mapping names. It refuses conflicting source/target catalogs and rolls back
+on missing authority instead of merging independent tables.
 
-| Field | Meaning |
-| --- | --- |
-| `indexing_dag_id` | Requested indexing DAG, previously `attempt_id`. |
-| `indexed_dag_id` | DAG whose output committed to the index, previously `completed_attempt_id`. |
+Run from the Marie-AI checkout against the intended application database only
+after review and backup. This example uses the local PostgreSQL container:
 
-Text sections and source citations use `indexed_dag_id`; Studio document mappings
-use `kbItem.indexingDagId`. The existing indexed output stays searchable while a
-new indexing DAG runs or fails. Successful replacement updates `indexed_dag_id` in
-the same transaction as the output, including a valid empty replacement.
+```bash
+docker exec -i --user postgres marie-psql-server \
+  psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres \
+  < tools/kb/kb-backend-handoff.sql
+```
 
-Apply the additive Studio migrations **before starting the matching gateway and
-workers**. Then deploy the matching numbered runtime SQL bundle through schema
-100. Historical Studio migrations remain unchanged; the runtime's schema 099
-keeps an upgraded existing view during SQL replay, and schema 100 installs its
-current definition. Run matching code/schema revisions together.
+Then start the matching gateway with the canonical SQL bundle through101. For
+IDE runs that keep service YAML under `/mnt/data/marie-ai`, set both SQL paths:
 
-New KB job metadata uses `kb_indexing_dag_id`. Previously queued jobs with
-`kb_attempt_id` and existing vector output with that metadata remain readable;
-new vector output records `kb_indexed_dag_id`. Scheduler `run_attempt_id`, leases,
-retry counts, backoff and automatic retry behavior are unchanged.
+```text
+MARIE_PSQL_DIR=/home/gbugaj/dev/marieai/marie-ai/config/psql
+MARIE_SCHEMA_DIR=/home/gbugaj/dev/marieai/marie-ai/config/psql/schema
+```
 
-Studio's `reindexDocument` and `reindexFailed` actions start new indexing DAGs.
-They replace the misleading `retryDocument` / `retryFailed` operation names and
-record `reindex` audit events. Historical `retry` audit events retain their label.
-Request-refresh buttons still use **Retry**.
+Regenerate Studio's Prisma client and build its database package using the
+existing package scripts. Client generation does not apply a database migration.
+This KB handoff does not require deploying unrelated pending Studio migrations
+or changing their migration history. Apply those through their own reviewed
+upgrade procedure.
+
+Studio's audit retention job no longer deletes KB audit rows. Those records stay
+in the backend catalog; a backend retention policy must be installed explicitly
+before pruning them.
+
+Existing catalog records and stored vectors are preserved; the handoff does not
+invent successful runtime registrations or qualify old vector output. Use the
+normal **Re-index** action to register legacy documents that lack current item
+state. Historical audit events whose source/document was already deleted retain
+their data with an unknown index association rather than an invented link.
+
+## Upgrade existing KB runtime columns
+
+`CREATE TABLE IF NOT EXISTS` preserves an installed table's columns. Replaying
+the consolidated definitions does not convert earlier `attempt_id` columns.
+This can leave `kb_item_state` current while `kb_text_section` still has the old
+column, causing `column section.indexed_dag_id does not exist` in schema099.
+
+Inspect the installed layout first:
+
+```sql
+SELECT table_name, column_name
+FROM information_schema.columns
+WHERE table_schema = 'marie_scheduler'
+  AND table_name IN ('kb_item_state', 'kb_text_section', 'kb_text_section_current')
+ORDER BY table_name, ordinal_position;
+```
+
+For existing runtime tables, stop KB writers and run the explicit operator
+conversion from the Marie-AI checkout before schema094/099:
+
+```bash
+docker exec -i --user postgres marie-psql-server \
+  psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres \
+  < tools/kb/kb-runtime-dag-upgrade.sql
+```
+
+The conversion handles fully legacy, partially upgraded and current column
+layouts. It renames existing columns and view outputs in one transaction,
+preserving rows, table/view identities and dependent views. It adds the saved
+input column if absent, and fails atomically if old and new column names coexist.
+It does not modify Studio tables or drop indexed output. An empty installation
+uses the normal fresh definitions without this operator step.
+
+Then replay the current schema094/099 definitions, or start the matching gateway
+with the complete SQL bundle. Existing data does not need re-extraction for this
+column conversion. Do not replay the retired098/100 scripts.
 
 ## Export backups through Docker
 

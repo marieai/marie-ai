@@ -1839,7 +1839,9 @@ class WorkerRequestHandler:
                     status=JobStatus.SUCCEEDED.value,
                 )
                 runtime_env = {'attributes': request_attributes}
-                if isinstance(return_data, (dict, list)):
+                if isinstance(return_data, DocumentArray):
+                    runtime_env['output'] = json.loads(return_data.to_json())
+                elif isinstance(return_data, (dict, list)):
                     reference = (
                         return_data.get('input_ref')
                         if isinstance(return_data, dict)

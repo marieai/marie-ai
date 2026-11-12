@@ -74,7 +74,7 @@ class ScheduleSensor(BaseSensor):
                     'Repository schedule requires the existing PostgreSQL resource'
                 )
             row = await pool.fetchrow(
-                '''SELECT metadata->'codeIndex' AS indexed FROM marie_studio.kb_source
+                '''SELECT metadata->'codeIndex' AS indexed FROM marie_scheduler.kb_source
                    WHERE id=$1 AND index_id=$2 AND status <> 'disabled' AND source_type='repository' ''',
                 UUID(run['source_id']),
                 UUID(run['index_id']),

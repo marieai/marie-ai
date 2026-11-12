@@ -40,6 +40,7 @@ from marie.helper import get_or_reuse_loop
 from marie.jaml import JAML
 from marie.job.gateway_job_distributor import GatewayJobDistributor
 from marie.job.job_manager import JobManager
+from marie.kb.catalog_routes import register_kb_catalog_routes
 from marie.kb.gateway_routes import register_kb_routes
 from marie.logging_core.predefined import default_logger as logger
 from marie.messaging import Toast, mark_as_accepted, mark_as_failed
@@ -1505,6 +1506,7 @@ class MarieServerGateway(CompositeServer):
             # Register the knowledge-base API extension (search/stats/delete);
             # streamer resolved lazily — it does not exist at registration time
             register_kb_routes(app, self.args.get("kb"), lambda: self.streamer)
+            register_kb_catalog_routes(app, lambda: self.job_scheduler.repository._pool)
 
             return app
 

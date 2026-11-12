@@ -53,8 +53,8 @@ class CodeIndexStore:
     ) -> dict[str, Any]:
         row = await connection.fetchrow(
             '''SELECT s.*,k.tenant_id,k.workspace_id,t.organization_id,r.path,r.name AS repository_name
-               FROM marie_studio.kb_source s
-               JOIN marie_studio.kb_index k ON k.id=s.index_id
+               FROM marie_scheduler.kb_source s
+               JOIN marie_scheduler.kb_index k ON k.id=s.index_id
                JOIN marie_studio.tenant t ON t.id=k.tenant_id
                JOIN marie_studio.git_repositories r ON r.id=(s.dataset_inputs->>'repositoryId')::uuid
                WHERE s.id=$1 AND k.id=$2 AND t.id=$3 AND t.organization_id=$4
@@ -253,7 +253,7 @@ class CodeIndexStore:
                             'Repository settings changed during refresh'
                         )
                     await connection.execute(
-                        '''UPDATE marie_studio.kb_source SET metadata=jsonb_set(COALESCE(metadata,'{}'),'{codeIndex}',$2::jsonb),
+                        '''UPDATE marie_scheduler.kb_source SET metadata=jsonb_set(COALESCE(metadata,'{}'),'{codeIndex}',$2::jsonb),
                            status='ready',updated_at=clock_timestamp() WHERE id=$1''',
                         UUID(scope['source_id']),
                         json.dumps(result),
@@ -272,7 +272,7 @@ class CodeIndexStore:
                 if observed != capture.commit:
                     result['pendingCommit'] = observed
                     await connection.execute(
-                        "UPDATE marie_studio.kb_source SET metadata=jsonb_set(metadata,'{codeIndex,pendingCommit}',$2::jsonb) WHERE id=$1 AND metadata->'codeIndex'->>'handle'=$3 AND dataset_inputs=$4::jsonb",
+                        "UPDATE marie_scheduler.kb_source SET metadata=jsonb_set(metadata,'{codeIndex,pendingCommit}',$2::jsonb) WHERE id=$1 AND metadata->'codeIndex'->>'handle'=$3 AND dataset_inputs=$4::jsonb",
                         UUID(scope['source_id']),
                         json.dumps(observed),
                         result['handle'],
@@ -296,7 +296,7 @@ class CodeIndexStore:
                         'Owned retired repository files could not be removed; the next refresh retries cleanup.'
                     )
                     await connection.execute(
-                        "UPDATE marie_studio.kb_source SET metadata=jsonb_set(metadata,'{codeIndex,cleanupError}',$2::jsonb) WHERE id=$1 AND metadata->'codeIndex'->>'handle'=$3",
+                        "UPDATE marie_scheduler.kb_source SET metadata=jsonb_set(metadata,'{codeIndex,cleanupError}',$2::jsonb) WHERE id=$1 AND metadata->'codeIndex'->>'handle'=$3",
                         UUID(scope['source_id']),
                         json.dumps(result['cleanupError']),
                         result['handle'],
@@ -306,7 +306,7 @@ class CodeIndexStore:
                 try:
                     if handle and not selected:
                         saved = await connection.fetchval(
-                            "SELECT metadata->'codeIndex'->>'handle' FROM marie_studio.kb_source WHERE id=$1",
+                            "SELECT metadata->'codeIndex'->>'handle' FROM marie_scheduler.kb_source WHERE id=$1",
                             UUID(scope['source_id']),
                         )
                         if saved != handle:
@@ -341,7 +341,7 @@ class CodeIndexStore:
                         scope_key(scope),
                     )
                     source = await connection.fetchrow(
-                        '''SELECT s.id,s.metadata->'codeIndex'->>'handle' AS handle FROM marie_studio.kb_source s JOIN marie_studio.kb_index k ON k.id=s.index_id
+                        '''SELECT s.id,s.metadata->'codeIndex'->>'handle' AS handle FROM marie_scheduler.kb_source s JOIN marie_scheduler.kb_index k ON k.id=s.index_id
                            JOIN marie_studio.tenant t ON t.id=k.tenant_id
                            WHERE s.id=$1 AND k.id=$2 AND t.id=$3 AND t.organization_id=$4 AND s.source_type='repository'
                            FOR UPDATE OF k,s''',
@@ -353,7 +353,7 @@ class CodeIndexStore:
                     if source is None:
                         raise PermissionError('Repository source is unavailable')
                     await connection.execute(
-                        "UPDATE marie_studio.kb_source SET status='disabled',updated_at=clock_timestamp() WHERE id=$1",
+                        "UPDATE marie_scheduler.kb_source SET status='disabled',updated_at=clock_timestamp() WHERE id=$1",
                         source['id'],
                     )
                 async with connection.transaction():
@@ -365,7 +365,7 @@ class CodeIndexStore:
                         await self.zoekt.remove(source['handle'])
                     await self._cleanup(scope_key(scope), '')
                     await connection.execute(
-                        "UPDATE marie_studio.kb_source SET metadata=metadata-'codeIndex' WHERE id=$1",
+                        "UPDATE marie_scheduler.kb_source SET metadata=metadata-'codeIndex' WHERE id=$1",
                         source['id'],
                     )
 

@@ -106,7 +106,7 @@ async def admit_datasource_items(
                 '''SELECT s.dataset_inputs,s.extension_install_id,s.datasource_ref,k.metadata,
                           k.chunk_size,k.chunk_overlap,k.segmentation_mode,k.multimodal_enabled,k.embedding_model,k.embedding_dim
                         ,s.metadata AS source_metadata
-                   FROM marie_studio.kb_index k JOIN marie_studio.kb_source s ON s.index_id=k.id
+                   FROM marie_scheduler.kb_index k JOIN marie_scheduler.kb_source s ON s.index_id=k.id
                    WHERE k.id=$1 AND k.tenant_id=$2 AND s.id=$3 AND s.status <> 'disabled'
                      AND NOT COALESCE((k.metadata->>'removalPending')::boolean,false)
                    FOR UPDATE OF k,s''',
@@ -297,7 +297,7 @@ async def admit_datasource_items(
             )
             await datasource_job(connection, binding['execution'])
             await connection.execute(
-                '''UPDATE marie_studio.kb_source SET status='ready',error_message=NULL,
+                '''UPDATE marie_scheduler.kb_source SET status='ready',error_message=NULL,
                    metadata=COALESCE(metadata,'{}'::jsonb) || jsonb_build_object('syncDagId',$2::text),
                    updated_at=clock_timestamp() WHERE id=$1''',
                 binding['source_id'],

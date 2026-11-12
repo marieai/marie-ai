@@ -151,6 +151,34 @@ async def test_current_item_rejects_incompatible_saved_embedding_profile(current
     executor._embeddings.embed_text.assert_not_called()
 
 
+@pytest.mark.parametrize('saved,runtime', [
+    ('Qwen/Qwen3-VL-Embedding-2B', 'hf://Qwen/Qwen3-VL-Embedding-2B'),
+    ('hf://Qwen/Qwen3-VL-Embedding-2B', 'Qwen/Qwen3-VL-Embedding-2B'),
+    ('hf://Qwen/Qwen3-VL-Embedding-2B', 'hf://Qwen/Qwen3-VL-Embedding-2B'),
+])
+async def test_current_item_accepts_the_same_huggingface_model_uri(current, saved, runtime):
+    executor, row, params = current
+    executor._embedding_model = runtime
+    row['run_params']['embedding_model'] = saved
+    await executor.embed_and_store(DocList[TextDoc]([TextDoc(text='model identity test')]), params)
+    executor._vector_store.replace_item_nodes.assert_awaited_once()
+
+
+@pytest.mark.parametrize('saved', [
+    'hf://other/Qwen3-VL-Embedding-2B',
+    'hf://Qwen/Qwen3-VL-Embedding-8B',
+    'hf://Qwen/Qwen3-VL-Embedding-2B@another-revision',
+    '/models/Qwen/Qwen3-VL-Embedding-2B',
+])
+async def test_model_uri_normalization_keeps_distinct_profiles_incompatible(current, saved):
+    executor, row, params = current
+    executor._embedding_model = 'hf://Qwen/Qwen3-VL-Embedding-2B'
+    row['run_params']['embedding_model'] = saved
+    with pytest.raises(ValueError, match='embedding profile'):
+        await executor.embed_and_store(DocList[TextDoc]([TextDoc(text='must not embed')]), params)
+    executor._embeddings.embed_text.assert_not_called()
+
+
 @pytest.mark.parametrize('method', ['search', 'hybrid_search'])
 async def test_search_rejects_runtime_embedding_profile_change(current, method):
     executor, row, params = current

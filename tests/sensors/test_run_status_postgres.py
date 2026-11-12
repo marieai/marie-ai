@@ -142,7 +142,7 @@ async def test_late_committing_completion_is_not_lost_behind_a_newer_cursor(comp
 async def test_old_unacknowledged_completion_recovers_and_retains_its_receipt(completions):
     runtime, sensor = completions
     directory = Path(__file__).parents[2] / 'config/psql/schema'
-    for name in ('094_kb_item_state.sql', '098_kb_workflow_inputs.sql'):
+    for name in ('094_kb_item_state.sql', '055_sensor_retention.sql'):
         await runtime.pool.execute((directory / name).read_text().replace('{schema}', 'marie_scheduler'))
     dag_id = await source(runtime.pool)
     await runtime.pool.execute("UPDATE marie_scheduler.dag SET completed_on=clock_timestamp()-interval '45 days' WHERE id=$1", UUID(dag_id))

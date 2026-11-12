@@ -53,6 +53,7 @@ async def runtime(monkeypatch):
         '062_job_search_document.sql',
         '051_sensor_enums.sql',
         '052_sensor_tables.sql',
+        '068_data_sink_enum.sql',
         '093_sensor_evaluation_indexes.sql',
     ]:
         await pool.execute(

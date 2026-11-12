@@ -36,11 +36,11 @@ async def code_store(zoekt, repo):
         'CREATE SCHEMA IF NOT EXISTS marie_studio; CREATE SCHEMA IF NOT EXISTS marie_scheduler'
     )
     await pool.execute(
-        '''DROP TABLE IF EXISTS marie_studio.kb_source,marie_studio.kb_index,marie_studio.tenant,marie_studio.git_repositories CASCADE;
+        '''DROP TABLE IF EXISTS marie_scheduler.kb_source,marie_scheduler.kb_index,marie_studio.tenant,marie_studio.git_repositories CASCADE;
         CREATE TABLE marie_studio.tenant(id uuid primary key,organization_id uuid,status text);
-        CREATE TABLE marie_studio.kb_index(id uuid primary key,tenant_id uuid,workspace_id uuid,metadata jsonb);
+        CREATE TABLE marie_scheduler.kb_index(id uuid primary key,tenant_id uuid,workspace_id uuid,metadata jsonb);
         CREATE TABLE marie_studio.git_repositories(id uuid primary key,path text,name text,is_enabled boolean,git_enabled boolean,organization_id uuid,visibility text);
-        CREATE TABLE marie_studio.kb_source(id uuid primary key,index_id uuid,name text,source_type text,status text,metadata jsonb,dataset_inputs jsonb,updated_at timestamptz default now());'''
+        CREATE TABLE marie_scheduler.kb_source(id uuid primary key,index_id uuid,name text,source_type text,status text,metadata jsonb,dataset_inputs jsonb,updated_at timestamptz default now());'''
     )
     schema = Path(__file__).parents[4] / 'config/psql/schema'
     await pool.execute(
@@ -74,7 +74,7 @@ async def code_store(zoekt, repo):
         UUID(scope['organization_id']),
     )
     await pool.execute(
-        "INSERT INTO marie_studio.kb_index VALUES($1,$2,$3,'{}')",
+        "INSERT INTO marie_scheduler.kb_index VALUES($1,$2,$3,'{}')",
         UUID(scope['index_id']),
         UUID(scope['tenant_id']),
         UUID(scope['workspace_id']),
@@ -86,7 +86,7 @@ async def code_store(zoekt, repo):
         UUID(scope['organization_id']),
     )
     await pool.execute(
-        "INSERT INTO marie_studio.kb_source(id,index_id,name,source_type,status,metadata,dataset_inputs) VALUES($1,$2,'fixture','repository','ready','{}',$3::jsonb)",
+        "INSERT INTO marie_scheduler.kb_source(id,index_id,name,source_type,status,metadata,dataset_inputs) VALUES($1,$2,'fixture','repository','ready','{}',$3::jsonb)",
         UUID(scope['source_id']),
         UUID(scope['index_id']),
         json.dumps({'repositoryId': repository_id, 'branch': 'main', 'fetch': False}),
@@ -161,7 +161,7 @@ async def test_failed_build_revocation_and_stale_execution_do_not_replace(
     )
     with pytest.raises(StaleIndexingRun):
         await store.refresh(old)
-    await pool.execute("UPDATE marie_studio.kb_source SET status='disabled'")
+    await pool.execute("UPDATE marie_scheduler.kb_source SET status='disabled'")
     with pytest.raises(PermissionError):
         await store.search(scope, 'alpha', 'literal')
 
@@ -189,7 +189,7 @@ async def test_two_repositories_same_paths_and_branch_are_separate(
         UUID(scope['organization_id']),
     )
     await pool.execute(
-        "INSERT INTO marie_studio.kb_source(id,index_id,name,source_type,status,metadata,dataset_inputs) VALUES($1,$2,'other','repository','ready','{}',$3::jsonb)",
+        "INSERT INTO marie_scheduler.kb_source(id,index_id,name,source_type,status,metadata,dataset_inputs) VALUES($1,$2,'other','repository','ready','{}',$3::jsonb)",
         other_id,
         UUID(scope['index_id']),
         json.dumps({'repositoryId': str(repo_id), 'branch': 'main', 'fetch': False}),
@@ -215,7 +215,7 @@ async def test_missing_index_and_changed_settings_rebuild_at_same_commit(code_st
     second = await store.refresh(await execution())
     assert not second['skipped'] and second['handle'] != initial['handle']
     await pool.execute(
-        "UPDATE marie_studio.kb_source SET dataset_inputs=dataset_inputs || '{\"include\":[\"nothing/*\"]}'::jsonb"
+        "UPDATE marie_scheduler.kb_source SET dataset_inputs=dataset_inputs || '{\"include\":[\"nothing/*\"]}'::jsonb"
     )
     third = await store.refresh(await execution())
     assert (
@@ -356,7 +356,7 @@ async def test_two_marie_repositories_qualification(code_store):
             UUID(scope['organization_id']),
         )
         await pool.execute(
-            "INSERT INTO marie_studio.kb_source(id,index_id,name,source_type,status,metadata,dataset_inputs) VALUES($1,$2,$3,'repository','pending','{}',$4::jsonb)",
+            "INSERT INTO marie_scheduler.kb_source(id,index_id,name,source_type,status,metadata,dataset_inputs) VALUES($1,$2,$3,'repository','pending','{}',$4::jsonb)",
             source_id,
             UUID(scope['index_id']),
             path.name,
@@ -406,10 +406,10 @@ async def test_native_schedule_requires_current_source_link_and_current_reposito
     store, pool, scope, execution, repo = code_store
     trigger = uuid4()
     await pool.execute(
-        'ALTER TABLE marie_studio.kb_source ADD COLUMN trigger_config_id uuid; ALTER TABLE marie_studio.kb_source ADD COLUMN sync_mode text'
+        'ALTER TABLE marie_scheduler.kb_source ADD COLUMN trigger_config_id uuid; ALTER TABLE marie_scheduler.kb_source ADD COLUMN sync_mode text'
     )
     await pool.execute(
-        "UPDATE marie_studio.kb_source SET trigger_config_id=$1,sync_mode='scheduled'",
+        "UPDATE marie_scheduler.kb_source SET trigger_config_id=$1,sync_mode='scheduled'",
         trigger,
     )
     sensor = {
@@ -422,7 +422,7 @@ async def test_native_schedule_requires_current_source_link_and_current_reposito
     }
     storage = PostgreSQLSensorStorage(pool)
     assert await storage.repository_schedule_active(sensor)
-    await pool.execute("UPDATE marie_studio.kb_source SET trigger_config_id=NULL")
+    await pool.execute("UPDATE marie_scheduler.kb_source SET trigger_config_id=NULL")
     assert not await storage.repository_schedule_active(sensor)
 
 
@@ -436,7 +436,7 @@ async def test_pending_input_reuses_schedule_admission_without_consuming_future_
     store, pool, scope, execution, repo = code_store
     await store.refresh(await execution())
     await pool.execute(
-        "UPDATE marie_studio.kb_source SET metadata=jsonb_set(metadata,'{codeIndex,pendingCommit}',to_jsonb($1::text))",
+        "UPDATE marie_scheduler.kb_source SET metadata=jsonb_set(metadata,'{codeIndex,pendingCommit}',to_jsonb($1::text))",
         'd' * 40,
     )
     sensor_id = str(uuid4())
@@ -478,7 +478,7 @@ async def test_pending_input_reuses_schedule_admission_without_consuming_future_
     )
     context.cursor = cursor
     await pool.execute(
-        "UPDATE marie_studio.kb_source SET metadata=metadata #- '{codeIndex,pendingCommit}'"
+        "UPDATE marie_scheduler.kb_source SET metadata=metadata #- '{codeIndex,pendingCommit}'"
     )
     assert not (await sensor.evaluate(context)).run_requests
 
@@ -504,7 +504,7 @@ async def test_removal_does_not_race_an_inflight_capture_or_orphan_its_shards(
     monkeypatch.setattr(store.zoekt, 'build', blocked)
     running = asyncio.create_task(store.refresh(await execution()))
     await entered.wait()
-    await pool.execute("UPDATE marie_studio.kb_source SET status='disabled'")
+    await pool.execute("UPDATE marie_scheduler.kb_source SET status='disabled'")
     try:
         with pytest.raises(RuntimeError, match='refresh'):
             await store.remove(scope)
@@ -575,7 +575,7 @@ async def test_force_pushed_branch_uses_complete_tree_without_assuming_ancestry(
 async def test_admitted_dirty_input_rebuilds_at_the_same_commit(code_store):
     store, pool, scope, execution, repo = code_store
     await pool.execute(
-        "UPDATE marie_studio.kb_source SET dataset_inputs=dataset_inputs || '{\"dirty\":true,\"fetch\":false}'::jsonb"
+        "UPDATE marie_scheduler.kb_source SET dataset_inputs=dataset_inputs || '{\"dirty\":true,\"fetch\":false}'::jsonb"
     )
     first = await store.refresh(await execution())
     (repo / 'same.py').write_text('dirty = 11\n')
@@ -598,7 +598,7 @@ async def test_source_scope_edit_during_search_withholds_old_binding_results(
     async def changed(*args):
         result = await search(*args)
         await pool.execute(
-            "UPDATE marie_studio.kb_source SET dataset_inputs=dataset_inputs || '{\"exclude\":[\"*.py\"]}'::jsonb"
+            "UPDATE marie_scheduler.kb_source SET dataset_inputs=dataset_inputs || '{\"exclude\":[\"*.py\"]}'::jsonb"
         )
         return result
 

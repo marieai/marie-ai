@@ -35,16 +35,21 @@ RETURNS INTEGER AS $$
 DECLARE
     deleted_count INTEGER;
 BEGIN
-    DELETE FROM {schema}.sensor_run_key
-    WHERE created_at < NOW() - (retention_days || ' days')::INTERVAL;
-
+    DELETE FROM {schema}.sensor_run_key r
+    WHERE r.created_at < NOW() - make_interval(days => retention_days)
+      AND NOT (
+        split_part(r.run_key, ':', 1)='run_status'
+        AND split_part(r.run_key, ':', 2)=r.sensor_id::text
+        AND EXISTS (SELECT 1 FROM {schema}.dag_history h
+                    WHERE h.history_id::text=split_part(r.run_key, ':', 3))
+      );
     GET DIAGNOSTICS deleted_count = ROW_COUNT;
     RETURN deleted_count;
 END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION {schema}.cleanup_old_run_keys(INTEGER) IS
-    'Deletes sensor_run_key rows older than retention_days. '
+    'Deletes expired sensor run keys, retaining run-status receipts while their DAG history exists. '
     'Default retention: 30 days. Returns count of deleted rows.';
 
 -- ============================================================================

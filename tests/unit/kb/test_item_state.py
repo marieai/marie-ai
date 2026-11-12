@@ -31,8 +31,7 @@ async def state():
     await pool.execute('DROP TABLE IF EXISTS marie_scheduler.kb_item_state CASCADE')
     sql = Path(__file__).parents[3] / 'config/psql/schema/094_kb_item_state.sql'
     await pool.execute(sql.read_text().replace('{schema}', 'marie_scheduler'))
-    await pool.execute((sql.parent / '098_kb_workflow_inputs.sql').read_text().replace('{schema}', 'marie_scheduler'))
-    for name in ['099_kb_text_index.sql','100_kb_indexing_dag_names.sql']:
+    for name in ['099_kb_text_index.sql']:
         await pool.execute((sql.parent/name).read_text().replace('{schema}','marie_scheduler'))
     await pool.execute('TRUNCATE marie_scheduler.kb_item_state')
     await pool.execute(

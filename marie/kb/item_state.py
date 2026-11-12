@@ -75,9 +75,9 @@ async def bind_upstream_input(
 async def _sync_document_indexing_dags(
     connection: AsyncPostgresConnection, dag_id: str
 ) -> None:
-    if await connection.fetchval("SELECT to_regclass('marie_studio.kb_document')"):
+    if await connection.fetchval("SELECT to_regclass('marie_scheduler.kb_document')"):
         await connection.execute(
-            '''UPDATE marie_studio.kb_document doc
+            '''UPDATE marie_scheduler.kb_document doc
                SET dag_id=item.indexing_dag_id,status=CASE WHEN item.state='error' THEN 'error' ELSE 'pending' END,
                    stage=CASE WHEN item.input_ref ? 'artifact' THEN 'queued' ELSE 'waiting_upstream' END,
                    error_message=item.error,

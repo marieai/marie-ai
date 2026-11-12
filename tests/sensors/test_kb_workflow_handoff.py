@@ -28,10 +28,7 @@ async def handoff(completions):
     runtime, definition = completions
     directory = Path(__file__).parents[2] / 'config/psql/schema'
     await runtime.pool.execute((directory / '094_kb_item_state.sql').read_text().replace('{schema}', 'marie_scheduler'))
-    migration = directory / '098_kb_workflow_inputs.sql'
-    assert migration.exists(), 'Persist the upstream input reference before enabling workflow handoff'
-    await runtime.pool.execute(migration.read_text().replace('{schema}', 'marie_scheduler'))
-    for name in ['099_kb_text_index.sql','100_kb_indexing_dag_names.sql']:
+    for name in ['099_kb_text_index.sql']:
         await runtime.pool.execute((directory/name).read_text().replace('{schema}','marie_scheduler'))
     await runtime.pool.execute('TRUNCATE marie_scheduler.kb_item_state')
     for name, planner in [('extract', query_planner_extract), ('kb_indexing', query_planner_kb_indexing), ('kb_index_content', query_planner_kb_index_content)]:

@@ -170,9 +170,9 @@ run(lambda request: dispatch_datasource(request,definition,fetch))
         other = uuid4()
         other_job = uuid4()
         await pool.execute(
-            '''INSERT INTO marie_studio.kb_source SELECT $1,index_id,source_type,status,
+            '''INSERT INTO marie_scheduler.kb_source SELECT $1,index_id,source_type,status,
           extension_install_id,datasource_ref,'{"space":"OPS"}',metadata,created_by,error_message,updated_at
-          FROM marie_studio.kb_source WHERE id=$2''',
+          FROM marie_scheduler.kb_source WHERE id=$2''',
             other,
             ids['source'],
         )

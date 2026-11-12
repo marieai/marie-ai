@@ -37,13 +37,11 @@ async def sync(tmp_path, monkeypatch):
         'DROP SCHEMA IF EXISTS marie_studio CASCADE; CREATE SCHEMA marie_studio; CREATE SCHEMA IF NOT EXISTS marie_scheduler'
     )
     await pool.execute(
-        'DROP TABLE IF EXISTS marie_scheduler.kb_text_section CASCADE; DROP TABLE IF EXISTS marie_scheduler.kb_item_state CASCADE; DROP TABLE IF EXISTS marie_scheduler.job CASCADE'
+        'DROP TABLE IF EXISTS marie_scheduler.kb_source,marie_scheduler.kb_index CASCADE; DROP TABLE IF EXISTS marie_scheduler.kb_text_section CASCADE; DROP TABLE IF EXISTS marie_scheduler.kb_item_state CASCADE; DROP TABLE IF EXISTS marie_scheduler.job CASCADE'
     )
     for name in (
         '094_kb_item_state.sql',
-        '098_kb_workflow_inputs.sql',
         '099_kb_text_index.sql',
-        '100_kb_indexing_dag_names.sql',
     ):
         await pool.execute(
             (Path(__file__).parents[4] / 'config/psql/schema' / name)
@@ -56,10 +54,10 @@ async def sync(tmp_path, monkeypatch):
     TRUNCATE marie_scheduler.resource_workflow_binding;
     CREATE TABLE marie_studio."user"(id uuid PRIMARY KEY,is_active boolean);
     CREATE TABLE marie_studio.organization_membership(user_id uuid,organization_id uuid,status text);
-    CREATE TABLE marie_studio.kb_index(id uuid PRIMARY KEY,tenant_id uuid,workspace_id uuid,metadata jsonb,
+    CREATE TABLE marie_scheduler.kb_index(id uuid PRIMARY KEY,tenant_id uuid,workspace_id uuid,metadata jsonb,
       chunk_size int,chunk_overlap int,segmentation_mode text,multimodal_enabled boolean,
       embedding_model text DEFAULT 'runtime-model',embedding_dim int DEFAULT 1024);
-    CREATE TABLE marie_studio.kb_source(id uuid PRIMARY KEY,index_id uuid,source_type text,status text,
+    CREATE TABLE marie_scheduler.kb_source(id uuid PRIMARY KEY,index_id uuid,source_type text,status text,
       extension_install_id uuid,datasource_ref text,dataset_inputs jsonb,metadata jsonb,created_by uuid,
       error_message text,updated_at timestamptz DEFAULT now());
     CREATE TABLE marie_studio.extension_installs(id uuid PRIMARY KEY,package_id uuid,organization_id uuid,
@@ -110,13 +108,13 @@ async def sync(tmp_path, monkeypatch):
         ids['organization'],
     )
     await pool.execute(
-        "INSERT INTO marie_studio.kb_index VALUES ($1,$2,$3,'{\"retrievalBackend\":\"postgresql_text\"}',1024,200,'basic',false)",
+        "INSERT INTO marie_scheduler.kb_index VALUES ($1,$2,$3,'{\"retrievalBackend\":\"postgresql_text\"}',1024,200,'basic',false)",
         ids['index'],
         ids['tenant'],
         ids['workspace'],
     )
     await pool.execute(
-        "INSERT INTO marie_studio.kb_source VALUES ($1,$2,'datasource','pending',$3,'datasources/wiki','{\"space\":\"ENG\"}','{}',$4,NULL,now())",
+        "INSERT INTO marie_scheduler.kb_source VALUES ($1,$2,'datasource','pending',$3,'datasources/wiki','{\"space\":\"ENG\"}','{}',$4,NULL,now())",
         ids['source'],
         ids['index'],
         ids['install'],
@@ -208,7 +206,7 @@ async def test_scheduled_datasource_executes_and_registers_saved_output(sync):
 async def test_presentation_save_does_not_invalidate_datasource_delivery(sync):
     pool, ids, binding, _, _, output, _ = sync
     await pool.execute(
-        "UPDATE marie_studio.kb_index SET metadata=metadata || '{\"configurationRevision\":1,\"preferences\":{\"display\":\"compact\"}}'::jsonb"
+        "UPDATE marie_scheduler.kb_index SET metadata=metadata || '{\"configurationRevision\":1,\"preferences\":{\"display\":\"compact\"}}'::jsonb"
     )
     assert await admit_datasource_items(pool, binding, output) == 1
 
@@ -231,7 +229,7 @@ async def test_inactive_parser_defaults_do_not_invalidate_datasource_delivery(
 
 async def test_processing_save_rejects_outdated_datasource_delivery(sync):
     pool, ids, binding, _, _, output, _ = sync
-    await pool.execute('UPDATE marie_studio.kb_index SET chunk_size=512')
+    await pool.execute('UPDATE marie_scheduler.kb_index SET chunk_size=512')
     with pytest.raises(ValueError, match='changed'):
         await admit_datasource_items(pool, binding, output)
 
@@ -314,9 +312,9 @@ async def test_changed_execution_cannot_publish(sync, change):
             "UPDATE marie_scheduler.job SET run_lease_expires_at=now()-interval '1 second'"
         )
     elif change == 'disabled':
-        await pool.execute("UPDATE marie_studio.kb_source SET status='disabled'")
+        await pool.execute("UPDATE marie_scheduler.kb_source SET status='disabled'")
     else:
-        await pool.execute("UPDATE marie_studio.kb_source SET dataset_inputs='{}'")
+        await pool.execute("UPDATE marie_scheduler.kb_source SET dataset_inputs='{}'")
     with pytest.raises(ValueError):
         await admit_datasource_items(pool, binding, output)
     assert (
@@ -373,9 +371,9 @@ async def test_two_bindings_keep_the_same_external_item_id_separate(sync):
     await admit_datasource_items(pool, binding, output)
     other = uuid4()
     await pool.execute(
-        '''INSERT INTO marie_studio.kb_source
+        '''INSERT INTO marie_scheduler.kb_source
        SELECT $1,index_id,source_type,status,extension_install_id,datasource_ref,
-              dataset_inputs,metadata,created_by,error_message,updated_at FROM marie_studio.kb_source WHERE id=$2''',
+              dataset_inputs,metadata,created_by,error_message,updated_at FROM marie_scheduler.kb_source WHERE id=$2''',
         other,
         ids['source'],
     )
@@ -558,7 +556,7 @@ async def test_processing_cleans_only_withdrawn_index_output(
     pool, ids, binding, _, _, output, _ = sync
     binding['index_metadata'] = {'retrievalBackend': backend}
     await pool.execute(
-        'UPDATE marie_studio.kb_index SET metadata=$1::jsonb',
+        'UPDATE marie_scheduler.kb_index SET metadata=$1::jsonb',
         json.dumps(binding['index_metadata']),
     )
     await admit_datasource_items(
@@ -623,7 +621,7 @@ async def test_removal_before_vector_indexing_needs_no_vector_table(sync):
     pool, ids, binding, _, _, output, _ = sync
     binding['index_metadata'] = {'retrievalBackend': 'pgvector'}
     await pool.execute(
-        'UPDATE marie_studio.kb_index SET metadata=$1::jsonb',
+        'UPDATE marie_scheduler.kb_index SET metadata=$1::jsonb',
         json.dumps(binding['index_metadata']),
     )
     await pool.execute('DROP TABLE IF EXISTS kb_vectors CASCADE')
