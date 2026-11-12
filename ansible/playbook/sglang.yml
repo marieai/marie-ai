@@ -1,0 +1,9 @@
+---
+- name: Deploy independent SGLang batch replicas
+  hosts: sglang_nodes
+  gather_facts: false
+  become: true
+  serial: "{{ sglang_serial | default(1) }}"
+  any_errors_fatal: true
+  roles:
+    - sglang

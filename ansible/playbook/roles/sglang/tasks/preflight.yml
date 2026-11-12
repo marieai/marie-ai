@@ -1,0 +1,29 @@
+---
+- name: Verify Docker is reachable
+  ansible.builtin.command:
+    argv: [docker, info]
+  changed_when: false
+  check_mode: false
+
+- name: Verify each selected GPU is accessible
+  ansible.builtin.command:
+    argv:
+      - nvidia-smi
+      - "--id={{ item.gpu_id }}"
+      - --query-gpu=uuid,name,memory.total,driver_version
+      - --format=csv,noheader
+  loop: "{{ sglang_replicas }}"
+  loop_control:
+    label: "{{ item.name }} (GPU {{ item.gpu_id }})"
+  register: _sglang_gpu_checks
+  changed_when: false
+  check_mode: false
+
+- name: Reject multiple identifiers for the same physical GPU
+  ansible.builtin.assert:
+    that:
+      - >-
+        _sglang_gpu_checks.results | map(attribute='stdout') | map('split', ',')
+        | map('first') | map('trim') | unique | length == sglang_replicas | length
+    fail_msg: Multiple SGLang replicas resolve to the same physical GPU UUID.
+    quiet: true

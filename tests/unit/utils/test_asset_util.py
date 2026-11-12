@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from marie.storage import StorageManager
 from marie.utils import asset_util
 
 
@@ -40,3 +41,41 @@ def test_prepare_asset_directory_refreshes_metadata_when_frames_are_cached(
 
     assert returned_metadata == str(metadata_path)
     assert json.loads(metadata_path.read_text())['ocr'] == ['fresh']
+
+
+@pytest.mark.parametrize(
+    ('connected', 'copy_result'),
+    [(False, None), (True, None), (True, 's3://bucket/results')],
+)
+def test_store_assets_only_lists_successful_uploads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    connected: bool,
+    copy_result: str | None,
+) -> None:
+    calls = []
+    uri = 's3://bucket/results/agent-output/result.json'
+    monkeypatch.setattr(
+        asset_util, 's3_asset_path', lambda *_args: 's3://bucket/results'
+    )
+    monkeypatch.setattr(
+        StorageManager, 'ensure_connection', lambda *_args, **_kwargs: connected
+    )
+    monkeypatch.setattr(
+        StorageManager, 'copy_dir', lambda *_args, **_kwargs: copy_result
+    )
+
+    def list_objects(*_args, **_kwargs):
+        calls.append('listed')
+        return [uri]
+
+    monkeypatch.setattr(StorageManager, 'list', list_objects)
+
+    result = asset_util.store_assets('document', 'annotation', str(tmp_path))
+
+    if connected and copy_result:
+        assert result == [uri]
+        assert calls == ['listed']
+    else:
+        assert result is None
+        assert calls == []

@@ -1,3 +1,8 @@
+## SGLang GPU deployments
+
+Use the [SGLang Ansible deployment guide](README.sglang.md) to manage
+inventory-defined model replicas, GPU assignments, stable batch endpoints, and
+startup readiness across multiple hosts.
 
 Add local `id_rsa.pub` to the remote machine's `authorized_keys` file.
 
