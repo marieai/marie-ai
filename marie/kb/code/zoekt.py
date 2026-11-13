@@ -13,10 +13,14 @@ from typing import Any
 
 import httpx
 
+from marie.kb.code.query import native_query
+
 ZOEKT_REVISION = 'd64299b4420d0f0a46082c26d34ee956184558ed'
 
 
-def search_query(handle: str, query: str, mode: str) -> str:
+def search_query(
+    handle: str, query: str, mode: str, case_sensitive: bool = True
+) -> str:
     """Encode user input as one atom inside an exact, server-owned build scope."""
     if not re.fullmatch('[a-f0-9]{64}', handle):
         raise ValueError('Invalid code index handle')
@@ -26,7 +30,7 @@ def search_query(handle: str, query: str, mode: str) -> str:
         raise ValueError('A supported code search pattern is required')
     pattern = query if mode == 'regex' else re.escape(query)
     atom = 'file' if mode == 'path' else 'content'
-    return f'repo:^{handle}$ case:yes {atom}:{json.dumps(pattern, ensure_ascii=False)}'
+    return f'repo:^{handle}$ case:{"yes" if case_sensitive else "no"} {atom}:{json.dumps(pattern, ensure_ascii=False)}'
 
 
 class Zoekt:
@@ -140,19 +144,31 @@ class Zoekt:
         )
 
     async def search(
-        self, handle: str, query: str, mode: str, limit: int
+        self,
+        handle: str,
+        query: str,
+        mode: str,
+        limit: int,
+        *,
+        case_sensitive: bool = True,
+        terms: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         if not 1 <= limit <= 50:
             raise ValueError('Code search limit must be between 1 and 50')
         response = await self.client.post(
             '/api/search',
             json={
-                'Q': search_query(handle, query, mode),
+                'Q': (
+                    native_query(handle, terms, case_sensitive)
+                    if terms is not None
+                    else search_query(handle, query, mode, case_sensitive)
+                ),
                 'Opts': {
                     'MaxDocDisplayCount': limit + 1,
                     'TotalMaxMatchCount': 1000,
                     'ShardMaxMatchCount': 1000,
                     'MaxWallTime': 2_000_000_000,
+                    'NumContextLines': 3,
                 },
             },
         )
@@ -160,6 +176,34 @@ class Zoekt:
         result = response.json()['Result']
         if result.get('Crashes'):
             raise RuntimeError('Zoekt search was incomplete')
+        return result
+
+    async def references(self, handle: str, name: str) -> dict[str, Any]:
+        """Find whole-word text occurrences without requiring a syntax grammar."""
+        pattern = r'\b' + re.escape(name.rsplit('.', 1)[-1]) + r'\b'
+        payload = {
+            'Q': search_query(handle, pattern, 'regex'),
+            'Opts': {
+                'MaxDocDisplayCount': 1000,
+                'TotalMaxMatchCount': 10000,
+                'ShardMaxMatchCount': 10000,
+                'MaxMatchDisplayCount': 10000,
+                'MaxWallTime': 2_000_000_000,
+                'NumContextLines': 0,
+            },
+        }
+        content = bytearray()
+        async with self.client.stream('POST', '/api/search', json=payload) as response:
+            response.raise_for_status()
+            async for chunk in response.aiter_bytes():
+                content.extend(chunk)
+                if len(content) > 16 * 1024 * 1024:
+                    raise ValueError(
+                        'Reference search response exceeds its size allowance; narrow the symbol'
+                    )
+        result = json.loads(content)['Result']
+        if result.get('Crashes'):
+            raise RuntimeError('Reference search was incomplete')
         return result
 
     async def remove(self, handle: str) -> None:

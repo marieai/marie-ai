@@ -13,23 +13,21 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
 
+from marie.kb.code.browser import directory_entries, git_blob_digest, git_history
 from marie.kb.code.capture import (
     branch_commit,
     capture_repository,
     eligible_path,
     resolve_repository_path,
 )
+from marie.kb.code.capture import (
+    code_lines as _code_lines,
+)
 from marie.kb.code.navigation import parse_file
+from marie.kb.code.query import advanced_search
 from marie.kb.code.zoekt import Zoekt
 from marie.kb.item_state import StaleIndexingRun, scheduler_execution
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
-
-
-def _code_lines(text: str) -> list[str]:
-    parts = text.split('\n')
-    return [line + '\n' for line in parts[:-1]] + (
-        [parts[-1]] if parts[-1] else []
-    ) or ['']
 
 
 def _code_line_number(value: Any) -> int:
@@ -61,14 +59,18 @@ class CodeIndexStore:
         zoekt: Zoekt,
         roots: list[str],
         mounts: dict[str, str] | None = None,
+        retained_captures: int = 5,
     ) -> None:
         self.pool, self.zoekt, self.roots, self.mounts = pool, zoekt, roots, mounts
+        if not 1 <= retained_captures <= 50:
+            raise ValueError('Retained captures must be between 1 and 50')
+        self.retained_captures = retained_captures
 
     async def source(
         self, connection: Any, scope: dict[str, Any], *, lock: bool = False
     ) -> dict[str, Any]:
         row = await connection.fetchrow(
-            '''SELECT s.*,k.tenant_id,k.workspace_id,t.organization_id,r.path,r.name AS repository_name
+            '''SELECT s.*,k.tenant_id,k.workspace_id,k.name AS index_name,t.organization_id,r.path,r.name AS repository_name
                FROM marie_scheduler.kb_source s
                JOIN marie_scheduler.kb_index k ON k.id=s.index_id
                JOIN marie_runtime.tenant t ON t.id=k.tenant_id
@@ -253,6 +255,9 @@ class CodeIndexStore:
                         'omitted': capture.omitted,
                         'indexedDagId': str(job['dag_id']),
                         'navigationDigest': navigation_digest,
+                        'capturedAt': time.strftime(
+                            '%Y-%m-%dT%H:%M:%SZ', time.gmtime()
+                        ),
                         **stats,
                     }
                 )
@@ -267,6 +272,26 @@ class CodeIndexStore:
                 }
                 result.pop('pendingCommit', None)
                 result.pop('cleanupError', None)
+                revisions = []
+                for item in [
+                    result,
+                    current,
+                    *((source['metadata'] or {}).get('codeRevisions') or []),
+                ]:
+                    if (
+                        not item.get('handle')
+                        or item.get('configDigest') != fingerprint
+                        or any(saved['handle'] == item['handle'] for saved in revisions)
+                    ):
+                        continue
+                    if (
+                        item['handle'] != result['handle']
+                        and item.get('commit') == result['commit']
+                        and item.get('digest') == result['digest']
+                    ):
+                        continue
+                    revisions.append(item)
+                revisions = revisions[: self.retained_captures]
                 async with connection.transaction():
                     await connection.execute(
                         'SELECT pg_advisory_xact_lock(hashtextextended($1,60602))', key
@@ -278,10 +303,11 @@ class CodeIndexStore:
                             'Repository settings changed during refresh'
                         )
                     await connection.execute(
-                        '''UPDATE marie_scheduler.kb_source SET metadata=jsonb_set(COALESCE(metadata,'{}'),'{codeIndex}',$2::jsonb),
+                        '''UPDATE marie_scheduler.kb_source SET metadata=jsonb_set(jsonb_set(COALESCE(metadata,'{}'),'{codeIndex}',$2::jsonb),'{codeRevisions}',$3::jsonb),
                            status='ready',updated_at=clock_timestamp() WHERE id=$1''',
                         UUID(scope['source_id']),
                         json.dumps(result),
+                        json.dumps(revisions),
                     )
                 selected = not unchanged
                 try:
@@ -310,12 +336,13 @@ class CodeIndexStore:
                             'SELECT pg_advisory_xact_lock(hashtextextended($1,60602))',
                             key,
                         )
+                        retained_handles = [item['handle'] for item in revisions]
                         if (
                             current.get('handle')
-                            and current['handle'] != result['handle']
+                            and current['handle'] not in retained_handles
                         ):
                             await self.zoekt.remove(current['handle'])
-                        await self._cleanup(key, result['handle'], connection)
+                        await self._cleanup(key, retained_handles, connection)
                 except (OSError, json.JSONDecodeError):
                     result['cleanupError'] = (
                         'Owned retired repository files could not be removed; the next refresh retries cleanup.'
@@ -386,20 +413,21 @@ class CodeIndexStore:
                 ),
             )
 
-    async def _cleanup(self, key: str, keep: str, connection: Any) -> None:
+    async def _cleanup(self, key: str, keep: str | list[str], connection: Any) -> None:
+        handles = [keep] if isinstance(keep, str) else keep
         for manifest in self.zoekt.root.glob('*/manifest.json'):
             if (
-                manifest.parent.name != keep
+                manifest.parent.name not in handles
                 and json.loads(manifest.read_text()).get('scope') == key
             ):
                 await self.zoekt.remove(manifest.parent.name)
         tenant, index, source = map(UUID, json.loads(key))
         await connection.execute(
-            'DELETE FROM marie_scheduler.kb_code_navigation WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND handle<>$4',
+            'DELETE FROM marie_scheduler.kb_code_navigation WHERE tenant_id=$1 AND index_id=$2 AND source_id=$3 AND NOT (handle=ANY($4::text[]))',
             tenant,
             index,
             source,
-            keep,
+            handles,
         )
 
     async def remove(self, scope: dict[str, Any]) -> dict[str, Any]:
@@ -443,7 +471,7 @@ class CodeIndexStore:
                         await self.zoekt.remove(source['handle'])
                     await self._cleanup(scope_key(scope), '', connection)
                     await connection.execute(
-                        "UPDATE marie_scheduler.kb_source SET metadata=metadata-'codeIndex' WHERE id=$1",
+                        "UPDATE marie_scheduler.kb_source SET metadata=metadata-'codeIndex'-'codeRevisions' WHERE id=$1",
                         source['id'],
                     )
 
@@ -454,10 +482,19 @@ class CodeIndexStore:
         return {'removed': True}
 
     def _manifest(
-        self, source: dict[str, Any], scope: dict[str, Any]
+        self, source: dict[str, Any], scope: dict[str, Any], handle: str | None = None
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         current = (source['metadata'] or {}).get('codeIndex') or {}
-        if not current or current['configDigest'] != settings_digest(source):
+        if handle and handle != current.get('handle'):
+            current = next(
+                (
+                    item
+                    for item in (source['metadata'] or {}).get('codeRevisions', [])
+                    if item.get('handle') == handle
+                ),
+                current,
+            )
+        if not current or current.get('configDigest') != settings_digest(source):
             raise ValueError('Repository index is unavailable; refresh this source')
         path = self.zoekt.directory(current['handle']) / 'manifest.json'
         if not path.is_file():
@@ -473,14 +510,29 @@ class CodeIndexStore:
         return current, manifest
 
     async def search(
-        self, scope: dict[str, Any], query: str, mode: str, limit: int = 20
+        self,
+        scope: dict[str, Any],
+        query: str,
+        mode: str,
+        limit: int = 20,
+        *,
+        case_sensitive: bool = True,
+        branches: Any = None,
     ) -> dict[str, Any]:
-        """Search one authorized current tree with a bounded, exact build filter."""
-        async with self._read(scope) as (_, source):
+        """Search an authorized current or retained capture with bounded scope."""
+        if type(case_sensitive) is not bool:
+            raise ValueError('Case sensitivity must be a boolean')
+        async with self._read(scope) as (connection, source):
+            if mode == 'query':
+                return await advanced_search(
+                    self, connection, scope, source, branches, case_sensitive, limit
+                )
             current, manifest = self._manifest(source, scope)
             if not await self.zoekt.usable(current['handle'], current['files']):
                 raise ValueError('Repository index is unavailable; refresh this source')
-            result = await self.zoekt.search(current['handle'], query, mode, limit)
+            result = await self.zoekt.search(
+                current['handle'], query, mode, limit, case_sensitive=case_sensitive
+            )
             rows = []
             for file in (result.get('Files') or [])[:limit]:
                 path = file['FileName']
@@ -495,13 +547,18 @@ class CodeIndexStore:
                     file.get('LineMatches') or [{'LineNumber': 1, 'Line': ''}]
                 )[:10]:
                     number = max(1, line['LineNumber'])
+                    matched = base64.b64decode(line['Line']).decode('utf-8')
+                    before = base64.b64decode(line.get('Before') or '').decode('utf-8')
+                    after = base64.b64decode(line.get('After') or '').decode('utf-8')
+                    context = before + matched + after
                     rows.append(
                         {
                             'path': path,
                             'line': number,
-                            'preview': base64.b64decode(line['Line']).decode('utf-8')[
-                                :1000
-                            ],
+                            'preview': matched[:1000],
+                            'context': context[:4000],
+                            'contextStartLine': max(1, number - before.count('\n')),
+                            'contextTruncated': len(context) > 4000,
                             'citation': {
                                 'kind': 'code',
                                 'sourceId': scope['source_id'],
@@ -527,13 +584,186 @@ class CodeIndexStore:
                 'backend': 'zoekt',
             }
 
+    async def browse(
+        self,
+        scope: dict[str, Any],
+        citation: dict[str, Any],
+        mode: str,
+        *,
+        path: str = '',
+        offset: int = 0,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Browse owned captures and Git metadata under the existing source lock."""
+        if (
+            mode not in ('tree', 'revisions', 'history')
+            or not 0 <= offset <= 100000
+            or not 1 <= limit <= 200
+        ):
+            raise ValueError('Invalid captured repository browse request')
+        async with self._read(scope) as (_, source):
+            try:
+                current, manifest = self._manifest(
+                    source, scope, citation.get('handle')
+                )
+            except ValueError:
+                return {
+                    'outcome': 'unavailable',
+                    'message': 'Captured repository is unavailable. Refresh this source.',
+                }
+            if citation.get('sourceId') != scope['source_id'] or any(
+                citation.get(key) != current[key]
+                for key in ('handle', 'commit', 'repositoryId', 'branch')
+            ):
+                return {
+                    'outcome': 'changed',
+                    'message': 'Repository capture changed. Search again.',
+                }
+            info = manifest['files'].get(citation['path'])
+            if not info or info['sha256'] != citation['sourceDigest']:
+                return {
+                    'outcome': 'unavailable',
+                    'message': 'Captured file is unavailable.',
+                }
+
+            def reference(
+                member: str, entry: dict[str, Any], capture: dict[str, Any] = current
+            ) -> dict[str, Any]:
+                return {
+                    **citation,
+                    **{
+                        key: capture[key]
+                        for key in ('handle', 'commit', 'repositoryId', 'branch')
+                    },
+                    'path': member,
+                    'sourceDigest': entry['sha256'],
+                    'startLine': 1,
+                    'endLine': 1,
+                }
+
+            ready = {'outcome': 'ready', 'mode': mode}
+            if mode == 'tree':
+                listing = directory_entries(manifest['files'], path, offset, limit)
+                return {
+                    **ready,
+                    **listing,
+                    'entries': [
+                        {
+                            **entry,
+                            **(
+                                {
+                                    'citation': reference(
+                                        entry['path'], manifest['files'][entry['path']]
+                                    )
+                                }
+                                if entry['kind'] == 'file'
+                                else {}
+                            ),
+                        }
+                        for entry in listing['entries']
+                    ],
+                }
+            captures = [
+                current,
+                *((source['metadata'] or {}).get('codeRevisions') or []),
+            ]
+            seen = set()
+            revisions = []
+            for capture in captures:
+                if capture.get('handle') in seen or capture.get(
+                    'configDigest'
+                ) != settings_digest(source):
+                    continue
+                seen.add(capture['handle'])
+                saved = self.zoekt.directory(capture['handle']) / 'manifest.json'
+                if not saved.is_file():
+                    continue
+                saved_manifest = json.loads(saved.read_text())
+                if saved_manifest.get('scope') != scope_key(scope):
+                    raise PermissionError('Captured revision scope differs')
+                entry = saved_manifest['files'].get(citation['path'])
+                revisions.append(
+                    {
+                        key: capture.get(key)
+                        for key in ('handle', 'commit', 'branch', 'capturedAt')
+                    }
+                )
+                revisions[-1]['citation'] = (
+                    reference(citation['path'], entry, capture) if entry else None
+                )
+            if mode == 'revisions':
+                return {
+                    **ready,
+                    'revisions': revisions,
+                    'retentionLimit': self.retained_captures,
+                }
+            repository = resolve_repository_path(
+                source['path'], self.roots, self.mounts
+            )
+            try:
+                if mode == 'history':
+                    records = await asyncio.to_thread(
+                        git_history,
+                        repository,
+                        current['commit'],
+                        citation['path'],
+                        offset,
+                        limit + 1,
+                    )
+                    rows = []
+                    for record in records[:limit]:
+                        candidates = [
+                            r['citation']
+                            for r in revisions
+                            if r['commit'] == record['commit'] and r['citation']
+                        ]
+                        digest = (
+                            await asyncio.to_thread(
+                                git_blob_digest,
+                                repository,
+                                record['commit'],
+                                citation['path'],
+                            )
+                            if candidates
+                            else None
+                        )
+                        rows.append(
+                            {
+                                **record,
+                                'citation': next(
+                                    (
+                                        r
+                                        for r in candidates
+                                        if r['sourceDigest'] == digest
+                                    ),
+                                    None,
+                                ),
+                            }
+                        )
+                    return {
+                        **ready,
+                        'commits': rows,
+                        'nextOffset': offset + limit if len(records) > limit else None,
+                    }
+            except (subprocess.SubprocessError, OSError, ValueError):
+                return {
+                    'outcome': 'unavailable',
+                    'message': 'Git metadata is unavailable for these captured bytes. The source file remains readable.',
+                }
+
     async def open(
-        self, scope: dict[str, Any], citation: dict[str, Any]
+        self,
+        scope: dict[str, Any],
+        citation: dict[str, Any],
+        *,
+        whole_file: bool = False,
     ) -> dict[str, Any]:
         """Open only matching captured bytes; never fall back to the checkout."""
         async with self._read(scope) as (_, source):
             try:
-                current, manifest = self._manifest(source, scope)
+                current, manifest = self._manifest(
+                    source, scope, citation.get('handle')
+                )
             except ValueError:
                 return {
                     'outcome': 'unavailable',
@@ -574,14 +804,19 @@ class CodeIndexStore:
                     'outcome': 'changed',
                     'message': 'Captured file digest differs. Refresh this source.',
                 }
+            if whole_file and len(content) > 2 * 1024 * 1024:
+                return {
+                    'outcome': 'unavailable',
+                    'message': 'This file exceeds the 2 MiB preview size limit.',
+                }
             text = content.decode('utf-8')
             lines = _code_lines(text)
-            start = _code_line_number(citation['startLine'])
-            end = _code_line_number(citation['endLine'])
-            if not 1 <= start <= end <= len(lines) or end - start >= 100:
-                raise ValueError('Code range must contain at most 100 existing lines')
+            start = 1 if whole_file else _code_line_number(citation['startLine'])
+            end = len(lines) if whole_file else _code_line_number(citation['endLine'])
+            if not 1 <= start <= end <= len(lines):
+                raise ValueError('Code range must contain existing lines')
             passage = ''.join(lines[start - 1 : end])
-            if len(passage) > 8000:
+            if not whole_file and len(passage) > 8000:
                 raise ValueError(
                     'Code range exceeds character budget; select fewer lines'
                 )
@@ -610,12 +845,15 @@ class CodeIndexStore:
         mode: str,
         name: str = '',
         limit: int = 20,
+        *,
+        offset: int = 0,
     ) -> dict[str, Any]:
         """Read bounded syntax candidates from the authorized current capture."""
         if mode not in ('outline', 'definitions', 'references'):
             raise ValueError('Unknown code navigation mode')
         if (
             not 1 <= limit <= 50
+            or not 0 <= offset <= 100000
             or len(name) > 200
             or (mode != 'outline' and not name.strip())
         ):
@@ -625,7 +863,9 @@ class CodeIndexStore:
             return opened
         async with self._read(scope) as (connection, source):
             try:
-                current, manifest = self._manifest(source, scope)
+                current, manifest = self._manifest(
+                    source, scope, citation.get('handle')
+                )
             except ValueError:
                 return {
                     'outcome': 'unavailable',
@@ -670,25 +910,94 @@ class CodeIndexStore:
                 *args,
                 citation['path'],
             )
+            if mode == 'references':
+                return await self._references(
+                    current, manifest, citation, name, limit, offset, coverage, anchor
+                )
             array = 'refs' if mode == 'references' else 'symbols'
+            captured_lines: dict[str, list[str]] = {}
+            legacy_omitted = []
+            legacy_rows = await connection.fetch(
+                f'''SELECT n.path,n.digest,entry.ordinal,entry.value AS record FROM marie_scheduler.kb_code_navigation n
+                CROSS JOIN LATERAL jsonb_array_elements(n.{array}) WITH ORDINALITY entry(value,ordinal)
+                WHERE n.tenant_id=$1 AND n.index_id=$2 AND n.source_id=$3 AND n.handle=$4
+                AND NOT entry.value ? 'readable'
+                AND (($5='outline' AND n.path=$6) OR ($5<>'outline' AND (entry.value->>'name'=$7 OR entry.value->>'qualified_name'=$7)))
+                AND ($5<>'outline' OR entry.value->>'kind'<>'parameter')''',
+                *args,
+                mode,
+                citation['path'],
+                name,
+            )
+            for row in legacy_rows:
+                info = manifest['files'].get(row['path'])
+                if not info or info['sha256'] != row['digest']:
+                    raise PermissionError(
+                        'Navigation artifact differs from captured file'
+                    )
+                if row['path'] not in captured_lines:
+                    content = await asyncio.to_thread(
+                        (
+                            self.zoekt.directory(current['handle'])
+                            / 'files'
+                            / row['path']
+                        ).read_bytes
+                    )
+                    if hashlib.sha256(content).hexdigest() != info['sha256']:
+                        return {
+                            'outcome': 'changed',
+                            'message': 'Captured file digest differs. Refresh this source.',
+                        }
+                    captured_lines[row['path']] = _code_lines(content.decode('utf-8'))
+                start = row['record'].get('line') or row['record']['span']['start_line']
+                lines = captured_lines[row['path']]
+                if not 1 <= start <= len(lines) or len(lines[start - 1]) > 8000:
+                    legacy_omitted.append([row['path'], row['ordinal']])
+
             rows = await connection.fetch(
                 f'''SELECT n.path,n.digest,n.status,entry.value AS record FROM marie_scheduler.kb_code_navigation n
-                    CROSS JOIN LATERAL jsonb_array_elements(n.{array}) entry(value)
+                    CROSS JOIN LATERAL jsonb_array_elements(n.{array}) WITH ORDINALITY entry(value,ordinal)
                     WHERE n.tenant_id=$1 AND n.index_id=$2 AND n.source_id=$3 AND n.handle=$4
                       AND (($5='outline' AND n.path=$6) OR
                         ($5<>'outline' AND (entry.value->>'name'=$7 OR entry.value->>'qualified_name'=$7)))
+                      AND ($5<>'outline' OR entry.value->>'kind'<>'parameter')
+                      AND COALESCE((entry.value->>'readable')::boolean,true)
+                      AND NOT $10::jsonb @> jsonb_build_array(jsonb_build_array(n.path,entry.ordinal))
                     ORDER BY n.path,COALESCE((entry.value->'span'->>'start_line')::int,(entry.value->>'line')::int),
-                      entry.value->>'name' LIMIT $8''',
+                      entry.value->>'name',entry.ordinal LIMIT $8 OFFSET $9''',
                 *args,
                 mode,
                 citation['path'],
                 name,
                 limit + 1,
+                offset,
+                json.dumps(legacy_omitted),
             )
+            counts = await connection.fetchrow(
+                f'''SELECT count(*) AS matched, count(*) FILTER (WHERE entry.value->>'readable'='false') AS omitted, count(*) FILTER (WHERE NOT entry.value ? 'readable') AS legacy FROM marie_scheduler.kb_code_navigation n
+                CROSS JOIN LATERAL jsonb_array_elements(n.{array}) entry(value)
+                WHERE n.tenant_id=$1 AND n.index_id=$2 AND n.source_id=$3 AND n.handle=$4
+                AND (($5='outline' AND n.path=$6) OR ($5<>'outline' AND (entry.value->>'name'=$7 OR entry.value->>'qualified_name'=$7)))
+                AND ($5<>'outline' OR entry.value->>'kind'<>'parameter')''',
+                *args,
+                mode,
+                citation['path'],
+                name,
+            )
+            omitted = counts['omitted'] + len(legacy_omitted)
+            total = counts['matched'] - omitted
+            complete = not omitted and (
+                (anchor is not None and anchor['status'] == 'ready')
+                if mode == 'outline'
+                else not any(
+                    coverage[key]
+                    for key in ('partial', 'truncated', 'unsupported', 'unavailable')
+                )
+            )
+            consumed = 0
             results = []
-            captured_lines: dict[str, list[str]] = {}
             characters = 0
-            truncated = len(rows) > limit
+            truncated = len(rows) > limit or omitted > 0
             for row in rows[:limit]:
                 info = manifest['files'].get(row['path'])
                 if not info or info['sha256'] != row['digest']:
@@ -721,12 +1030,13 @@ class CodeIndexStore:
                 lines = captured_lines[row['path']]
                 bounded_end = start - 1
                 range_characters = 0
-                for line in range(start, min(end, start + 99, len(lines)) + 1):
+                for line in range(start, min(end, len(lines)) + 1):
                     range_characters += len(lines[line - 1])
                     if range_characters > 8000:
                         break
                     bounded_end = line
                 if bounded_end < start:
+                    consumed += 1
                     truncated = True
                     continue
                 candidate = {
@@ -736,6 +1046,10 @@ class CodeIndexStore:
                     'signature': record.get('signature', ''),
                     'parseStatus': record.get('parse_status', row['status']),
                     'rangeTruncated': bounded_end < end,
+                    'context': ''.join(
+                        lines[max(0, start - 3) : min(len(lines), start + 2)]
+                    )[:2000],
+                    'contextStartLine': max(1, start - 2),
                     'citation': {
                         **citation,
                         'path': row['path'],
@@ -753,13 +1067,127 @@ class CodeIndexStore:
                     break
                 characters += size
                 results.append(candidate)
+                consumed += 1
             return {
                 'outcome': 'ready',
                 'mode': mode,
                 'heuristic': True,
-                'status': anchor['status'] if anchor else 'unavailable',
+                'status': 'ready' if complete else 'partial',
                 'language': anchor['language'] if anchor else None,
                 'coverage': coverage,
+                'total': total,
+                'totalExact': complete,
+                'matchedTotal': counts['matched'],
+                'omitted': omitted,
+                'nextOffset': offset + consumed if offset + consumed < total else None,
                 'results': results,
                 'truncated': truncated,
             }
+
+    async def _references(
+        self,
+        current: dict[str, Any],
+        manifest: dict[str, Any],
+        citation: dict[str, Any],
+        name: str,
+        limit: int,
+        offset: int,
+        coverage: dict[str, int],
+        anchor: Any,
+    ) -> dict[str, Any]:
+        found = await self.zoekt.references(current['handle'], name)
+        matches = set()
+        omitted = set()
+        for file in found.get('Files') or []:
+            if (
+                file['Repository'] != current['handle']
+                or file['FileName'] not in manifest['files']
+            ):
+                raise PermissionError(
+                    'Reference search returned a file outside the captured source'
+                )
+            for line in file.get('LineMatches') or []:
+                if line.get('FileName'):
+                    continue
+                key = (file['FileName'], line['LineNumber'])
+                text = base64.b64decode(line['Line']).decode('utf-8')
+                if len(text) > 8000:
+                    omitted.add(key)
+                else:
+                    matches.add(key)
+        ordered = sorted(matches)
+        complete = not (
+            found.get('FilesSkipped')
+            or found.get('ShardsSkipped')
+            or (found.get('FileCount', 0) > len(found.get('Files') or []))
+            or found.get('MatchCount', 0) >= 10000
+        )
+        results = []
+        cached = {}
+        consumed = 0
+        characters = 0
+        for path, line in ordered[offset : offset + limit]:
+            info = manifest['files'][path]
+            if path not in cached:
+                content = await asyncio.to_thread(
+                    (
+                        self.zoekt.directory(current['handle']) / 'files' / path
+                    ).read_bytes
+                )
+                if hashlib.sha256(content).hexdigest() != info['sha256']:
+                    return {
+                        'outcome': 'changed',
+                        'message': 'Captured file digest differs. Refresh this source.',
+                    }
+                cached[path] = _code_lines(content.decode('utf-8'))
+            lines = cached[path]
+            if not 1 <= line <= len(lines):
+                raise ValueError('Reference line differs from the captured file')
+            if len(lines[line - 1]) > 8000:
+                consumed += 1
+                complete = False
+                continue
+            candidate = {
+                'name': name,
+                'qualifiedName': name,
+                'kind': 'text',
+                'signature': lines[line - 1].strip()[:200],
+                'parseStatus': 'ready',
+                'rangeTruncated': False,
+                'context': ''.join(lines[max(0, line - 3) : min(len(lines), line + 2)])[
+                    :2000
+                ],
+                'contextStartLine': max(1, line - 2),
+                'citation': {
+                    **citation,
+                    'path': path,
+                    'sourceDigest': info['sha256'],
+                    'startLine': line,
+                    'endLine': line,
+                },
+            }
+            size = sum(
+                len(candidate[key])
+                for key in ('name', 'qualifiedName', 'kind', 'signature')
+            ) + len(path)
+            if characters + size > 8000:
+                break
+            characters += size
+            consumed += 1
+            results.append(candidate)
+        next_offset = offset + consumed if offset + consumed < len(ordered) else None
+        return {
+            'outcome': 'ready',
+            'mode': 'references',
+            'heuristic': True,
+            'status': 'ready' if complete else 'partial',
+            'language': anchor['language'] if anchor else None,
+            'coverage': coverage,
+            'results': results,
+            'total': len(ordered),
+            'matchedTotal': len(ordered) + len(omitted),
+            'omitted': len(omitted),
+            'totalExact': complete,
+            'nextOffset': next_offset,
+            'truncated': next_offset is not None or not complete or bool(omitted),
+        }

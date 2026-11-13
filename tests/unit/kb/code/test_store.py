@@ -38,7 +38,7 @@ async def code_store(zoekt, repo):
     await pool.execute(
         '''DROP TABLE IF EXISTS marie_scheduler.kb_code_navigation,marie_scheduler.kb_source,marie_scheduler.kb_index,marie_runtime.tenant,marie_runtime.git_repositories CASCADE;
         CREATE TABLE marie_runtime.tenant(id uuid primary key,organization_id uuid,status text);
-        CREATE TABLE marie_scheduler.kb_index(id uuid primary key,tenant_id uuid,workspace_id uuid,metadata jsonb);
+        CREATE TABLE marie_scheduler.kb_index(id uuid primary key,tenant_id uuid,workspace_id uuid,metadata jsonb,name text default 'Engineering');
         CREATE TABLE marie_runtime.git_repositories(id uuid primary key,path text,name text,is_enabled boolean,git_enabled boolean,organization_id uuid,visibility text);
         CREATE TABLE marie_scheduler.kb_source(id uuid primary key,index_id uuid,name text,source_type text,status text,metadata jsonb,dataset_inputs jsonb,updated_at timestamptz default now());'''
     )
@@ -79,7 +79,7 @@ async def code_store(zoekt, repo):
         UUID(scope['organization_id']),
     )
     await pool.execute(
-        "INSERT INTO marie_scheduler.kb_index VALUES($1,$2,$3,'{}')",
+        "INSERT INTO marie_scheduler.kb_index(id,tenant_id,workspace_id,metadata) VALUES($1,$2,$3,'{}')",
         UUID(scope['index_id']),
         UUID(scope['tenant_id']),
         UUID(scope['workspace_id']),
@@ -96,7 +96,7 @@ async def code_store(zoekt, repo):
         UUID(scope['index_id']),
         json.dumps({'repositoryId': repository_id, 'branch': 'main', 'fetch': False}),
     )
-    store = CodeIndexStore(pool, zoekt, [str(repo.parent)])
+    store = CodeIndexStore(pool, zoekt, [str(repo.parent)], retained_captures=1)
 
     async def execution():
         params = {
@@ -293,10 +293,10 @@ async def test_replacement_waits_for_reader_and_retires_only_its_own_build(
     entered = asyncio.Event()
     release = asyncio.Event()
 
-    async def hold(*args):
+    async def hold(*args, **kwargs):
         entered.set()
         await release.wait()
-        return await original(*args)
+        return await original(*args, **kwargs)
 
     monkeypatch.setattr(store.zoekt, 'search', hold)
     read = asyncio.create_task(store.search(scope, 'alpha', 'literal'))
@@ -615,8 +615,8 @@ async def test_source_scope_edit_during_search_withholds_old_binding_results(
     await store.refresh(await execution())
     search = store.zoekt.search
 
-    async def changed(*args):
-        result = await search(*args)
+    async def changed(*args, **kwargs):
+        result = await search(*args, **kwargs)
         await pool.execute(
             "UPDATE marie_scheduler.kb_source SET dataset_inputs=dataset_inputs || '{\"exclude\":[\"*.py\"]}'::jsonb"
         )

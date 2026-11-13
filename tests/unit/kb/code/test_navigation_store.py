@@ -42,7 +42,12 @@ async def test_navigation_keeps_duplicate_definitions_and_opens_captured_candida
         opened = await store.open(scope, row['citation'])
         assert 'def target():' in opened['text']
     references = await store.navigate(scope, citation, 'references', 'target')
-    assert [row['citation']['startLine'] for row in references['results']] == [4, 4]
+    assert [row['citation']['startLine'] for row in references['results']] == [
+        1,
+        4,
+        1,
+        4,
+    ]
     limited = await store.navigate(scope, citation, 'definitions', 'target', limit=1)
     assert len(limited['results']) == 1 and limited['truncated']
     outline = await store.navigate(scope, citation, 'outline')

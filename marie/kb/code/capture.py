@@ -12,6 +12,14 @@ from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
 
+def code_lines(text: str) -> list[str]:
+    """Split captured text using the LF line numbering used by code parsers."""
+    parts = text.split('\n')
+    return [line + '\n' for line in parts[:-1]] + (
+        [parts[-1]] if parts[-1] else []
+    ) or ['']
+
+
 @dataclass
 class RepositoryCapture:
     commit: str

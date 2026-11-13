@@ -1,3 +1,4 @@
+import base64
 import os
 import subprocess
 from pathlib import Path
@@ -75,6 +76,9 @@ async def test_real_service_build_coverage_scope_and_failed_query(zoekt, tmp_pat
         assert await zoekt.usable(handle, 1)
     result = await zoekt.search('a' * 64, 'secret', 'literal', 10)
     assert [file['Repository'] for file in result['Files']] == ['a' * 64]
+    assert 'second é' in base64.b64decode(
+        result['Files'][0]['LineMatches'][0]['After']
+    ).decode('utf-8')
     assert not (await zoekt.search('a' * 64, '") or repo:.*', 'literal', 10)).get(
         'Files'
     )

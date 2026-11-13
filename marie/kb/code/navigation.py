@@ -12,7 +12,8 @@ def parse_file(path: Path, digest: str, *, max_records: int = 1000) -> dict[str,
     """Extract navigation records without making grammar availability a search gate."""
     if not 1 <= max_records <= 10000:
         raise ValueError('Navigation record limit must be between 1 and 10000')
-    if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+    content = path.read_bytes()
+    if hashlib.sha256(content).hexdigest() != digest:
         raise ValueError('Captured file digest changed before parsing')
     result: dict[str, Any] = {
         'status': 'unavailable',
@@ -46,6 +47,7 @@ def parse_file(path: Path, digest: str, *, max_records: int = 1000) -> dict[str,
     )
     body = json.loads(document.content)
     result['parse_status'] = body['parse_status']
+    lines = content.decode('utf-8').split('\n')
     remaining = max_records
     truncated = False
     characters = 0
@@ -85,6 +87,11 @@ def parse_file(path: Path, digest: str, *, max_records: int = 1000) -> dict[str,
                     if field in value
                 }
                 record['parse_status'] = body['parse_status']
+                start = value.get('line') or value['span']['start_line']
+                record['readable'] = (
+                    1 <= start <= len(lines)
+                    and len(lines[start - 1]) + (start < len(lines)) <= 8000
+                )
             size = len(json.dumps(record, ensure_ascii=False))
             if characters + size > 128000:
                 truncated = True

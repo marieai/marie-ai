@@ -42,6 +42,7 @@ class RepositoryExecutor(MarieExecutor):
                     ),
                     config['repository_roots'],
                     config.get('path_mounts'),
+                    config.get('retained_captures', 5),
                 )
             return self._store
 
@@ -60,14 +61,27 @@ class RepositoryExecutor(MarieExecutor):
             parameters.get('query', ''),
             parameters.get('mode', 'literal'),
             int(parameters.get('limit', 20)),
+            case_sensitive=parameters.get('case_sensitive', True),
+            branches=parameters.get('branches'),
         )
 
     @requests(on='/open_code')
     async def open_code(
         self, docs: DocList[TextDoc], parameters: dict[str, Any], **kwargs: Any
     ) -> dict[str, Any]:
+        if parameters.get('operation'):
+            return await (await self._ensure_store()).browse(
+                parameters,
+                parameters['citation'],
+                parameters['operation'],
+                path=parameters.get('path', ''),
+                offset=int(parameters.get('offset', 0)),
+                limit=int(parameters.get('limit', 100)),
+            )
         return await (await self._ensure_store()).open(
-            parameters, parameters['citation']
+            parameters,
+            parameters['citation'],
+            whole_file=parameters.get('whole_file') is True,
         )
 
     @requests(on='/delete_code_source')
@@ -86,6 +100,7 @@ class RepositoryExecutor(MarieExecutor):
             parameters['mode'],
             parameters.get('name', ''),
             int(parameters.get('limit', 20)),
+            offset=int(parameters.get('offset', 0)),
         )
 
     async def close(self) -> None:
