@@ -389,6 +389,7 @@ async def advanced_search(
                             context = hit['before'] + hit['text'] + hit['after']
                             results[(capture['handle'], path, line)] = {
                                 'path': path,
+                                'language': file.get('Language') or 'Unknown',
                                 'line': line,
                                 'preview': hit['text'][:1000],
                                 'context': context[:4000],

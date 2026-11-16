@@ -156,3 +156,78 @@ async def test_git_metadata_failure_leaves_captured_file_readable(code_store):
     (repository / '.git').rename(repository / '.git-unavailable')
     assert (await store.browse(scope, citation, 'history'))['outcome'] == 'unavailable'
     assert (await store.open(scope, citation, whole_file=True))['outcome'] == 'ready'
+
+
+async def test_captured_file_list_loads_nested_paths_in_one_bounded_page(code_store):
+    store, _, scope, execution, repository = code_store
+    folder = repository / 'src' / 'nested'
+    folder.mkdir(parents=True)
+    (folder / 'one.py').write_text('one = 1\n')
+    (folder / 'two.py').write_text('two = 2\n')
+    git(repository, 'add', '.')
+    git(repository, 'commit', '-m', 'nested captured tree')
+    await store.refresh(await execution())
+    citation = (await store.search(scope, 'one', 'literal'))['results'][0]['citation']
+    listing = await store.browse(scope, citation, 'files', limit=1000)
+    assert listing['mode'] == 'files' and listing['nextOffset'] is None
+    assert [row['path'] for row in listing['entries']] == [
+        'src/nested/one.py',
+        'src/nested/two.py',
+        'same.py',
+    ]
+    assert all(
+        row['citation']['handle'] == citation['handle'] for row in listing['entries']
+    )
+    assert all(
+        row['citation']['sourceDigest'] == row['digest'] for row in listing['entries']
+    )
+    page = await store.browse(scope, citation, 'files', limit=1)
+    next_page = await store.browse(
+        scope, citation, 'files', limit=1, offset=page['nextOffset']
+    )
+    assert next_page['entries'][0]['path'] == 'src/nested/two.py'
+
+
+async def test_directory_history_uses_only_captured_members_and_retained_commit(
+    code_store,
+):
+    import json
+
+    store, pool, scope, execution, repository = code_store
+    folder = repository / 'src'
+    folder.mkdir()
+    (folder / 'visible.py').write_text('visible = 1\n')
+    (folder / 'hidden.py').write_text('hidden = 1\n')
+    git(repository, 'add', 'src')
+    git(repository, 'commit', '-m', 'captured source files')
+    (folder / 'hidden.py').write_text('hidden = 2\n')
+    git(repository, 'add', 'src/hidden.py')
+    git(repository, 'commit', '-m', 'excluded source change')
+    await pool.execute(
+        'UPDATE marie_scheduler.kb_source SET dataset_inputs=dataset_inputs || $1::jsonb',
+        json.dumps({'include': ['same.py', 'src/visible.py']}),
+    )
+    await store.refresh(await execution())
+    citation = (await store.search(scope, 'visible', 'literal'))['results'][0][
+        'citation'
+    ]
+    (folder / 'visible.py').write_text('visible = 3\n')
+    git(repository, 'add', 'src/visible.py')
+    git(repository, 'commit', '-m', 'later than capture')
+    history = await store.browse(
+        scope, citation, 'directory_history', path='src', limit=1
+    )
+    assert history['mode'] == 'directory_history' and history['path'] == 'src'
+    assert [row['summary'] for row in history['commits']] == ['captured source files']
+    assert history['commits'][0]['citation'] is None
+    root = await store.browse(scope, citation, 'directory_history', limit=1)
+    assert root['nextOffset'] == 1
+    next_page = await store.browse(
+        scope, citation, 'directory_history', offset=1, limit=1
+    )
+    assert [row['summary'] for row in next_page['commits']] == ['initial']
+    assert (await store.browse(scope, citation, 'directory_history', path='missing'))[
+        'commits'
+    ] == []
+    with pytest.raises(ValueError):
+        await store.browse(scope, citation, 'directory_history', path='../outside')

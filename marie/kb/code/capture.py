@@ -46,13 +46,19 @@ def resolve_repository_path(
     return source
 
 
-def git(repository: Path, *arguments: str, timeout: float = 120) -> bytes:
+def git(
+    repository: Path,
+    *arguments: str,
+    timeout: float = 120,
+    input_data: bytes | None = None,
+) -> bytes:
     """Run a bounded, noninteractive Git operation without a shell."""
     return subprocess.check_output(
         ['git', '-C', str(repository), *arguments],
         timeout=timeout,
         env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
         stderr=subprocess.PIPE,
+        input=input_data,
     )
 
 

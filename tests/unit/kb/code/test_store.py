@@ -129,6 +129,7 @@ async def test_real_capture_search_refresh_and_old_locator(code_store):
     results = await store.search(scope, 'alpha', 'literal')
     row = results['results'][0]
     assert row['path'] == 'same.py'
+    assert row['language'] == 'Python'
     opened = await store.open(scope, row['citation'])
     assert opened['outcome'] == 'ready' and 'alpha' in opened['passage']
     skipped = await store.refresh(await execution())

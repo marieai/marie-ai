@@ -37,6 +37,7 @@ async def test_filters_case_and_boolean_query_reuse_authorized_capture(code_stor
     )
     assert [row['path'] for row in result['results']] == ['target.py']
     assert result['results'][0]['line'] == 2
+    assert result['results'][0]['language'] == 'Python'
     assert (await store.open(scope, result['results'][0]['citation']))[
         'outcome'
     ] == 'ready'

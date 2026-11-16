@@ -13,7 +13,14 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
 
-from marie.kb.code.browser import directory_entries, git_blob_digest, git_history
+from marie.kb.code.browser import (
+    directory_entries,
+    directory_members,
+    file_entries,
+    git_blob_digest,
+    git_directory_history,
+    git_history,
+)
 from marie.kb.code.capture import (
     branch_commit,
     capture_repository,
@@ -554,6 +561,7 @@ class CodeIndexStore:
                     rows.append(
                         {
                             'path': path,
+                            'language': file.get('Language') or 'Unknown',
                             'line': number,
                             'preview': matched[:1000],
                             'context': context[:4000],
@@ -596,9 +604,10 @@ class CodeIndexStore:
     ) -> dict[str, Any]:
         """Browse owned captures and Git metadata under the existing source lock."""
         if (
-            mode not in ('tree', 'revisions', 'history')
+            mode not in ('tree', 'files', 'revisions', 'history', 'directory_history')
             or not 0 <= offset <= 100000
-            or not 1 <= limit <= 200
+            or not 1 <= limit <= (1000 if mode == 'files' else 200)
+            or (mode == 'files' and path)
         ):
             raise ValueError('Invalid captured repository browse request')
         async with self._read(scope) as (_, source):
@@ -642,6 +651,11 @@ class CodeIndexStore:
                 }
 
             ready = {'outcome': 'ready', 'mode': mode}
+            if mode == 'files':
+                return {
+                    **ready,
+                    **file_entries(manifest['files'], citation, offset, limit),
+                }
             if mode == 'tree':
                 listing = directory_entries(manifest['files'], path, offset, limit)
                 return {
@@ -662,6 +676,33 @@ class CodeIndexStore:
                         }
                         for entry in listing['entries']
                     ],
+                }
+            if mode == 'directory_history':
+                members = directory_members(manifest['files'], path)
+                repository = resolve_repository_path(
+                    source['path'], self.roots, self.mounts
+                )
+                try:
+                    records = await asyncio.to_thread(
+                        git_directory_history,
+                        repository,
+                        current['commit'],
+                        members,
+                        offset,
+                        limit + 1,
+                    )
+                except (subprocess.SubprocessError, OSError, ValueError):
+                    return {
+                        'outcome': 'unavailable',
+                        'message': 'Git history is unavailable. Captured files remain readable.',
+                    }
+                return {
+                    **ready,
+                    'path': path,
+                    'commits': [
+                        {**record, 'citation': None} for record in records[:limit]
+                    ],
+                    'nextOffset': offset + limit if len(records) > limit else None,
                 }
             captures = [
                 current,
