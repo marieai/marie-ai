@@ -595,7 +595,7 @@ class KbCatalog:
                 else 'kb_repository_refresh'
             )
             run = await connection.fetchrow(
-                f'''SELECT d.state::text,d.completed_on FROM {self.schema}.dag d
+                f'''SELECT d.id AS dag_id,d.state::text,d.completed_on FROM {self.schema}.dag d
                     JOIN {self.schema}.kb_index k ON k.id=$1 WHERE d.project_id=k.tenant_id::text
                     AND d.ref_id=$2 AND d.planner=$3 ORDER BY d.created_on DESC,d.id DESC LIMIT 1''',
                 source['index_id'],
@@ -603,6 +603,18 @@ class KbCatalog:
                 planner,
             )
             dto['latestRun'] = camel_row(run) if run else None
+            if run:
+                job_id = None
+                if source['source_type'] == 'repository' and await self._exists(
+                    connection, 'job_search_document'
+                ):
+                    job_id = await connection.fetchval(
+                        f'''SELECT job_id FROM {self.schema}.job_search_document
+                            WHERE dag_id=$1 AND endpoint=$2 ORDER BY job_id LIMIT 1''',
+                        run['dag_id'],
+                        'repository_executor://refresh_repository',
+                    )
+                dto['latestRun']['jobId'] = json_safe(job_id)
         return dto
 
     async def _index_dto(
@@ -900,6 +912,81 @@ class KbCatalog:
             connection,
             await self._source(connection, index, command.sourceId, removing=True),
         )
+
+    async def _source_runs(
+        self, connection: AsyncPostgresConnection, command: models.SourceRuns
+    ) -> dict[str, Any]:
+        index = await self._index(connection, command, command.indexId)
+        source = await self._source(connection, index, command.sourceId)
+        if source['source_type'] != 'repository':
+            raise CatalogError('Refresh history requires a repository source', 400)
+        if not await self._exists(connection, 'dag'):
+            return {'runs': [], 'total': 0}
+        arguments = (
+            str(index['tenant_id']),
+            str(source['id']),
+            'kb_repository_refresh',
+        )
+        rows = await connection.fetch(
+            f'''SELECT id AS dag_id,state::text,created_on,started_on,completed_on
+                FROM {self.schema}.dag WHERE project_id=$1 AND ref_id=$2 AND planner=$3
+                ORDER BY created_on DESC,id DESC LIMIT $4 OFFSET $5''',
+            *arguments,
+            command.pageSize,
+            (command.page - 1) * command.pageSize,
+        )
+        total = await connection.fetchval(
+            f'''SELECT count(*) FROM {self.schema}.dag
+                WHERE project_id=$1 AND ref_id=$2 AND planner=$3''',
+            *arguments,
+        )
+        jobs = {}
+        endpoint = 'repository_executor://refresh_repository'
+        if rows and await self._exists(connection, 'job'):
+            jobs = {
+                row['dag_id']: row
+                for row in await connection.fetch(
+                    f'''SELECT DISTINCT ON (dag_id) dag_id,id AS job_id,
+                        data->'metadata'->>'on' AS endpoint,
+                        data->'metadata'->>'user_id' AS actor_id,
+                        COALESCE(data->>'trigger',data->'metadata'->>'trigger') AS trigger,
+                        COALESCE(data->>'source_sensor_id',data->>'sensor_id') AS sensor_id,
+                        data->>'sensor_name' AS sensor_name,
+                        data->'run_config'->>'scheduled_at' AS scheduled_at
+                        FROM {self.schema}.job WHERE dag_id=ANY($1::uuid[])
+                        ORDER BY dag_id,(data->'metadata'->>'on'=$2) DESC NULLS LAST,id''',
+                    [row['dag_id'] for row in rows],
+                    endpoint,
+                )
+            }
+        runs = []
+        for row in rows:
+            job = jobs.get(row['dag_id']) or {}
+            trigger = job.get('trigger')
+            if trigger == 'schedule':
+                trigger = 'schedule'
+            elif job.get('sensor_id'):
+                trigger = 'sensor'
+            elif trigger == 'manual' or job.get('actor_id'):
+                trigger = 'manual'
+            else:
+                trigger = 'unknown'
+            runs.append(
+                {
+                    **camel_row(row),
+                    'jobId': (
+                        json_safe(job.get('job_id'))
+                        if job.get('endpoint') == endpoint
+                        else None
+                    ),
+                    'trigger': trigger,
+                    'actorId': job.get('actor_id'),
+                    'sensorId': job.get('sensor_id'),
+                    'sensorName': job.get('sensor_name'),
+                    'scheduledAt': job.get('scheduled_at'),
+                }
+            )
+        return {'runs': runs, 'total': total}
 
     async def _prepare_upload(
         self, connection: AsyncPostgresConnection, command: models.Upload

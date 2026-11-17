@@ -130,6 +130,11 @@ class ListSources(IndexScope):
     sourceType: Nonempty | None = None
 
 
+class SourceRuns(SourceScope):
+    page: Annotated[int, Field(ge=1, le=100000, strict=True)] = 1
+    pageSize: Annotated[int, Field(ge=1, le=100, strict=True)] = 25
+
+
 def valid_key(value: str) -> str:
     if (
         not value
@@ -419,6 +424,7 @@ COMMANDS: dict[str, type[BaseModel]] = {
     'update_index_configuration': UpdateIndex,
     'list_sources': ListSources,
     'get_source': SourceScope,
+    'source_runs': SourceRuns,
     'prepare_upload': Upload,
     'save_source': SaveSource,
     'admit_documents': AdmitDocuments,
