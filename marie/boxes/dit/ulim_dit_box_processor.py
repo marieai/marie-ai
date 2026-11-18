@@ -20,7 +20,7 @@ from marie.detectron.detector import OptimizedDetectronPredictor
 from marie.logging_core.logger import MarieLogger
 from marie.models.utils import torch_gc
 from marie.utils.image_utils import imwrite, paste_fragment
-from marie.utils.overlap import merge_boxes, compute_iou, find_overlap
+from marie.utils.overlap import find_overlap_horizontal, merge_bboxes_as_block
 from marie.utils.resize_image import resize_image
 from marie.utils.utils import ensure_exists
 from marie.utils.image_utils import hash_frames_fast
@@ -427,6 +427,97 @@ class BoxProcessorUlimDit(BoxProcessor):
             raise Exception("Not implemented : PSM_WORD")
         return self.psm_sparse(image)
 
+    def _merge_boxes_with_metadata(
+        self,
+        bboxes: np.ndarray,
+        classes: np.ndarray,
+        scores: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Merge boxes while preserving class/score provenance."""
+
+        def _pick_representative_index(source_idxs: list[int]) -> int:
+            # Prefer text class when available to avoid dropping OCR candidates.
+            text_candidates = [idx for idx in source_idxs if int(classes[idx]) == 0]
+            candidates = text_candidates if text_candidates else source_idxs
+            return min(candidates, key=lambda idx: (-float(scores[idx]), idx))
+
+        if len(bboxes) == 0:
+            return bboxes, classes, scores
+
+        # Collapse exact duplicates first by rounded geometry + class.
+        exact_groups = {}
+        for idx, box in enumerate(bboxes):
+            key = (*np.round(np.asarray(box, dtype=np.float64), 4).tolist(), int(classes[idx]))
+            exact_groups.setdefault(key, []).append(idx)
+
+        groups = []
+        boxes_xywh = []
+        for _, source_idxs in sorted(exact_groups.items(), key=lambda item: item[1][0]):
+            best_idx = _pick_representative_index(source_idxs)
+            x0, y0, x1, y1 = bboxes[best_idx]
+            boxes_xywh.append([x0, y0, x1 - x0, y1 - y0])
+            groups.append(sorted(source_idxs))
+
+        boxes_xywh = np.asarray(boxes_xywh, dtype=np.float32)
+        last_box_size = len(boxes_xywh)
+        max_consecutive_merges = 3
+
+        while max_consecutive_merges > 0:
+            visited = [False for _ in range(len(boxes_xywh))]
+            merge_sets = []
+            for idx in range(len(boxes_xywh)):
+                if visited[idx]:
+                    continue
+                visited[idx] = True
+                overlaps, overlap_idxs, _ = find_overlap_horizontal(
+                    boxes_xywh[idx], boxes_xywh, center_y_overlap=0.5
+                )
+
+                merge_set = [idx]
+                for overlap_idx in overlap_idxs:
+                    visited[overlap_idx] = True
+                    merge_set.append(overlap_idx)
+                merge_sets.append(sorted(set(merge_set)))
+
+            if len(merge_sets) == len(boxes_xywh):
+                break
+
+            merged_boxes_xywh = []
+            merged_groups = []
+            for merge_set in merge_sets:
+                picks = boxes_xywh[merge_set]
+                merged_boxes_xywh.append(merge_bboxes_as_block(picks))
+
+                merged_source_idxs = []
+                for merge_idx in merge_set:
+                    merged_source_idxs.extend(groups[merge_idx])
+                merged_groups.append(sorted(set(merged_source_idxs)))
+
+            boxes_xywh = np.asarray(merged_boxes_xywh, dtype=np.float32)
+            groups = merged_groups
+
+            if last_box_size == len(boxes_xywh):
+                break
+
+            max_consecutive_merges -= 1
+            last_box_size = len(boxes_xywh)
+
+        merged_boxes = []
+        merged_classes = []
+        merged_scores = []
+        for box_xywh, source_idxs in zip(boxes_xywh, groups):
+            best_idx = _pick_representative_index(source_idxs)
+            x, y, w, h = box_xywh
+            merged_boxes.append([x, y, x + w, y + h])
+            merged_classes.append(classes[best_idx])
+            merged_scores.append(scores[best_idx])
+
+        order = np.argsort(np.asarray([min(source_idxs) for source_idxs in groups]))
+        merged_boxes = np.asarray(merged_boxes, dtype=np.float32)[order]
+        merged_classes = np.asarray(merged_classes)[order]
+        merged_scores = np.asarray(merged_scores, dtype=np.float32)[order]
+        return merged_boxes, merged_classes, merged_scores
+
     @torch.no_grad()
     def psm_sparse_step(self, image: np.ndarray, adj_x: int, adj_y: int):
         """
@@ -470,6 +561,8 @@ class BoxProcessorUlimDit(BoxProcessor):
                 return [], [], []
 
             bboxes = _convert_boxes(boxes)
+            classes = classes.numpy() if classes is not None else None
+            scores = scores.numpy() if scores is not None else None
             self.logger.debug(f"Predicted boxes : {len(boxes)}")
             # adjust the boxes to original image size
             if adj_x != 0 or adj_y != 0:
@@ -490,8 +583,14 @@ class BoxProcessorUlimDit(BoxProcessor):
             min_height = 2
             min_width = 2
             # bboxes are in (xmin,ymin,xmax,ymax) format
-            bboxes = [box for box in bboxes if box[2] - box[0] > min_height]
-            bboxes = [box for box in bboxes if box[3] - box[1] > min_width]
+            widths = bboxes[:, 2] - bboxes[:, 0]
+            heights = bboxes[:, 3] - bboxes[:, 1]
+            valid_mask = np.logical_and(widths > min_width, heights > min_height)
+            bboxes = bboxes[valid_mask]
+            if classes is not None and len(classes) == len(valid_mask):
+                classes = classes[valid_mask]
+            if scores is not None and len(scores) == len(valid_mask):
+                scores = scores[valid_mask]
 
             len_b = len(bboxes)
             if len_a != len_b:
@@ -502,8 +601,16 @@ class BoxProcessorUlimDit(BoxProcessor):
                 self.logger.debug(f"No boxes found within requirements")
                 return [], [], []
 
-            bboxes = merge_boxes(bboxes, 0.08)
-            bboxes = np.array(bboxes)
+            if classes is None:
+                classes = np.zeros(len(bboxes), dtype=np.int64)
+            if scores is None:
+                scores = np.ones(len(bboxes), dtype=np.float32)
+
+            bboxes, classes, scores = self._merge_boxes_with_metadata(
+                bboxes,
+                np.asarray(classes),
+                np.asarray(scores, dtype=np.float32),
+            )
             return bboxes, classes, scores
         except Exception as e:
             self.logger.error(f"Error in PSM_SPARSE_STEP : {e}")
@@ -656,6 +763,8 @@ class BoxProcessorUlimDit(BoxProcessor):
             # sort by xy-coordinated
             ind = np.lexsort((bboxes[:, 0], bboxes[:, 1]))
             bboxes = bboxes[ind]
+            classes = classes[ind]
+            scores = scores[ind]
             lines = lines_from_bboxes(image, bboxes, bbox_strict_line_merge)
 
             return bboxes, classes, scores, lines, classes
@@ -766,6 +875,34 @@ class BoxProcessorUlimDit(BoxProcessor):
             rect_line_numbers = []
             fragments = []
 
+            if len(bboxes) > 0:
+                bboxes = np.asarray(bboxes)
+                classes = np.asarray(classes)
+                scores = np.asarray(scores, dtype=np.float32)
+
+                dedupe_candidates = {}
+                for idx, (box, cls) in enumerate(zip(bboxes, classes)):
+                    key = (*np.round(np.asarray(box, dtype=np.float64), 4).tolist(), int(cls))
+                    if key not in dedupe_candidates:
+                        dedupe_candidates[key] = idx
+                        continue
+
+                    prev_idx = dedupe_candidates[key]
+                    prev_score = float(scores[prev_idx])
+                    curr_score = float(scores[idx])
+                    if curr_score > prev_score:
+                        dedupe_candidates[key] = idx
+
+                keep_indices = sorted(set(dedupe_candidates.values()))
+                if len(keep_indices) != len(bboxes):
+                    self.logger.warning(
+                        f"Removed duplicate boxes before OCR: {len(bboxes) - len(keep_indices)}"
+                    )
+
+                bboxes = bboxes[keep_indices]
+                classes = classes[keep_indices]
+                scores = scores[keep_indices]
+
             for i in range(len(bboxes)):
                 # Adjust box from (xmin, ymin, xmax, ymax) -> (x, y, w, h)
                 box = np.array(bboxes[i]).astype(np.int32)
@@ -801,18 +938,17 @@ class BoxProcessorUlimDit(BoxProcessor):
             stop_time = time.time()
             eval_time = round((stop_time - start_time) * 1000, 2)
 
-            # sort by x and line y-coordinated
+            # sort by x and line y-coordinated while keeping line ids aligned with fragments
             augmented_bboxes = []
-            for i, box in enumerate(bboxes):
+            for i, box in enumerate(rect_from_poly):
                 line_number = rect_line_numbers[i]
                 augmented_bboxes.append([box[0], box[1], box[2], box[3], line_number])
             augmented_bboxes = np.array(augmented_bboxes)
 
             if len(augmented_bboxes) > 0:
                 ind = np.lexsort((augmented_bboxes[:, 0], augmented_bboxes[:, 4]))
-                bboxes = bboxes[ind]
-                scores = scores[ind]
                 rect_from_poly = np.array(rect_from_poly)[ind]
+                rect_line_numbers = np.array(rect_line_numbers)[ind].tolist()
                 filtered_fragments = []
                 for i in ind:
                     filtered_fragments.append(fragments[i])
