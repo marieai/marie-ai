@@ -7,9 +7,10 @@
 #
 # Prerequisites:
 #   - Network created: docker network create --driver=bridge marie_default
+#   - Security material prepared as described in Dockerfiles/valkey/README.md
 #
 # Access:
-#   - Valkey: redis://localhost:6379/0
+#   - Valkey: authenticated redis:// connection on port 6379
 
 services:
   valkey:
@@ -17,13 +18,27 @@ services:
     init: true
     restart: unless-stopped
     container_name: "marie-valkey"
-    command: ["valkey-server", "--appendonly", "yes", "--save", "60", "1000"]
+    command: ["sh", "/etc/valkey/start.sh"]
     ports:
       - 6379:6379
     volumes:
       - valkey_data:/data
+      - type: bind
+        source: ./Dockerfiles/valkey
+        target: /etc/valkey
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VALKEY_SECURITY_DIR:-${DATA_DIR:-/mnt/data/marie-ai}/valkey-security}/server
+        target: /run/valkey-source
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /run/valkey:rw,noexec,nosuid,size=1m
     healthcheck:
-      test: ["CMD", "valkey-cli", "-h", "127.0.0.1", "ping"]
+      test: ["CMD", "sh", "/etc/valkey/healthcheck.sh"]
       interval: 15s
       timeout: 5s
       retries: 5

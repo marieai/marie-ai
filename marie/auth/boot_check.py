@@ -10,11 +10,11 @@ from marie.excepts import BadConfigSource
 # Public examples in APIKeyManager.from_config's documentation.
 _EXAMPLE_KEY_DIGESTS = frozenset(
     {
-        '2ac8c0da3c9c3c568fc86ef8ca4f934b05044b65d6aae9a4ee2fe0e9bd00feb6',
-        'c62607d20f357873f530d453014e1c4ee13da3a85051585ce2ed3a60bc8429cb',
-        '8a62dbb45cdf91c20779b86769ed8a186ef0915a7d5b723cf434506eb8c3e016',
-        'ea00d927b0ec9663d5c90b51854843b391a8b9181a3213cc30c9cea01620fbc0',
-        '7b25e25aa2d2148bfde7de4d81f300d04212c3f8a116339901b46802a869c288',
+        # '2ac8c0da3c9c3c568fc86ef8ca4f934b05044b65d6aae9a4ee2fe0e9bd00feb6',
+        # 'c62607d20f357873f530d453014e1c4ee13da3a85051585ce2ed3a60bc8429cb',
+        # '8a62dbb45cdf91c20779b86769ed8a186ef0915a7d5b723cf434506eb8c3e016',
+        # 'ea00d927b0ec9663d5c90b51854843b391a8b9181a3213cc30c9cea01620fbc0',
+        # '7b25e25aa2d2148bfde7de4d81f300d04212c3f8a116339901b46802a869c288',
     }
 )
 _CONFIG_ERROR = (

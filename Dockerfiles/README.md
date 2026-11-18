@@ -67,6 +67,9 @@ docker network create --driver=bridge marie_default
 
 ### 2. Start Core Infrastructure
 
+Prepare the mandatory [Valkey authentication bundle](valkey/README.md#prepare-credentials)
+and export `VALKEY_SECURITY_DIR` before starting these services.
+
 ```bash
 # Start all infrastructure services
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.storage.yml --project-directory . up -d
@@ -140,12 +143,17 @@ docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.rabbitmq
 
 Shared request/reply transport for queued LLM execution.
 
+The Valkey service now requires a named account. Follow the
+[authentication setup and coordinated rollout](valkey/README.md) before starting
+it. Load the generated client URL into every gateway/worker deployment. Port
+publication is unchanged; TLS is deferred.
+
 ```bash
 # Start
 docker compose --env-file ./config/.env -f ./Dockerfiles/docker-compose.valkey.yml --project-directory . up -d
 
 # Queue URL for host-network services
-# redis://localhost:6379/0
+# redis://marie:<password>@localhost:6379/0
 ```
 
 #### Enabling the LLM Dispatch Runtime
@@ -163,7 +171,7 @@ Required gateway environment:
 
 ```bash
 LLM_QUEUE_ENABLED=true
-LLM_QUEUE_URL=redis://marie-valkey:6379/0
+export LLM_QUEUE_URL="$(cat "$VALKEY_SECURITY_DIR/clients/queue-url")"
 LLM_QUEUE_POOL_ID=default
 LLM_QUEUE_FABRIC_GROUP_ID=default
 LLM_QUEUE_GATEWAY_ID=gateway-localhost
@@ -176,7 +184,7 @@ Required processor environment:
 
 ```bash
 LLM_QUEUE_ENABLED=true
-LLM_QUEUE_URL=redis://marie-valkey:6379/0
+export LLM_QUEUE_URL="$(cat "$VALKEY_SECURITY_DIR/clients/queue-url")"
 LLM_QUEUE_POOL_ID=default
 LLM_QUEUE_MAX_INLINE_PAYLOAD_BYTES=16777216
 OPENAI_API_KEY=EMPTY

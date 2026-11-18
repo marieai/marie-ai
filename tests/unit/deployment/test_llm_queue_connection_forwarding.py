@@ -355,6 +355,12 @@ def _render_compose(compose_file: Path, environment: dict[str, str]) -> dict[str
         ),
         (
             {
+                'LLM_QUEUE_URL': 'redis://marie:synthetic-test-password@queue.example:6379/0'
+            },
+            'redis://marie:synthetic-test-password@queue.example:6379/0',
+        ),
+        (
+            {
                 'LLM_QUEUE_URL': 'redis://canonical-queue:6380/3',
                 'LLM_QUEUE_VALKEY_URL': 'redis://legacy-queue:6380/4',
             },

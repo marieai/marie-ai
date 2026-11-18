@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, Union
 
+from psycopg import sql
 from pydantic import PrivateAttr
 
 from marie._core.schema import BaseNode, TextNode
@@ -78,6 +79,7 @@ class PGVectorStore(BasePydanticVectorStore):
 
     # Connection settings
     connection_string: str
+    schema_name: str = "marie_scheduler"
     table_name: str = "kb_vectors"
     embedding_dim: int = (
         1024  # Matryoshka dim; pgvector HNSW caps at 2000, so 2048 needs halfvec
@@ -114,6 +116,10 @@ class PGVectorStore(BasePydanticVectorStore):
         """Get the psycopg 3 connection pool."""
         return self._pool
 
+    @property
+    def qualified_table(self) -> str:
+        return sql.Identifier(self.schema_name, self.table_name).as_string()
+
     async def _ensure_pool(self) -> None:
         """Ensure connection pool is created."""
         if self._pool is None:
@@ -138,12 +144,17 @@ class PGVectorStore(BasePydanticVectorStore):
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             # Enable pgvector extension
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+            await conn.execute(
+                "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;"
+            )
+            await conn.execute(
+                f"CREATE SCHEMA IF NOT EXISTS {sql.Identifier(self.schema_name).as_string()}"
+            )
 
             # Create unified table for text + images
             await conn.execute(
                 f"""
-                CREATE TABLE IF NOT EXISTS {self.table_name} (
+                CREATE TABLE IF NOT EXISTS {self.qualified_table} (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     node_id TEXT UNIQUE NOT NULL,
                     index_name TEXT NOT NULL DEFAULT 'default',
@@ -161,58 +172,35 @@ class PGVectorStore(BasePydanticVectorStore):
             # Add index_name column if it doesn't exist (migration for existing tables)
             await conn.execute(
                 f"""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = '{self.table_name}' AND column_name = 'index_name'
-                    ) THEN
-                        ALTER TABLE {self.table_name} ADD COLUMN index_name TEXT NOT NULL DEFAULT 'default';
-                    END IF;
-                END $$;
+                ALTER TABLE {self.qualified_table} ADD COLUMN IF NOT EXISTS index_name TEXT NOT NULL DEFAULT 'default';
             """
             )
 
             # Create indexes
-            await conn.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_index_name
-                ON {self.table_name} (index_name);
-            """
-            )
-
-            await conn.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_source
-                ON {self.table_name} (source_id);
-            """
-            )
-
-            await conn.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_node_type
-                ON {self.table_name} (node_type);
-            """
-            )
-
-            await conn.execute(
-                f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_ref_doc
-                ON {self.table_name} (ref_doc_id);
-            """
-            )
+            for suffix, column in (
+                ("index_name", "index_name"),
+                ("source", "source_id"),
+                ("node_type", "node_type"),
+                ("ref_doc", "ref_doc_id"),
+            ):
+                index_name = sql.Identifier(
+                    f"idx_{self.table_name}_{suffix}"
+                ).as_string()
+                await conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} ON {self.qualified_table} ({column});"
+                )
 
             # Create HNSW index for similarity search (cosine distance)
             await conn.execute(
                 f"""
-                CREATE INDEX IF NOT EXISTS idx_{self.table_name}_embedding
-                ON {self.table_name}
+                CREATE INDEX IF NOT EXISTS {sql.Identifier(f'idx_{self.table_name}_embedding').as_string()}
+                ON {self.qualified_table}
                 USING hnsw (embedding vector_cosine_ops)
                 WITH (m = {self.hnsw_m}, ef_construction = {self.hnsw_ef_construction});
             """
             )
 
-            logger.info(f"Initialized PGVectorStore table: {self.table_name}")
+            logger.info(f"Initialized PGVectorStore table: {self.qualified_table}")
 
         self._initialized = True
 
@@ -293,7 +281,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 try:
                     row = await conn.fetchrow(
                         f"""
-                        INSERT INTO {self.table_name}
+                        INSERT INTO {self.qualified_table}
                         (node_id, index_name, source_id, ref_doc_id, content, node_type, metadata, embedding)
                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                         ON CONFLICT (node_id) DO UPDATE SET
@@ -331,7 +319,7 @@ class PGVectorStore(BasePydanticVectorStore):
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE ref_doc_id = $1",
+                f"DELETE FROM {self.qualified_table} WHERE ref_doc_id = $1",
                 ref_doc_id,
             )
             count = int(result.split()[-1])
@@ -431,7 +419,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata,
                        1 - (embedding <=> $1) as similarity
-                FROM {self.table_name}
+                FROM {self.qualified_table}
                 WHERE {where_sql}
                 ORDER BY embedding <=> $1
                 LIMIT ${top_k_idx}
@@ -607,7 +595,7 @@ class PGVectorStore(BasePydanticVectorStore):
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 f"""
-                INSERT INTO {self.table_name}
+                INSERT INTO {self.qualified_table}
                 (node_id, index_name, source_id, ref_doc_id, content, node_type, metadata, embedding)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (node_id) DO UPDATE SET
@@ -680,7 +668,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata,
                        1 - (embedding <=> $1) as similarity
-                FROM {self.table_name}
+                FROM {self.qualified_table}
                 WHERE {where_sql}
                 ORDER BY embedding <=> $1
                 LIMIT $2
@@ -706,13 +694,13 @@ class PGVectorStore(BasePydanticVectorStore):
         async with self._pool.acquire() as conn:
             if index_name:
                 result = await conn.execute(
-                    f"DELETE FROM {self.table_name} WHERE source_id = $1 AND index_name = $2",
+                    f"DELETE FROM {self.qualified_table} WHERE source_id = $1 AND index_name = $2",
                     source_id,
                     index_name,
                 )
             else:
                 result = await conn.execute(
-                    f"DELETE FROM {self.table_name} WHERE source_id = $1",
+                    f"DELETE FROM {self.qualified_table} WHERE source_id = $1",
                     source_id,
                 )
             count = int(result.split()[-1])
@@ -731,7 +719,7 @@ class PGVectorStore(BasePydanticVectorStore):
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE index_name = $1",
+                f"DELETE FROM {self.qualified_table} WHERE index_name = $1",
                 index_name,
             )
             count = int(result.split()[-1])
@@ -756,7 +744,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 rows = await conn.fetch(
                     f"""
                     SELECT node_type, COUNT(*) as count
-                    FROM {self.table_name}
+                    FROM {self.qualified_table}
                     WHERE source_id = $1 AND index_name = $2
                     GROUP BY node_type
                     """,
@@ -767,7 +755,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 rows = await conn.fetch(
                     f"""
                     SELECT node_type, COUNT(*) as count
-                    FROM {self.table_name}
+                    FROM {self.qualified_table}
                     WHERE source_id = $1
                     GROUP BY node_type
                     """,
@@ -796,7 +784,7 @@ class PGVectorStore(BasePydanticVectorStore):
             type_rows = await conn.fetch(
                 f"""
                 SELECT node_type, COUNT(*) as count
-                FROM {self.table_name}
+                FROM {self.qualified_table}
                 WHERE index_name = $1
                 GROUP BY node_type
                 """,
@@ -807,7 +795,7 @@ class PGVectorStore(BasePydanticVectorStore):
             source_rows = await conn.fetch(
                 f"""
                 SELECT source_id, COUNT(*) as count
-                FROM {self.table_name}
+                FROM {self.qualified_table}
                 WHERE index_name = $1
                 GROUP BY source_id
                 """,
@@ -899,7 +887,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 f"""
                 SELECT id, node_id, index_name, source_id, ref_doc_id, content,
                        node_type, metadata
-                FROM {self.table_name}
+                FROM {self.qualified_table}
                 WHERE {where_sql}
                 ORDER BY created_at DESC
                 """,
@@ -994,7 +982,7 @@ class PGVectorStore(BasePydanticVectorStore):
 
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE {where_sql}",
+                f"DELETE FROM {self.qualified_table} WHERE {where_sql}",
                 *params,
             )
             count = int(result.split()[-1])
@@ -1010,7 +998,7 @@ class PGVectorStore(BasePydanticVectorStore):
         """Asynchronously clear all nodes from vector store."""
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute(f"TRUNCATE TABLE {self.table_name}")
+            result = await conn.execute(f"TRUNCATE TABLE {self.qualified_table}")
             logger.info(f"Cleared all nodes from {self.table_name}")
 
     # -------------------------------------------------------------------------
@@ -1072,7 +1060,7 @@ class PGVectorStore(BasePydanticVectorStore):
                 # Use executemany for batch insert
                 result = await conn.executemany(
                     f"""
-                    INSERT INTO {self.table_name}
+                    INSERT INTO {self.qualified_table}
                     (node_id, index_name, source_id, ref_doc_id, content, node_type, metadata, embedding)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     ON CONFLICT (node_id) DO UPDATE SET
@@ -1158,7 +1146,7 @@ class PGVectorStore(BasePydanticVectorStore):
                            node_type, metadata,
                            1 - (embedding <=> $1) as similarity,
                            ROW_NUMBER() OVER (ORDER BY embedding <=> $1) as rank
-                    FROM {self.table_name}
+                    FROM {self.qualified_table}
                     WHERE {where_sql}
                     ORDER BY embedding <=> $1
                     LIMIT $2
@@ -1184,7 +1172,7 @@ class PGVectorStore(BasePydanticVectorStore):
                                    plainto_tsquery('english', $1)
                                ) DESC
                            ) as rank
-                    FROM {self.table_name}
+                    FROM {self.qualified_table}
                     WHERE {where_sql}
                       AND to_tsvector('english', COALESCE(content, '')) @@
                           plainto_tsquery('english', $1)
@@ -1303,7 +1291,7 @@ class PGVectorStore(BasePydanticVectorStore):
 
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                f"SELECT COUNT(*) as count FROM {self.table_name} WHERE {where_sql}",
+                f"SELECT COUNT(*) as count FROM {self.qualified_table} WHERE {where_sql}",
                 *params,
             )
 
