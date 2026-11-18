@@ -81,7 +81,7 @@ class PostgreSQLHandler(PostgresqlMixin):
                 "password": password,
                 "database": database,
                 "default_table": table,
-                "schema": schema,
+                "schema": schema or "marie_scheduler",
                 "max_connections": max_connections,
                 "min_connections": min_connections,
             }
@@ -101,9 +101,17 @@ class PostgreSQLHandler(PostgresqlMixin):
         else:
             self._create_table()
 
+    @property
+    def _meta_table(self) -> str:
+        return psycopg.sql.Identifier(self.schema, META_TABLE_NAME).as_string()
+
+    @property
+    def _model_table(self) -> str:
+        return psycopg.sql.Identifier(self.schema, MODEL_TABLE_NAME).as_string()
+
     def _create_meta_table(self):
         self._execute_sql_gracefully(
-            f"""CREATE TABLE IF NOT EXISTS {META_TABLE_NAME} (
+            f"""CREATE TABLE IF NOT EXISTS {self._meta_table} (
                 table_name varchar,
                 schema_version integer
             );"""
@@ -111,7 +119,7 @@ class PostgreSQLHandler(PostgresqlMixin):
 
     def _create_model_table(self):
         self._execute_sql_gracefully(
-            f"""CREATE TABLE IF NOT EXISTS {MODEL_TABLE_NAME} (
+            f"""CREATE TABLE IF NOT EXISTS {self._model_table} (
                 table_name varchar,
                 model_blob BYTEA,
                 model_checksum varchar,
@@ -140,14 +148,14 @@ class PostgreSQLHandler(PostgresqlMixin):
                 updated_at timestamp with time zone default current_timestamp,
                 is_deleted BOOL DEFAULT FALSE
             );
-            INSERT INTO {META_TABLE_NAME} (table_name, schema_version) VALUES ('{self.qualified_table}', {SCHEMA_VERSION});
-            INSERT INTO {MODEL_TABLE_NAME} (table_name) VALUES ('{self.qualified_table}');"""
+            INSERT INTO {self._meta_table} (table_name, schema_version) VALUES ('{self.qualified_table}', {SCHEMA_VERSION});
+            INSERT INTO {self._model_table} (table_name) VALUES ('{self.qualified_table}');"""
         )
 
     def _assert_table_schema_version(self):
         result = self._execute_sql_gracefully(
-            f"SELECT schema_version FROM {META_TABLE_NAME} WHERE table_name=%s;",
-            (self.table,),
+            f"SELECT schema_version FROM {self._meta_table} WHERE table_name=%s;",
+            (self.qualified_table,),
         )
         if result:
             if result[0][0] != SCHEMA_VERSION:

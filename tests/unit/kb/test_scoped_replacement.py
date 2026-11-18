@@ -1,3 +1,4 @@
+import json
 import os
 from uuid import uuid4
 
@@ -25,6 +26,7 @@ async def vector(state):
     store = PGVectorStore(
         connection_string='postgresql://unused',
         table_name='kb_f02a_vectors',
+        schema_name='public',
         embedding_dim=2,
         guarded=True,
     )
@@ -45,6 +47,63 @@ def node(record_id, text='record'):
         'node_type': 'text',
         'metadata': {},
     }
+
+
+@pytest.mark.parametrize('cleanup', ['item', 'scope'])
+async def test_guarded_reads_writes_and_cleanup_use_the_configured_schema(
+    state, vector, cleanup
+):
+    items, pool, scope, attempt = state
+    await pool.execute('CREATE SCHEMA kb_merge_schema')
+    try:
+        await pool.execute(
+            'CREATE TABLE kb_merge_schema.kb_f02a_vectors '
+            '(LIKE public.kb_f02a_vectors INCLUDING ALL)'
+        )
+        await pool.execute(
+            '''INSERT INTO public.kb_f02a_vectors
+               (node_id,index_name,source_id,ref_doc_id,content,metadata)
+               VALUES ('decoy',$1,$2,$3,'decoy',$4::jsonb),
+                      ('second-decoy',$1,$2,$3,'second-decoy',$4::jsonb)''',
+            scope.index_id,
+            scope.source_id,
+            scope.item_id,
+            json.dumps({'kb_indexed_dag_id': attempt}),
+        )
+        store = PGVectorStore(
+            connection_string='postgresql://unused',
+            table_name='kb_f02a_vectors',
+            schema_name='kb_merge_schema',
+            embedding_dim=2,
+            guarded=True,
+        )
+        store._pool = pool
+        store._initialized = True
+        await store.initialize_current_view()
+        assert await pool.fetchval(
+            "SELECT to_regclass('kb_merge_schema.kb_f02a_vectors_current') IS NOT NULL"
+        )
+        await store.replace_item_nodes(scope, attempt, [node('record', 'current')])
+        rows = await pool.fetch(
+            'SELECT content FROM kb_merge_schema.kb_f02a_vectors_current'
+        )
+        assert [row['content'] for row in rows] == ['current']
+        assert await store.count_nodes(index_name=scope.index_id) == 1
+        await items.remove(scope)
+        assert await store.count_nodes(index_name=scope.index_id) == 0
+        assert await store.aget_nodes(index_name=scope.index_id) == []
+        if cleanup == 'item':
+            assert await store.delete_item(scope) == 1
+        else:
+            assert await store.delete_scope(scope.tenant_id, scope.index_id) == 1
+        assert (
+            await pool.fetchval('SELECT count(*) FROM kb_merge_schema.kb_f02a_vectors')
+            == 0
+        )
+        rows = await pool.fetch('SELECT content FROM public.kb_f02a_vectors ORDER BY content')
+        assert [row['content'] for row in rows] == ['decoy', 'second-decoy']
+    finally:
+        await pool.execute('DROP SCHEMA kb_merge_schema CASCADE')
 
 
 async def test_shorter_replacement_removes_only_its_owned_output(state, vector):

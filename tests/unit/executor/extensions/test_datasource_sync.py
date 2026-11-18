@@ -546,6 +546,58 @@ async def test_configured_worker_initializes_its_existing_psql_pool(sync, monkey
             await worker._datasource_pool.close()
 
 
+@pytest.mark.parametrize(
+    'storage_schema, override, expected',
+    [
+        ('marie_scheduler', None, 'marie_scheduler'),
+        ('kb_datasource', None, 'kb_datasource'),
+        ('marie_scheduler', 'kb_override', 'kb_override'),
+    ],
+)
+async def test_datasource_worker_cleans_vectors_in_its_configured_schema(
+    sync, monkeypatch, storage_schema, override, expected
+):
+    pool, _, _, original, parameters, output, _ = sync
+    await pool.execute(
+        '''UPDATE marie_scheduler.kb_index SET metadata='{"retrievalBackend":"pgvector"}' '''
+    )
+    worker = MariePluginDaemonExecutor(
+        daemon_url='http://unused',
+        start=False,
+        env=original._env,
+        schema_name=override,
+        storage={
+            'psql': {'enabled': False, 'schema': storage_schema},
+            's3': {'enabled': False, 'bucket_name': 'saved'},
+        },
+    )
+    worker._datasource_pool = pool
+    monkeypatch.setattr(worker, '_invoke_daemon', original._invoke_daemon)
+    await worker.invoke_plugin(DocList[TextDoc](), parameters)
+    await pool.execute(f'CREATE SCHEMA IF NOT EXISTS {expected}')
+    for schema in (expected, 'public'):
+        await pool.execute(f'DROP TABLE IF EXISTS {schema}.kb_vectors CASCADE')
+        await pool.execute(
+            f'CREATE TABLE {schema}.kb_vectors(index_name text,source_id text,ref_doc_id text,content text)'
+        )
+        await pool.execute(
+            f'''INSERT INTO {schema}.kb_vectors
+                SELECT index_id::text,source_id,item_id,'saved vector'
+                FROM marie_scheduler.kb_item_state'''
+        )
+    try:
+        output[:] = [{'id': 'wiki:42', 'deleted': True}]
+        await worker.invoke_plugin(DocList[TextDoc](), parameters)
+        assert await pool.fetchval(f'SELECT count(*) FROM {expected}.kb_vectors') == 0
+        assert await pool.fetchval('SELECT count(*) FROM public.kb_vectors') == 1
+        assert await pool.fetchval(
+            'SELECT cleanup_state FROM marie_scheduler.kb_item_state'
+        ) == 'complete'
+    finally:
+        for schema in (expected, 'public'):
+            await pool.execute(f'DROP TABLE {schema}.kb_vectors CASCADE')
+
+
 @pytest.mark.parametrize('backend', ['postgresql_text', 'pgvector'])
 @pytest.mark.parametrize('reported_delete', [True, False])
 async def test_processing_cleans_only_withdrawn_index_output(
@@ -582,15 +634,15 @@ async def test_processing_cleans_only_withdrawn_index_output(
         )
         table, item_column = 'marie_scheduler.kb_text_section', 'item_id'
     else:
-        await pool.execute('DROP TABLE IF EXISTS kb_vectors CASCADE')
+        await pool.execute('DROP TABLE IF EXISTS marie_scheduler.kb_vectors CASCADE')
         await pool.execute(
-            'CREATE TABLE kb_vectors(index_name text,source_id text,ref_doc_id text,content text)'
+            'CREATE TABLE marie_scheduler.kb_vectors(index_name text,source_id text,ref_doc_id text,content text)'
         )
         await pool.execute(
-            '''INSERT INTO kb_vectors
+            '''INSERT INTO marie_scheduler.kb_vectors
             SELECT index_id::text,source_id,item_id,'saved vector' FROM marie_scheduler.kb_item_state'''
         )
-        table, item_column = 'kb_vectors', 'ref_doc_id'
+        table, item_column = 'marie_scheduler.kb_vectors', 'ref_doc_id'
     if reported_delete:
         delivery = [{'id': 'wiki:42', 'deleted': True}]
     else:
@@ -624,7 +676,7 @@ async def test_removal_before_vector_indexing_needs_no_vector_table(sync):
         'UPDATE marie_scheduler.kb_index SET metadata=$1::jsonb',
         json.dumps(binding['index_metadata']),
     )
-    await pool.execute('DROP TABLE IF EXISTS kb_vectors CASCADE')
+    await pool.execute('DROP TABLE IF EXISTS marie_scheduler.kb_vectors CASCADE')
     await admit_datasource_items(pool, binding, output)
     await admit_datasource_items(pool, binding, [{'id': 'wiki:42', 'deleted': True}])
     assert (

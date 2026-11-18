@@ -222,3 +222,6 @@ G5-ERRORS/
 !/.agent-debug/
 /command-output/
 .superpowers/
+
+# Generated Valkey credentials
+valkey-security/

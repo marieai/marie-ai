@@ -52,7 +52,11 @@ def datasource_items(records: list[Any]) -> list[dict[str, Any]]:
 
 
 async def admit_datasource_items(
-    pool: AsyncPostgresConnectionPool, binding: dict[str, Any], records: list[Any]
+    pool: AsyncPostgresConnectionPool,
+    binding: dict[str, Any],
+    records: list[Any],
+    *,
+    vector_schema_name: str = 'marie_scheduler',
 ) -> int:
     """Admit delivered output atomically; existing item sensors schedule indexing."""
     items = datasource_items(records)
@@ -312,5 +316,7 @@ async def admit_datasource_items(
         else:
             from marie.vector_stores.pgvector.pgvector import cleanup_removed_items
 
-            await cleanup_removed_items(pool, tenant_id, index_id, removed)
+            await cleanup_removed_items(
+                pool, tenant_id, index_id, removed, schema_name=vector_schema_name
+            )
     return len(items)

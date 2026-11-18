@@ -48,6 +48,7 @@ class MariePluginDaemonExecutor(MarieExecutor):
         restart_limit: int = 3,
         restart_backoff_s: float = 1.0,
         env: Mapping[str, str] | None = None,
+        schema_name: str | None = None,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -78,6 +79,10 @@ class MariePluginDaemonExecutor(MarieExecutor):
         self._lifecycle_lock = threading.Lock()
         self._datasource_bucket = (kwargs.get('storage', {}).get('s3') or {}).get(
             'bucket_name'
+        )
+        psql = (kwargs.get('storage') or {}).get('psql') or {}
+        self._datasource_vector_schema = (
+            schema_name or psql.get('schema') or 'marie_scheduler'
         )
         self._datasource_pool = None
         self._datasource_pool_lock = asyncio.Lock()
@@ -305,7 +310,12 @@ class MariePluginDaemonExecutor(MarieExecutor):
             for frame in frames
             if frame.get('type') == 'stream'
         )
-        count = await admit_datasource_items(self._datasource_pool, binding, records)
+        count = await admit_datasource_items(
+            self._datasource_pool,
+            binding,
+            records,
+            vector_schema_name=self._datasource_vector_schema,
+        )
         return frames_to_docs(
             [{'type': 'stream', 'data': {'records_admitted': count}}, {'type': 'end'}]
         )
