@@ -156,14 +156,30 @@ class PdfRenderer(ResultRenderer):
 
         self.logger.info(f"Render PDF [{image_overlay}]: {output_filename}")
 
+        num_pages = 0
         # The underlying ByteIO buffer will be closed when we write the file out
         writer = PdfFileWriter()
         for page_index, (image, result) in enumerate(zip(frames, results)):
             try:
                 page = self.__render_page(image, result, page_index, image_overlay)
                 writer.addPage(page)
+                num_pages += 1
             except Exception as e:
                 logger.error(e, stack_info=True, exc_info=True)
 
+        # add specific tag
+        metadata = {'/Producer': "MARIE-AI"}
+        writer.addMetadata(metadata)
         with open(output_filename, "wb") as output:
             writer.write(output)
+
+        with open(output_filename, "rb") as f:
+            pdf = PdfFileReader(f)
+            information = pdf.getDocumentInfo()
+            number_of_pages = pdf.getNumPages()
+
+            txt = f"""
+            Information about {output_filename}: 
+            Producer: {information.producer}
+            Number of pages: {number_of_pages} """
+            self.logger.info(txt)
