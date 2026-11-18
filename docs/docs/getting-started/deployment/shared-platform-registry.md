@@ -8,7 +8,7 @@ Marie-AI and Studio use one platform registry in the existing PostgreSQL databas
 
 | Schema | Records |
 | --- | --- |
-| `marie_runtime` | Organization, tenant hierarchy, registered Git repositories, fabric/gateway definitions and storage connections. |
+| `marie_runtime` | Organization, tenant hierarchy, registered Git repositories, Git provider connections, complete discovery snapshots, fabric/gateway definitions and storage connections. |
 | `marie_scheduler` | Jobs, DAGs, execution leases, KB catalog and current indexed output. |
 | `marie_studio` | Studio application records, users/memberships, workspace bindings and UI state. |
 
@@ -120,3 +120,9 @@ keys, hierarchy, enum identity, duplicate rejection and rollback. An isolated
 generated Prisma client checks both directions of shared reads/writes. Tenant
 rename/reparent regressions exercise the actual router against shared tables and
 verify that a descendant failure rolls back the parent update.
+
+## Provider connection upgrade
+
+The provider connection handoff and repository discovery workflow are described in
+[Connect repository providers](./repository-provider-connections.md). Apply that
+separate handoff before starting services from the provider-connection revision.

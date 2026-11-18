@@ -990,3 +990,48 @@ async def test_first_repository_source_binds_workspace_atomically_and_cannot_reb
         )
     second = await service.call('get_index', {**identity, 'indexId': second['id']})
     assert second['workspaceId'] is None and second['configurationRevision'] == 0
+
+
+async def test_repository_attachment_creates_once_and_skips_existing_binding_on_retry(
+    catalog,
+):
+    service, pool, schema = catalog
+    identity = scope()
+    index = await service.call(
+        'create_index',
+        {**identity, 'name': 'repository-attachment', 'workspaceId': str(uuid4())},
+    )
+    repository_id = str(uuid4())
+    command = {
+        **identity,
+        'indexId': index['id'],
+        'expectedConfigurationRevision': 0,
+        'name': 'Engine',
+        'sourceType': 'repository',
+        'datasetInputs': {
+            'repositoryId': repository_id,
+            'branch': 'main',
+            'include': ['src/*'],
+        },
+        'schedule': None,
+        'syncMode': 'manual',
+        'status': 'registered',
+    }
+    first = await service.call('attach_repository_source', command)
+    retried = await service.call(
+        'attach_repository_source',
+        {
+            **command,
+            'datasetInputs': {**command['datasetInputs'], 'include': ['different/*']},
+        },
+    )
+    assert first['source']['id'] == retried['source']['id']
+    assert first['alreadyAdded'] is False and retried['alreadyAdded'] is True
+    assert retried['source']['datasetInputs']['include'] == ['src/*']
+    assert (
+        await pool.fetchval(
+            f'SELECT count(*) FROM {schema}.kb_source WHERE index_id=$1',
+            UUID(index['id']),
+        )
+        == 1
+    )

@@ -216,6 +216,11 @@ class SaveSource(IndexScope):
         return value
 
 
+class AttachRepositorySource(SaveSource):
+    sourceType: Literal['repository'] = 'repository'
+    sourceId: None = None
+
+
 class Origin(BaseModel):
     model_config = ConfigDict(extra='forbid')
     kind: Literal['kb', 'submission'] = 'kb'
@@ -427,6 +432,7 @@ COMMANDS: dict[str, type[BaseModel]] = {
     'source_runs': SourceRuns,
     'prepare_upload': Upload,
     'save_source': SaveSource,
+    'attach_repository_source': AttachRepositorySource,
     'admit_documents': AdmitDocuments,
     'get_document': DocumentScope,
     'list_documents': ListDocuments,

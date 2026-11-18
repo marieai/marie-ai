@@ -39,9 +39,13 @@ async def code_store(zoekt, repo):
         '''DROP TABLE IF EXISTS marie_scheduler.kb_code_navigation,marie_scheduler.kb_source,marie_scheduler.kb_index,marie_runtime.tenant,marie_runtime.git_repositories CASCADE;
         CREATE TABLE marie_runtime.tenant(id uuid primary key,organization_id uuid,status text);
         CREATE TABLE marie_scheduler.kb_index(id uuid primary key,tenant_id uuid,workspace_id uuid,metadata jsonb,name text default 'Engineering');
-        CREATE TABLE marie_runtime.git_repositories(id uuid primary key,path text,name text,is_enabled boolean,git_enabled boolean,organization_id uuid,visibility text);
+        CREATE TABLE marie_runtime.git_repositories(id uuid primary key,path text,name text,provider_connection_id uuid,metadata jsonb,remote_url text,is_enabled boolean,git_enabled boolean,organization_id uuid,visibility text);
         CREATE TABLE marie_scheduler.kb_source(id uuid primary key,index_id uuid,name text,source_type text,status text,metadata jsonb,dataset_inputs jsonb,updated_at timestamptz default now());'''
     )
+    await pool.execute(
+        'CREATE TABLE IF NOT EXISTS marie_runtime.git_provider_connections(id uuid primary key,is_enabled boolean,is_valid boolean)'
+    )
+    await pool.execute('ALTER TABLE marie_runtime.git_provider_connections ADD COLUMN IF NOT EXISTS organization_id uuid, ADD COLUMN IF NOT EXISTS user_id uuid, ADD COLUMN IF NOT EXISTS provider_url text, ADD COLUMN IF NOT EXISTS connection_key text')
     schema = Path(__file__).parents[4] / 'config/psql/schema'
     await pool.execute(
         (schema / '103_kb_code_navigation.sql')
@@ -85,7 +89,7 @@ async def code_store(zoekt, repo):
         UUID(scope['workspace_id']),
     )
     await pool.execute(
-        "INSERT INTO marie_runtime.git_repositories VALUES($1,$2,'fixture',true,true,$3,'organization')",
+        "INSERT INTO marie_runtime.git_repositories VALUES($1,$2,'fixture',NULL,'{}',NULL,true,true,$3,'organization')",
         UUID(repository_id),
         str(repo),
         UUID(scope['organization_id']),
@@ -189,7 +193,7 @@ async def test_two_repositories_same_paths_and_branch_are_separate(
     other_id = uuid4()
     repo_id = uuid4()
     await pool.execute(
-        "INSERT INTO marie_runtime.git_repositories VALUES($1,$2,'other',true,true,$3,'organization')",
+        "INSERT INTO marie_runtime.git_repositories VALUES($1,$2,'other',NULL,'{}',NULL,true,true,$3,'organization')",
         repo_id,
         str(other),
         UUID(scope['organization_id']),
@@ -659,3 +663,25 @@ async def test_real_indexer_sees_only_the_captured_eligible_files(code_store):
     result = await store.refresh(await execution())
     assert result['files'] == 1 and result['omitted']['indexer_scope'] == 3
     assert (await store.search(scope, 'alpha', 'literal'))['results']
+
+
+async def test_connection_revocation_withholds_already_indexed_evidence(code_store):
+    store, pool, scope, execution, repo = code_store
+    await store.refresh(await execution())
+    assert (await store.search(scope, 'alpha', 'literal'))['results']
+    connection_id = uuid4()
+    await pool.execute(
+        'INSERT INTO marie_runtime.git_provider_connections(id,is_enabled,is_valid,organization_id,provider_url) VALUES($1,true,true,$2,\'https://git.test\')',
+        connection_id, UUID(scope['organization_id']),
+    )
+    await pool.execute(
+        "UPDATE marie_runtime.git_repositories SET provider_connection_id=$1,remote_url='https://git.test/team/repo.git'",
+        connection_id,
+    )
+    assert (await store.search(scope, 'alpha', 'literal'))['results']
+    await pool.execute(
+        'UPDATE marie_runtime.git_provider_connections SET is_enabled=false WHERE id=$1',
+        connection_id,
+    )
+    with pytest.raises(PermissionError):
+        await store.search(scope, 'alpha', 'literal')

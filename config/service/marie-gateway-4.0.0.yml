@@ -105,7 +105,7 @@ with:
     run_lease_renewal_interval_seconds: 20
     max_pool_size: 5
     max_connections: 5
-    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench,kb_indexing,kb_index_content,kb_repository_refresh] # Consumer subscriptions; omit to consume all queues
+    queue_names: [extract,classify,transform,load,gen5_extract,longextract_bench,kb_indexing,kb_index_content,kb_repository_refresh,repository_management] # Consumer subscriptions; omit to consume all queues
 
     # DAG Concurrency Management
     dag_manager:

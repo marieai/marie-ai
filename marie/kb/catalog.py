@@ -1003,9 +1003,52 @@ class KbCatalog:
             's3Key': f"tenants/{index['tenant_id']}/kb-indexes/{index['id']}/sources/{source['id']}/{command.fileName}",
         }
 
+    async def _attach_repository_source(
+        self,
+        connection: AsyncPostgresConnection,
+        command: models.AttachRepositorySource,
+    ) -> dict[str, Any]:
+        index = await self._index(connection, command, command.indexId, lock=True)
+        repository_id = str(UUID((command.datasetInputs or {}).get('repositoryId', '')))
+        existing = await connection.fetchrow(
+            f'''SELECT * FROM {self.schema}.kb_source WHERE index_id=$1 AND source_type='repository'
+                AND dataset_inputs->>'repositoryId'=$2 ORDER BY created_at,id LIMIT 1 FOR UPDATE''',
+            index['id'],
+            repository_id,
+        )
+        if existing:
+            if existing['status'] == 'disabled' or existing['metadata'].get(
+                'removalPending'
+            ):
+                raise CatalogError(
+                    'Existing repository binding is being removed; review it before adding again',
+                    409,
+                )
+            return {
+                'source': await self._source_dto(connection, existing),
+                'configurationRevision': (index['metadata'] or {}).get(
+                    'configurationRevision', 0
+                ),
+                'alreadyAdded': True,
+            }
+        result = await self._save_source(connection, command)
+        return {**result, 'alreadyAdded': False}
+
     async def _save_source(
         self, connection: AsyncPostgresConnection, command: models.SaveSource
     ) -> dict[str, Any]:
+        if (
+            command.sourceType == 'repository'
+            and not command.sourceId
+            and (command.datasetInputs or {}).get('repositoryId')
+            and not isinstance(command, models.AttachRepositorySource)
+        ):
+            return await self._attach_repository_source(
+                connection,
+                models.AttachRepositorySource.model_validate(
+                    command.model_dump(exclude_unset=True)
+                ),
+            )
         index = await self._index(connection, command, command.indexId, lock=True)
         revision = self._revision(index, command.expectedConfigurationRevision)
         if command.workspaceId is not None:

@@ -6,12 +6,15 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 import subprocess
 import time
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, nullcontext
 from pathlib import Path
 from typing import Any, AsyncIterator
 from uuid import UUID, uuid4
+
+import httpx
 
 from marie.kb.code.browser import (
     directory_entries,
@@ -32,6 +35,11 @@ from marie.kb.code.capture import (
 )
 from marie.kb.code.navigation import parse_file
 from marie.kb.code.query import advanced_search
+from marie.kb.code.repository_operations import (
+    RepositoryOperations,
+    git_environment,
+    run_git,
+)
 from marie.kb.code.zoekt import Zoekt
 from marie.kb.item_state import StaleIndexingRun, scheduler_execution
 from marie.storage.database.postgres_pool import AsyncPostgresConnectionPool
@@ -77,7 +85,7 @@ class CodeIndexStore:
         self, connection: Any, scope: dict[str, Any], *, lock: bool = False
     ) -> dict[str, Any]:
         row = await connection.fetchrow(
-            '''SELECT s.*,k.tenant_id,k.workspace_id,k.name AS index_name,t.organization_id,r.path,r.name AS repository_name
+            '''SELECT s.*,k.tenant_id,k.workspace_id,k.name AS index_name,t.organization_id,r.path,r.name AS repository_name,r.provider_connection_id,to_jsonb(r) AS repository_registration
                FROM marie_scheduler.kb_source s
                JOIN marie_scheduler.kb_index k ON k.id=s.index_id
                JOIN marie_runtime.tenant t ON t.id=k.tenant_id
@@ -87,6 +95,12 @@ class CodeIndexStore:
                  AND NOT COALESCE((k.metadata->>'removalPending')::boolean,false)
                  AND NOT COALESCE((s.metadata->>'removalPending')::boolean,false)
                  AND r.is_enabled AND r.git_enabled
+                 AND NOT COALESCE(r.metadata @> '{"providerAccessRevoked":true}'::jsonb,false)
+                 AND (r.provider_connection_id IS NULL OR EXISTS(SELECT 1 FROM marie_runtime.git_provider_connections c
+                    WHERE c.id=r.provider_connection_id AND c.is_enabled AND c.is_valid
+                      AND ((c.organization_id=r.organization_id AND c.user_id IS NULL) OR c.user_id::text=r.metadata->>'organizationAvailabilityApprovedBy')
+                      AND (c.provider_url IS NULL AND c.user_id IS NOT NULL AND c.connection_key='default'
+                        OR starts_with(r.remote_url,rtrim(c.provider_url,'/') || '/'))))
                  AND (r.visibility='system' OR (r.visibility='organization' AND r.organization_id=t.organization_id))'''
             + (' FOR UPDATE OF k,s' if lock else ''),
             UUID(scope['source_id']),
@@ -143,6 +157,42 @@ class CodeIndexStore:
                 if settings_digest(latest) != settings_digest(source):
                     raise PermissionError('Repository source scope changed during read')
 
+    async def git_credentials(
+        self, db: Any, source: dict[str, Any], scope: dict[str, Any]
+    ) -> AbstractContextManager[dict[str, str] | None]:
+        connection_id = source.get('provider_connection_id')
+        if not connection_id:
+            return nullcontext(None)
+        operations = RepositoryOperations(self.pool, self.roots)
+        connection = await operations.connection(
+            db, str(connection_id), scope['organization_id']
+        )
+        registration = source['repository_registration']
+        repository = resolve_repository_path(source['path'], self.roots, self.mounts)
+        origin = (
+            (
+                await asyncio.to_thread(
+                    run_git,
+                    ['-C', str(repository), 'remote', 'get-url', '--all', 'origin'],
+                    env={**os.environ, 'GIT_CONFIG_GLOBAL': '/dev/null'},
+                )
+            )
+            .decode()
+            .strip()
+        )
+        if origin != registration['remote_url']:
+            raise PermissionError(
+                'Checkout origin changed; review it in workspace topology before refreshing'
+            )
+        async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+            await operations.verify_registration(client, connection, registration)
+        username = (
+            'oauth2'
+            if connection['provider'] == 'gitlab'
+            else connection['provider_username'] or 'x-access-token'
+        )
+        return git_environment(username, operations.token(connection))
+
     async def refresh(self, parameters: dict[str, Any]) -> dict[str, Any]:
         """Capture/build outside selection locks, then select under the job lease."""
         started = time.monotonic()
@@ -181,23 +231,28 @@ class CodeIndexStore:
                 (directory / 'manifest.json').write_text(
                     json.dumps({'scope': key, 'files': {}})
                 )
-                capture_task = asyncio.create_task(
-                    asyncio.to_thread(
-                        capture_repository,
-                        repository,
-                        config['branch'],
-                        directory / 'files',
-                        dirty=config.get('dirty', False),
-                        fetch=config.get('fetch', True),
-                        include=config.get('include'),
-                        exclude=config.get('exclude'),
+                with await self.git_credentials(connection, source, scope) as git_env:
+                    capture_task = asyncio.create_task(
+                        asyncio.to_thread(
+                            capture_repository,
+                            repository,
+                            config['branch'],
+                            directory / 'files',
+                            dirty=config.get('dirty', False),
+                            fetch=config.get('fetch', True),
+                            git_env=git_env,
+                            remote=source['repository_registration'].get('remote_url')
+                            if source.get('provider_connection_id')
+                            else None,
+                            include=config.get('include'),
+                            exclude=config.get('exclude'),
+                        )
                     )
-                )
-                try:
-                    capture = await asyncio.shield(capture_task)
-                except asyncio.CancelledError:
-                    await capture_task
-                    raise
+                    try:
+                        capture = await asyncio.shield(capture_task)
+                    except asyncio.CancelledError:
+                        await capture_task
+                        raise
                 manifest = {
                     'scope': key,
                     'files': capture.files,
@@ -305,6 +360,12 @@ class CodeIndexStore:
                     )
                     await self._job(connection, parameters, lock=True)
                     latest = await self.source(connection, scope, lock=True)
+                    if latest.get('provider_connection_id'):
+                        await RepositoryOperations(self.pool, self.roots).connection(
+                            connection,
+                            str(latest['provider_connection_id']),
+                            scope['organization_id'],
+                        )
                     if settings_digest(latest) != fingerprint:
                         raise StaleIndexingRun(
                             'Repository settings changed during refresh'
@@ -318,13 +379,20 @@ class CodeIndexStore:
                     )
                 selected = not unchanged
                 try:
-                    observed = await asyncio.to_thread(
-                        branch_commit,
-                        repository,
-                        config['branch'],
-                        fetch=config.get('fetch', True),
-                        timeout=5,
-                    )
+                    with await self.git_credentials(
+                        connection, source, scope
+                    ) as git_env:
+                        observed = await asyncio.to_thread(
+                            branch_commit,
+                            repository,
+                            config['branch'],
+                            fetch=config.get('fetch', True),
+                            timeout=5,
+                            env=git_env,
+                            remote=source['repository_registration'].get('remote_url')
+                            if source.get('provider_connection_id')
+                            else None,
+                        )
                 except (subprocess.SubprocessError, OSError, ValueError):
                     observed = capture.commit
                 if observed != capture.commit:

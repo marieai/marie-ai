@@ -495,3 +495,11 @@ must be retained.
 
 See [Scheduler SQL troubleshooting](./scheduler-sql-troubleshooting.md) for
 read-only queue, state, attempt, and worker-history queries.
+
+## Repository provider registry (104–105)
+
+Existing Studio installations must apply the shared provider handoff **before**
+starting the upgraded gateway. The gateway baseline creates the shared registry
+for fresh installs; it does not move application-owned OAuth records. Follow
+[the provider connection upgrade](./repository-provider-connections.md), including
+the API/gateway stop order and exact runtime SQL mount verification.

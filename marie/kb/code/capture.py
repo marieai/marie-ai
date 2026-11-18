@@ -51,24 +51,42 @@ def git(
     *arguments: str,
     timeout: float = 120,
     input_data: bytes | None = None,
+    env: dict[str, str] | None = None,
 ) -> bytes:
     """Run a bounded, noninteractive Git operation without a shell."""
     return subprocess.check_output(
-        ['git', '-C', str(repository), *arguments],
+        [
+            'git',
+            '-c',
+            'credential.helper=',
+            '-c',
+            'http.followRedirects=false',
+            '-C',
+            str(repository),
+            *arguments,
+        ],
         timeout=timeout,
-        env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'},
+        env={**(os.environ if env is None else env), 'GIT_TERMINAL_PROMPT': '0'},
         stderr=subprocess.PIPE,
         input=input_data,
     )
 
 
 def branch_commit(
-    repository: Path, branch: str, *, fetch: bool = False, timeout: float = 120
+    repository: Path,
+    branch: str,
+    *,
+    fetch: bool = False,
+    timeout: float = 120,
+    env: dict[str, str] | None = None,
+    remote: str | None = None,
 ) -> str:
     """Resolve a configured branch once; fetch uses the registered origin credentials."""
     if branch.startswith('-') or not branch or '\x00' in branch:
         raise ValueError('Invalid repository branch')
-    git(repository, 'check-ref-format', f'refs/heads/{branch}', timeout=timeout)
+    git(
+        repository, 'check-ref-format', f'refs/heads/{branch}', timeout=timeout, env=env
+    )
     reference = f'refs/heads/{branch}'
     if fetch:
         reference = f'refs/marie-kb/{hashlib.sha256(branch.encode()).hexdigest()}'
@@ -77,9 +95,10 @@ def branch_commit(
             'fetch',
             '--no-tags',
             '--no-write-fetch-head',
-            'origin',
+            remote or 'origin',
             f'+refs/heads/{branch}:{reference}',
             timeout=timeout,
+            env=env,
         )
     return (
         git(
@@ -88,6 +107,7 @@ def branch_commit(
             '--verify',
             f'{reference}^{{commit}}',
             timeout=timeout,
+            env=env,
         )
         .decode()
         .strip()
@@ -126,9 +146,11 @@ def capture_repository(
     max_bytes: int = 128 * 1024 * 1024,
     max_files: int = 100_000,
     file_limit: int = 1024 * 1024,
+    git_env: dict[str, str] | None = None,
+    remote: str | None = None,
 ) -> RepositoryCapture:
     """Save a complete eligible tree or fail; omissions are explicitly counted."""
-    commit = branch_commit(repository, branch, fetch=fetch)
+    commit = branch_commit(repository, branch, fetch=fetch, env=git_env, remote=remote)
     if dirty and (
         fetch
         or git(repository, 'symbolic-ref', '--short', 'HEAD').decode().strip() != branch

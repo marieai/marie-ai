@@ -35,3 +35,24 @@ def query_planner_kb_repository(planner_info: PlannerInfo, **kwargs) -> QueryPla
         )
         planner_info.current_id += 1
     return QueryPlan(nodes=nodes)
+
+
+def query_planner_repository_management(
+    planner_info: PlannerInfo, **kwargs
+) -> QueryPlan:
+    """Run provider discovery and preparation through ordinary scheduler jobs."""
+    return QueryPlan(
+        nodes=[
+            Query(
+                task_id=increment_uuid7str(
+                    planner_info.base_id, planner_info.current_id
+                ),
+                query_str='MANAGE repository',
+                dependencies=[],
+                node_type=QueryType.COMPUTE,
+                definition=ExecutorEndpointQueryDefinition(
+                    endpoint='repository_executor://repository_operation'
+                ),
+            )
+        ]
+    )

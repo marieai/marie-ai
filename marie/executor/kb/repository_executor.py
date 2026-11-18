@@ -8,6 +8,7 @@ from docarray import DocList
 from docarray.documents import TextDoc
 
 from marie.executor.marie_executor import MarieExecutor
+from marie.kb.code.repository_operations import RepositoryOperations
 from marie.kb.code.store import CodeIndexStore
 from marie.kb.code.zoekt import Zoekt
 from marie.runtime import requests
@@ -45,6 +46,13 @@ class RepositoryExecutor(MarieExecutor):
                     config.get('retained_captures', 5),
                 )
             return self._store
+
+    @requests(on='/repository_operation')
+    async def repository_operation(
+        self, docs: DocList[TextDoc], parameters: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        store = await self._ensure_store()
+        return await RepositoryOperations(store.pool, store.roots).execute(parameters)
 
     @requests(on='/refresh_repository')
     async def refresh_repository(
