@@ -38,7 +38,7 @@ gitea:
 
 postgresql:
   image:
-    digest: sha256:c2bd151a4ba2227d2f2a4c50406a104def04aef8780495505e6e1fcf6b8b2d8e
+    digest: ""
 
 rabbitmq:
   image:
@@ -67,9 +67,6 @@ otel-collector:
   image:
     digest: sha256:54312b4534a545f052b5d8232754c5329f7ac8779a4e9af167955d9f2bb657d1
 
-ferretdb:
-  image:
-    digest: sha256:5d8966f7ec1267d35fc61acc56fd9f3f62f22b4baf65ecb6c331b63b86a52aac
 
 hyperdx:
   image:

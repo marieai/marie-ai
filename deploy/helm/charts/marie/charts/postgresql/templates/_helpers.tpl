@@ -20,7 +20,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "postgresql.image" -}}
-{{- $registry := .Values.image.registry | default "ghcr.io" -}}
+{{- $registry := .Values.image.registry | default "docker.io" -}}
 {{- if .Values.image.digest -}}
 {{- printf "%s/%s@%s" $registry .Values.image.repository .Values.image.digest -}}
 {{- else -}}

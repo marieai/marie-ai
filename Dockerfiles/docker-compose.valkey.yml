@@ -30,7 +30,7 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ${VALKEY_SECURITY_DIR:-${DATA_DIR:-/mnt/data/marie-ai}/valkey-security}/server
+        source: ${VALKEY_SECURITY_DIR:-${DATA_DIR:-/mnt/data/marie-ai}/security/valkey}/server
         target: /run/valkey-source
         read_only: true
         bind:

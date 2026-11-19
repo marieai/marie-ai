@@ -87,7 +87,7 @@ global:
     external:
       host: ""
       port: 5432
-      database: marie
+      database: postgres
       username: marie
       existingSecret: ""
       existingSecretPasswordKey: password
@@ -334,11 +334,11 @@ executor:
 postgresql:
   enabled: true
 
-  # Use FerretDB DocumentDB image for MongoDB compatibility
+  # PostgreSQL 17 and the native DocumentDB 1.2 gateway
   image:
-    registry: ghcr.io
-    repository: ferretdb/postgres-documentdb
-    tag: "17-0.103.0"
+    registry: docker.io
+    repository: marieai/postgres-documentdb
+    tag: "17-1.2.0"
     digest: ""
 
   auth:
@@ -356,7 +356,7 @@ postgresql:
   external:
     host: ""
     port: 5432
-    database: marie
+    database: postgres
     username: marie
     existingSecret: ""
     existingSecretPasswordKey: password
@@ -580,16 +580,9 @@ otel-collector:
   enabled: false
 
 # -----------------------------------------------------------------------------
-# FerretDB (MongoDB wire protocol over the bundled PostgreSQL)
-# State store for HyperDX; requires postgresql.enabled.
-# -----------------------------------------------------------------------------
-ferretdb:
-  enabled: false
-
-# -----------------------------------------------------------------------------
 # HyperDX (alert evaluation)
 # Evaluates marie-studio alert policies against the ClickHouse "telemetry" database.
-# Requires clickhouse.enabled and ferretdb.enabled.
+# Requires clickhouse.enabled and the bundled PostgreSQL DocumentDB gateway.
 # -----------------------------------------------------------------------------
 hyperdx:
   enabled: false

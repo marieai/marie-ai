@@ -63,9 +63,9 @@ executor:
 postgresql:
   enabled: true
   image:
-    registry: ghcr.io
-    repository: ferretdb/postgres-documentdb
-    tag: "17-0.103.0"
+    registry: docker.io
+    repository: marieai/postgres-documentdb
+    tag: "17-1.2.0"
     pullPolicy: IfNotPresent
   primary:
     persistence:
@@ -73,7 +73,7 @@ postgresql:
   databaseInit:
     enabled: true
     databases:
-      - m3forge
+      - postgres
 
 rabbitmq:
   enabled: true
@@ -138,12 +138,6 @@ otel-collector:
     tag: "0.149.0"
     pullPolicy: IfNotPresent
 
-ferretdb:
-  enabled: true
-  image:
-    repository: ghcr.io/ferretdb/ferretdb
-    tag: "2.7.0"
-    pullPolicy: IfNotPresent
 
 hyperdx:
   enabled: true

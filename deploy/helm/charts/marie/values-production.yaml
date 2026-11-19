@@ -44,7 +44,7 @@ global:
     external:
       host: postgres.example.internal
       port: 5432
-      database: marie
+      database: postgres
       username: marie
       existingSecret: marie-postgresql
       existingSecretPasswordKey: password

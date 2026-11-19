@@ -3,4 +3,4 @@ name: postgresql
 description: PostgreSQL DocumentDB dependency matching the Marie bootstrap image
 type: application
 version: 0.1.0
-appVersion: "17-0.103.0"
+appVersion: "17-1.2.0"

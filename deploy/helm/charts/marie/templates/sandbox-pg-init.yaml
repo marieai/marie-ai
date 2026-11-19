@@ -7,7 +7,7 @@ other than the bootstrap database:
 
   1. Create the `mem0` database (Mem0 SDK stores vector embeddings here).
   2. Enable the `vector` (pgvector) extension inside the `mem0` database.
-     The extension ships with the FerretDB DocumentDB image used by the
+     The extension ships with the native DocumentDB image used by the
      postgresql subchart and is also required in the `postgres` default DB
      (done by initdb.sql), but must be separately enabled per-database.
 
