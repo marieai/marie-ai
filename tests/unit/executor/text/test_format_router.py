@@ -153,7 +153,7 @@ def test_extract_plugin_success_is_terminal(monkeypatch):
     monkeypatch.setattr(
         tee,
         "write_extraction_metadata",
-        lambda ref_id, ref_type, metadata: written.append(metadata),
+        lambda ref_id, ref_type, metadata, **kwargs: written.append(metadata),
     )
 
     response = ex.extract(_docs("s3://bucket/doc.docx"), _params())
@@ -189,7 +189,7 @@ def test_low_text_pdf_plugin_success_does_not_run_ocr(monkeypatch):
     monkeypatch.setattr(
         tee, "fetch_asset_to_temp", lambda key: ("/tmp/scan.pdf", "pdf")
     )
-    monkeypatch.setattr(tee, "write_extraction_metadata", lambda *args: None)
+    monkeypatch.setattr(tee, "write_extraction_metadata", lambda *args, **kwargs: None)
 
     response = ex.extract(_docs("s3://bucket/scan.pdf"), _params())
 

@@ -513,11 +513,10 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             if not isinstance(result, ExtractionSuccess):
                 raise TypeError(f"Unexpected extraction result: {type(result)!r}")
             content = read_extraction_artifact(result, output_dir)
-
-        metadata = build_extraction_metadata(content, result)
-        metadata["_stored_asset_uris"] = write_extraction_metadata(
-            ref_id, ref_type, metadata
-        )
+            metadata = build_extraction_metadata(content, result)
+            metadata["_stored_asset_uris"] = write_extraction_metadata(
+                ref_id, ref_type, metadata, artifact_path=result.artifact.path
+            )
         self.persist(
             ref_id=ref_id,
             ref_type=ref_type,

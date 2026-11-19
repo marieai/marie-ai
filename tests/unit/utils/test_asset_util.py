@@ -65,9 +65,10 @@ def test_store_assets_only_lists_successful_uploads(
         StorageManager, 'copy_dir', lambda *_args, **_kwargs: copy_result
     )
 
-    def list_objects(*_args, **_kwargs):
-        calls.append('listed')
-        return [uri]
+    def list_objects(path: str, **_kwargs: object) -> list[str]:
+        calls.append(path)
+        candidates = [uri, 's3://bucket/results2/unrelated.md']
+        return [candidate for candidate in candidates if candidate.startswith(path)]
 
     monkeypatch.setattr(StorageManager, 'list', list_objects)
 
@@ -75,7 +76,7 @@ def test_store_assets_only_lists_successful_uploads(
 
     if connected and copy_result:
         assert result == [uri]
-        assert calls == ['listed']
+        assert calls == ['s3://bucket/results/']
     else:
         assert result is None
         assert calls == []

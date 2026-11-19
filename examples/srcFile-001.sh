@@ -1,4 +1,5 @@
-curl -v POST http://127.0.0.1:5000/api/extract/0000-0000-0000-0000 \
-  -d @./payloads/srcFile-001.json \
-  --header "Content-Type: application/json" \
-  --header "Authorization: Bearer MY_API_KEY"
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec "${MARIE_PYTHON:-python3}" "$script_dir/document_extract.py" "$@"

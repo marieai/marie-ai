@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from marie.extraction.models import ExtractionSuccess
@@ -95,13 +96,25 @@ def write_extraction_metadata(
     ref_id: str,
     ref_type: str,
     metadata: dict[str, Any],
+    *,
+    artifact_path: str | None = None,
 ) -> list[str] | None:
-    """Persist adapted metadata through the existing extraction asset path."""
+    """Persist adapted metadata and the original plugin artifact in asset storage."""
     filename, _, _ = split_filename(ref_id)
     root_asset_dir = tempfile.mkdtemp(prefix="document_extraction_artifact_")
     try:
+        if artifact_path is not None:
+            staged_artifact = Path(root_asset_dir) / Path(artifact_path).name
+            shutil.copyfile(artifact_path, staged_artifact)
+            metadata["assets"] = store_assets(ref_id, ref_type, root_asset_dir) or []
+            if not metadata["assets"]:
+                raise RuntimeError("Could not upload extraction artifact")
+            staged_artifact.unlink(missing_ok=True)
         metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
         store_json_object(metadata, metadata_path)
-        return store_assets(ref_id, ref_type, root_asset_dir)
+        uploaded = store_assets(ref_id, ref_type, root_asset_dir)
+        if artifact_path is not None and not uploaded:
+            raise RuntimeError("Could not upload extraction metadata")
+        return uploaded
     finally:
         shutil.rmtree(root_asset_dir, ignore_errors=True)

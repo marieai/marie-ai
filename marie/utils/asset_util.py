@@ -405,7 +405,7 @@ def store_assets(
         if not uploaded:
             return None
 
-        return StorageManager.list(s3_asset_base, return_full_path=True)
+        return StorageManager.list(f"{s3_asset_base}/", return_full_path=True)
     except Exception as e:
         logger.error(f"Error storing assets : {e}")
 

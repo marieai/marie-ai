@@ -108,7 +108,12 @@ def test_semantic_extraction_uses_upload_results_after_local_files_change(
         local_roots.append(Path(root))
         for path in Path(root).rglob('*'):
             if path.is_file():
-                uri = 's3://results-bucket/actual-upload/metadata-result.json'
+                name = (
+                    'plugin-result.md'
+                    if path.suffix == '.md'
+                    else 'metadata-result.json'
+                )
+                uri = 's3://results-bucket/actual-upload/' + name
                 uploaded[uri] = path.read_bytes()
                 if after_upload == 'replace':
                     path.write_bytes(b'replaced after upload')
@@ -122,11 +127,19 @@ def test_semantic_extraction_uses_upload_results_after_local_files_change(
 
     assert response['status'] == 'succeeded'
     recorded = executor.asset_tracker.record_materializations.call_args.kwargs
-    assert len(recorded['assets']) == 1
-    asset = recorded['assets'][0]
-    assert asset['uri'] == 's3://results-bucket/actual-upload/metadata-result.json'
-    content = uploaded[asset['uri']]
+    assert {asset['uri'] for asset in recorded['assets']} == {
+        's3://results-bucket/actual-upload/plugin-result.md',
+        's3://results-bucket/actual-upload/metadata-result.json',
+    }
+    assert (
+        uploaded['s3://results-bucket/actual-upload/plugin-result.md']
+        == b'# Title\n\nBody paragraph.'
+    )
+    content = uploaded['s3://results-bucket/actual-upload/metadata-result.json']
     assert json.loads(content)['ocr'][0]['lines'][0]['text'] == '# Title'
+    assert json.loads(content)['assets'] == [
+        's3://results-bucket/actual-upload/plugin-result.md'
+    ]
     assert '_stored_asset_uris' not in json.loads(content)
     assert '_stored_asset_uris' not in response['metadata']
     assert local_roots and all(not root.exists() for root in local_roots)
@@ -141,6 +154,76 @@ def test_semantic_metadata_returns_the_upload_result(
     assert (
         result_adapter.write_extraction_metadata('document', 'extract', {}) == uploaded
     )
+
+
+def test_plugin_markdown_is_uploaded_listed_and_downloaded_unchanged(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from examples.document_extract import download_results
+    from marie.storage import StorageManager
+    from marie.utils.asset_util import s3_asset_path
+
+    monkeypatch.setenv('MARIE_S3_BUCKET', 'results-bucket')
+    markdown = '# Original\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\fSecond page  \n'
+    plugins = _StubPlugins(formats=('pdf',), content=markdown)
+    executor = _bare_executor(plugins=plugins)
+    monkeypatch.setattr(
+        executor_module, 'fetch_asset_to_temp', lambda _key: ('/tmp/source.pdf', 'pdf')
+    )
+    remote: dict[str, bytes] = {}
+    root_uri = s3_asset_path('source.pdf', 'extract') + '/'
+
+    def upload(_ref_id: str, _ref_type: str, root: str) -> list[str]:
+        for path in Path(root).rglob('*'):
+            if path.is_file():
+                remote[root_uri + path.name] = path.read_bytes()
+        return list(remote)
+
+    monkeypatch.setattr(result_adapter, 'store_assets', upload)
+    response = executor.extract(
+        _docs('s3://inputs/source.pdf'), _params(ref_id='source.pdf')
+    )
+    assert response['status'] == 'succeeded'
+    assert remote[root_uri + 'document.md'] == markdown.encode()
+    metadata = json.loads(remote[root_uri + 'source.pdf.meta.json'])
+    assert root_uri + 'document.md' in metadata['assets']
+    assert set(response['metadata']['_stored_asset_uris']) == set(remote)
+    assert not Path(plugins.invoked[0][2]['output_dir']).exists()
+
+    def download(uri: str, destination: str, **_kwargs: object) -> bool:
+        Path(destination).write_bytes(remote[uri])
+        return True
+
+    monkeypatch.setattr(StorageManager, 'read_to_file', download)
+    saved = download_results(
+        {
+            'jobid': 'job-1',
+            'payload': {'ref_id': 'source.pdf', 'ref_type': 'extract'},
+        },
+        tmp_path,
+    )
+    assert (Path(saved['assets_dir']) / 'document.md').read_bytes() == markdown.encode()
+
+
+@pytest.mark.parametrize('failed_upload', [1, 2])
+def test_plugin_artifact_upload_failures_are_reported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failed_upload: int
+) -> None:
+    artifact = tmp_path / 'document.md'
+    artifact.write_text('# Original')
+    calls: list[None] = []
+
+    def upload(*_args: object) -> list[str] | None:
+        calls.append(None)
+        if len(calls) == failed_upload:
+            return None
+        return ['s3://results-bucket/uploaded/document.md']
+
+    monkeypatch.setattr(result_adapter, 'store_assets', upload)
+    with pytest.raises(RuntimeError, match='upload extraction'):
+        result_adapter.write_extraction_metadata(
+            'source.pdf', 'extract', {}, artifact_path=str(artifact)
+        )
 
 
 @pytest.mark.parametrize(
