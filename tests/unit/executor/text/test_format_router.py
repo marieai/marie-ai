@@ -97,7 +97,19 @@ class _StubPipeline:
         self._metadata = metadata
         self.executed = False
 
-    def execute(self, **kwargs):
+    def execute(
+        self,
+        *,
+        ref_id,
+        ref_type,
+        frames,
+        pms_mode,
+        coordinate_format,
+        regions,
+        queue_id,
+        job_id,
+        runtime_conf,
+    ):
         self.executed = True
         return self._metadata
 

@@ -95,13 +95,13 @@ def write_extraction_metadata(
     ref_id: str,
     ref_type: str,
     metadata: dict[str, Any],
-) -> None:
+) -> list[str] | None:
     """Persist adapted metadata through the existing extraction asset path."""
     filename, _, _ = split_filename(ref_id)
     root_asset_dir = tempfile.mkdtemp(prefix="document_extraction_artifact_")
     try:
         metadata_path = os.path.join(root_asset_dir, f"{filename}.meta.json")
         store_json_object(metadata, metadata_path)
-        store_assets(ref_id, ref_type, root_asset_dir)
+        return store_assets(ref_id, ref_type, root_asset_dir)
     finally:
         shutil.rmtree(root_asset_dir, ignore_errors=True)

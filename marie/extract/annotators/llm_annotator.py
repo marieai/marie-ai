@@ -248,6 +248,8 @@ class LLMAnnotator(DocumentAnnotator):
         self.output_transform: Optional[str] = annotator_conf.get(
             "output_transform", None
         )
+
+        # it needs the raw response and request context before accepting the output
         self.response_handler_path: Optional[str] = annotator_conf.get(
             "response_handler"
         )

@@ -418,7 +418,7 @@ class ExtractPipeline(BasePipeline):
             "page_count": len(ocr_results),
         }
         self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
-        store_assets(ref_id, ref_type, root_asset_dir)
+        metadata["_stored_asset_uris"] = store_assets(ref_id, ref_type, root_asset_dir)
 
         return metadata
 

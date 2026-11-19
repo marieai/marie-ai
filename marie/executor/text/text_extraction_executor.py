@@ -228,8 +228,8 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             # pipeline execution convert their failures into {status: "error"}.
             local_path, file_type = fetch_asset_to_temp(doc.asset_key)
             parse_mode = self._parse_mode(parameters)
-
             route = self._route(local_path, file_type, parse_mode)
+
             if route == "unsupported":
                 if strict_result:
                     raise ValueError(
@@ -515,7 +515,9 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
             content = read_extraction_artifact(result, output_dir)
 
         metadata = build_extraction_metadata(content, result)
-        write_extraction_metadata(ref_id, ref_type, metadata)
+        metadata["_stored_asset_uris"] = write_extraction_metadata(
+            ref_id, ref_type, metadata
+        )
         self.persist(
             ref_id=ref_id,
             ref_type=ref_type,
@@ -560,6 +562,7 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
         partition_key: Optional[str] = None,
     ) -> None:
         """Persist results and optionally track assets"""
+        stored_uris = results.pop("_stored_asset_uris", None)
 
         def _tags(index: int, ftype: str, checksum: str):
             return {
@@ -591,115 +594,23 @@ class TextExtractionExecutor(MarieExecutor, StorageMixin):
 
         # Asset tracking
         if self.asset_tracking_enabled and job_id:
-            import hashlib
-            import json
-
-            from marie.assets import AssetTracker
-
             assets = []
-
-            # Extract text asset
-            if "ocr" in results and results["ocr"]:
-                ocr_results = results["ocr"]
-                # Flatten all text from all pages
-                text_parts = []
-                for page_result in ocr_results:
-                    if "lines" in page_result:
-                        for line in page_result["lines"]:
-                            if "text" in line:
-                                text_parts.append(line["text"])
-
-                text_content = "\n".join(text_parts)
-                text_bytes = text_content.encode("utf-8")
-
-                # Compute version
-                upstream_versions = self._get_upstream_versions(dag_id, node_task_id)
-                text_version = AssetTracker.compute_asset_version(
-                    payload_bytes=text_bytes,
-                    code_fingerprint=getattr(self, "code_version", "unknown"),
-                    prompt_fingerprint=getattr(
-                        self.pipeline, "pipeline_name", "extract-pipeline"
-                    ),
-                    upstream_versions=upstream_versions,
-                )
-
+            for uri in dict.fromkeys(stored_uris or []):
                 assets.append(
                     {
-                        "asset_key": "ocr/text",
-                        "version": text_version,
-                        "kind": "text",
-                        "size_bytes": len(text_bytes),
-                        "checksum": hashlib.sha256(text_bytes).hexdigest(),
+                        "asset_key": uri,
+                        # The uploader returns locations without content versions.
+                        "version": "",
+                        "kind": "blob",
+                        "uri": uri,
                         "metadata": {
-                            "char_count": len(text_content),
-                            "line_count": len(text_parts),
-                            "page_count": len(ocr_results),
+                            "ref_id": ref_id,
+                            "ref_type": ref_type,
                         },
                     }
                 )
 
-                # Extract bboxes asset
-                bboxes = []
-                for page_result in ocr_results:
-                    if "lines" in page_result:
-                        for line in page_result["lines"]:
-                            if "bbox" in line:
-                                bboxes.append(line["bbox"])
-
-                if bboxes:
-                    bboxes = safely_encoded(lambda x: x)(bboxes)
-                    bbox_bytes = json.dumps(bboxes).encode("utf-8")
-                    bbox_version = AssetTracker.compute_asset_version(
-                        payload_bytes=bbox_bytes,
-                        code_fingerprint=getattr(self, "code_version", "unknown"),
-                        upstream_versions=upstream_versions,
-                    )
-
-                    assets.append(
-                        {
-                            "asset_key": "ocr/bboxes",
-                            "version": bbox_version,
-                            "kind": "bbox",
-                            "size_bytes": len(bbox_bytes),
-                            "checksum": hashlib.sha256(bbox_bytes).hexdigest(),
-                            "metadata": {"bbox_count": len(bboxes)},
-                        }
-                    )
-
-                # Extract confidence asset (optional)
-                confidences = {}
-                for page_idx, page_result in enumerate(ocr_results):
-                    if "lines" in page_result:
-                        for line_idx, line in enumerate(page_result["lines"]):
-                            if "confidence" in line:
-                                key = f"page_{page_idx}_line_{line_idx}"
-                                confidences[key] = line["confidence"]
-
-                if confidences:
-                    conf_bytes = json.dumps(confidences).encode("utf-8")
-                    conf_version = AssetTracker.compute_asset_version(
-                        payload_bytes=conf_bytes,
-                        code_fingerprint=getattr(self, "code_version", "unknown"),
-                        upstream_versions=upstream_versions,
-                    )
-
-                    avg_confidence = sum(confidences.values()) / len(confidences)
-
-                    assets.append(
-                        {
-                            "asset_key": "ocr/confidence",
-                            "version": conf_version,
-                            "kind": "metadata",
-                            "size_bytes": len(conf_bytes),
-                            "checksum": hashlib.sha256(conf_bytes).hexdigest(),
-                            "metadata": {
-                                "avg_confidence": avg_confidence,
-                                "confidence_count": len(confidences),
-                            },
-                        }
-                    )
-
-            # Record materializations
+            # Record materialization
             if assets:
                 try:
                     upstream = self._get_upstream_asset_tuples(dag_id, node_task_id)
