@@ -11,8 +11,9 @@ Use the interactive entry point:
 ```
 
 It checks the worktree and upstream state, updates every managed version
-reference, creates the release commit, builds the selected containers, and
-creates an annotated tag after the build succeeds. The annotated tag contains
+reference, synchronizes `uv.lock` for CUDA builds, and commits those inputs before
+building the selected containers. It creates an annotated tag after the build
+succeeds. The annotated tag contains
 release notes generated from non-merge commit subjects. Publishing the commit,
 images, tag, GitHub Release, and pull-request handoff is optional. Releases may
 run from `develop` or a release development branch.
@@ -33,6 +34,15 @@ the worktree is dirty; `--yes` does not select it. If restoration conflicts,
 the script retains the stash and reports the recovery steps. Commit the release
 scripts themselves before using this mode. Version-managed files cannot be
 stashed during a release.
+
+CUDA builds (`marie-cuda` and `all`) validate the dependency lock before building
+any image and do not rewrite it. For standalone `build.sh` runs, refresh a stale
+lock with `uv lock --no-cache`, review it, and commit it first.
+
+To retry an interrupted release, pass the same exact version instead of a bump
+such as `patch`. The script reuses HEAD when the release inputs are unchanged.
+If the dependency lock needs refreshing, it creates a new release commit without
+amending the previous one. The images are rebuilt before tagging.
 
 `--publish` requires `gh` and an authenticated GitHub session. When `gh` is
 missing, the script prints an installation command and the official installation

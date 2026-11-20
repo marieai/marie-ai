@@ -1,13 +1,8 @@
-# this is for testing only
-# we will build a docker image for production use later
-echo "Starting DocumentDB..."
+#!/usr/bin/env bash
+set -euo pipefail
 
-docker run -d \
-  --restart on-failure \
-  --name marie-documentdb \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=123456 \
-  -e POSTGRES_DB=postgres \
-  -v ./data:/var/lib/postgresql/data \
-  -p 5432:5432 \
-  ghcr.io/ferretdb/postgres-documentdb:16
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+: "${POSTGRES_PASSWORD:?Export POSTGRES_PASSWORD before starting fresh storage}"
+
+exec docker compose --env-file /dev/null --project-directory "$repo_root" \
+  -f "$repo_root/Dockerfiles/docker-compose.storage.yml" up --build -d psql

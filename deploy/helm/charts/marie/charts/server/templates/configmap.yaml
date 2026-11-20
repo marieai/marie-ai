@@ -54,13 +54,13 @@ data:
           enabled: true
           hostname: {{ printf "%s-postgresql" .Release.Name }}
           port: 5432
-          database: {{ $postgresqlAuth.database | default "marie_scheduler" }}
+          database: {{ $postgresqlAuth.database | default "postgres" }}
           username: {{ $postgresqlAuth.username | default "postgres" }}
           {{- else if $postgresqlExternal.host }}
           enabled: true
           hostname: {{ $postgresqlExternal.host }}
           port: {{ $postgresqlExternal.port | default 5432 }}
-          database: {{ $postgresqlExternal.database | default "marie" }}
+          database: {{ $postgresqlExternal.database | default "postgres" }}
           username: {{ $postgresqlExternal.username | default "marie" }}
           {{- else }}
           enabled: false

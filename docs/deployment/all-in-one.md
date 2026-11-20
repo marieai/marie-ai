@@ -4,7 +4,7 @@
 
 Single `docker-compose.allinone.yml` deployment bundling the entire Marie-AI infrastructure:
 
-- **PostgreSQL** (DocumentDB) -- Document storage and metadata
+- **PostgreSQL 17 + DocumentDB 1.2** -- Shared SQL storage and native MongoDB gateway
 - **MinIO S3** -- Object storage for documents and artifacts
 - **RabbitMQ** -- Message broker for async task processing
 - **etcd** -- Distributed coordination and configuration
@@ -40,6 +40,22 @@ Marie Dispatch owns executor ingress, producer liveness, in-flight state, dispat
 **Not recommended for multi-node production deployments.** See [Production Deployment](#production-deployment) for alternatives.
 
 ## Quick Start
+
+Fresh installs build `Dockerfiles/postgres` as `marieai/postgres-documentdb:17-1.2.0`.
+The runtime exposes SQL on port 5432 and the native DocumentDB gateway on port
+27017. Marie's SQL schemas, DocumentDB extensions, and pg_cron use the physical
+PostgreSQL database `postgres`. Logical document databases such as `marie` and
+`hyperdx` live inside DocumentDB; they do not require SQL `CREATE DATABASE`.
+
+Set `POSTGRES_USER` and `POSTGRES_PASSWORD` for SQL access. Set a different
+`DOCUMENTDB_USERNAME` (default `marie`) and `DOCUMENTDB_PASSWORD` for document
+clients; an omitted document password uses `POSTGRES_PASSWORD`. Percent-encode
+credentials when constructing MongoDB connection URLs. The existing
+`config/psql/init.sql` runs before storage becomes healthy.
+
+The new runtime uses `documentdb_data:/data`. These instructions cover fresh
+installs. Keep existing volumes intact. Helm/AppImage releases also require the
+new image to be published and its platform digest pinned before release.
 
 ```bash
 cd marie-ai
@@ -91,7 +107,7 @@ Named volumes store all persistent data:
 
 | Volume | Contents | Notes |
 |--------|----------|-------|
-| `psql_data` | PostgreSQL databases | Marie-AI, Gitea, LiteLLM, Mem0 |
+| `documentdb_data` | PostgreSQL databases and DocumentDB collections | Marie-AI, HyperDX, Gitea, LiteLLM, Mem0 |
 | `/mnt/data/s3` (bind mount) | MinIO object storage | Documents, artifacts |
 | `etcd_data` | etcd key-value store | Cluster coordination |
 | `rabbitmq_data` | RabbitMQ queues | In-flight messages |
@@ -235,11 +251,11 @@ The collector must run as root (UID 0) to read Docker container log files from `
 | `RABBIT_MQ_PASSWORD` | *(required)* | RabbitMQ password |
 | `RABBIT_MQ_PORT` | `5672` | RabbitMQ AMQP port |
 | **Gateway** | | |
-| `GATEWAY_IMAGE_TAG` | `5.1.0-cpu` | Gateway Docker image tag |
+| `GATEWAY_IMAGE_TAG` | `5.2.0-cpu` | Gateway Docker image tag |
 | `GATEWAY_CONFIG_TAG` | `marie-gateway-4.0.0.yml` | Gateway config file name |
 | `GATEWAY_LOG_LEVEL` | `DEBUG` | Gateway log verbosity |
 | **Extract Executor** | | |
-| `EXTRACT_IMAGE_TAG` | `5.1.0-cuda` | Extract Docker image tag |
+| `EXTRACT_IMAGE_TAG` | `5.2.0-cuda` | Extract Docker image tag |
 | `EXTRACT_CONFIG_TAG` | `marie-extract-4.0.0.yml` | Extract config file name |
 | `EXTRACT_LOG_LEVEL` | `DEBUG` | Extract log verbosity |
 | `EXTRACT_REPLICAS` | `1` | Number of Extract replicas |

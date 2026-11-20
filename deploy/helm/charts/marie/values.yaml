@@ -23,7 +23,7 @@ global:
   marie:
     image:
       repository: marieai/marie
-      tag: "5.1.0-cuda"
+      tag: "5.2.0-cuda"
       digest: ""
     logging:
       level: INFO
@@ -87,7 +87,7 @@ global:
     external:
       host: ""
       port: 5432
-      database: marie
+      database: postgres
       username: marie
       existingSecret: ""
       existingSecretPasswordKey: password
@@ -133,7 +133,7 @@ global:
 marie:
   image:
     repository: marieai/marie
-    tag: "5.1.0-cuda"
+    tag: "5.2.0-cuda"
     pullPolicy: IfNotPresent
 
   # Configuration that maps to marie.yml
@@ -170,7 +170,7 @@ server:
 
   image:
     repository: marieai/marie-gateway
-    tag: "5.1.0-cpu"
+    tag: "5.2.0-cpu"
     digest: ""
 
   config:
@@ -334,11 +334,11 @@ executor:
 postgresql:
   enabled: true
 
-  # Use FerretDB DocumentDB image for MongoDB compatibility
+  # PostgreSQL 17 and the native DocumentDB 1.2 gateway
   image:
-    registry: ghcr.io
-    repository: ferretdb/postgres-documentdb
-    tag: "17-0.103.0"
+    registry: docker.io
+    repository: marieai/postgres-documentdb
+    tag: "17-1.2.0"
     digest: ""
 
   auth:
@@ -356,7 +356,7 @@ postgresql:
   external:
     host: ""
     port: 5432
-    database: marie
+    database: postgres
     username: marie
     existingSecret: ""
     existingSecretPasswordKey: password
@@ -580,16 +580,9 @@ otel-collector:
   enabled: false
 
 # -----------------------------------------------------------------------------
-# FerretDB (MongoDB wire protocol over the bundled PostgreSQL)
-# State store for HyperDX; requires postgresql.enabled.
-# -----------------------------------------------------------------------------
-ferretdb:
-  enabled: false
-
-# -----------------------------------------------------------------------------
 # HyperDX (alert evaluation)
 # Evaluates marie-studio alert policies against the ClickHouse "telemetry" database.
-# Requires clickhouse.enabled and ferretdb.enabled.
+# Requires clickhouse.enabled and the bundled PostgreSQL DocumentDB gateway.
 # -----------------------------------------------------------------------------
 hyperdx:
   enabled: false

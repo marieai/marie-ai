@@ -1,6 +1,6 @@
 # HyperDX subchart values
 # Evaluates the alert policies created in marie-studio against the ClickHouse "otel"
-# database and reports fires back to it. State lives in PostgreSQL through FerretDB,
+# database and reports fires back to it. State lives in PostgreSQL through DocumentDB,
 # so it needs no volume of its own.
 # Mirrors the hyperdx service in Dockerfiles/docker-compose.clickstack.yml.
 # Used by: marie-studio (alerting)
@@ -25,16 +25,13 @@ config:
   # URL browsers use to reach HyperDX; it redirects here after sign-in
   frontendUrl: "http://localhost:8080"
 
-# MongoDB-compatible state store. An empty host means the bundled FerretDB of this
-# release; credentials are those of the PostgreSQL behind it (empty password reads
-# the bundled PostgreSQL Secret).
+# An empty host uses the native gateway in the bundled PostgreSQL service.
 mongo:
   host: ""
   port: 27017
   database: hyperdx
-postgresql:
+  username: marie
   existingSecret: ""
-  username: postgres
   password: ""
 
 # ClickHouse connection and sources created for the first team, when the first user

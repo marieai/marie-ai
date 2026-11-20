@@ -25,7 +25,7 @@
 #
 # Prerequisites:
 #   - marie-hyperdx container must be running
-#   - marie-ferretdb container must be running
+#   - marie-psql-server native DocumentDB gateway must be healthy
 # ============================================================================
 
 set -euo pipefail

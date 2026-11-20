@@ -36,23 +36,22 @@ uses `document.effective_page_count`; requests without matching page-count facts
 use the catch-all pool. The DRR quantum controls each pool's scheduling weight.
 
 This example uses the local AIMock provider at `http://127.0.0.1:4010/v1`, with
-loopback access enabled, matching the previous setup. The replica includes
-`"credential_env": "LLM_PROVIDER_API_KEY"`; supply that variable in the gateway
-environment, or remove the field when the provider does not require authentication.
-Never put the credential value in SQL.
+loopback access enabled. It omits `credential_env` because this local provider
+does not require authentication. No provider API key is needed for this example.
 The address must be reachable from the gateway; `127.0.0.1` refers to the host or
 container where the gateway runs.
 
 For another OpenAI-compatible provider, change `base_url` in the replica
-registration. Set `allow_loopback` and `allow_private` to match the intended
+registration. If it requires authentication, add
+`"credential_env": "LLM_PROVIDER_API_KEY"` to the replica and supply that variable
+in the gateway environment. Any configured `credential_env` requires a nonempty
+value at startup, even if the provider itself accepts unauthenticated requests.
+Never put the credential value in SQL.
+Set `allow_loopback` and `allow_private` to match the intended
 provider address. The logical inference target is the endpoint group `primary`;
 its physical provider is replica `primary-1`. Pools bind to that group and its
 revision. This format is supported by both the gateway and Studio's Inference
 Targets editor.
-
-If you already provisioned the earlier flat `endpoints` example, use
-[Convert the earlier flat endpoint example](#convert-the-earlier-flat-endpoint-example)
-instead of rerunning the initial provisioning transaction.
 
 Execute the complete transaction in the application database, using a role
 authorized to write the scheduler configuration tables:
@@ -76,7 +75,6 @@ DECLARE
               {
                 "replica_id": "primary-1",
                 "base_url": "http://127.0.0.1:4010/v1",
-                "credential_env": "LLM_PROVIDER_API_KEY",
                 "allow_loopback": true,
                 "execution_limit": 4,
                 "execution_bytes": 67108864
@@ -87,7 +85,7 @@ DECLARE
         "limits": {
           "max_execution_items": 4,
           "max_execution_bytes": 67108864
-        }
+        }[marie-extract-4.0.0.yml](../../../../../../../../mnt/data/marie-ai/config/service/extract/marie-extract-4.0.0.yml)
       }
     }
     $policy$::JSONB;
@@ -240,100 +238,6 @@ snapshot and digest. Do not manually insert policy-generation rows or set
 an active generation, verify that the dispatcher reports the same generation,
 then enable matching queued producers and resume submissions. The policy-activation
 endpoint is unavailable while the gateway runs with `LLM_QUEUE_ENABLED=false`.
-
-### Convert the earlier flat endpoint example
-
-Use this only if you already ran the earlier four-pool SQL example, which stored
-`metadata.llm_dispatch.endpoints`. The backend accepts that format, but Studio's
-Inference Targets editor manages `endpoint_groups`.
-
-Keep queued submissions stopped and take a database backup first. The transaction
-below preserves the registered provider settings, credential binding, and four
-pools while converting their bindings to endpoint group `primary`. It refuses an
-active policy or a configuration that differs from the earlier example. An
-already converted configuration also refuses this one-time conversion.
-
-```sql
-BEGIN;
-SET LOCAL lock_timeout = '5s';
-SET LOCAL statement_timeout = '30s';
-
-DO $convert$
-DECLARE
-    fabric_metadata JSONB;
-    active_generation BIGINT;
-    dispatch_policy JSONB;
-    registered_endpoint JSONB;
-BEGIN
-    SELECT metadata, active_policy_generation
-    INTO fabric_metadata, active_generation
-    FROM marie_scheduler.llm_queue_fabric_config
-    WHERE fabric_group_id = 'default'
-    FOR UPDATE;
-
-    IF NOT FOUND OR active_generation IS NOT NULL THEN
-        RAISE EXCEPTION 'Conversion requires an existing, unactivated default fabric';
-    END IF;
-
-    dispatch_policy := fabric_metadata -> 'llm_dispatch';
-    IF jsonb_typeof(dispatch_policy -> 'endpoints') IS DISTINCT FROM 'array' THEN
-        RAISE EXCEPTION 'Expected the earlier flat endpoints configuration';
-    END IF;
-    IF jsonb_array_length(dispatch_policy -> 'endpoints') <> 1
-       OR (dispatch_policy ? 'endpoint_groups'
-           AND dispatch_policy -> 'endpoint_groups' <> '[]'::JSONB) THEN
-        RAISE EXCEPTION 'Conversion requires exactly one flat endpoint and no groups';
-    END IF;
-    registered_endpoint := dispatch_policy #> '{endpoints,0}';
-    IF registered_endpoint ->> 'endpoint_id' IS DISTINCT FROM 'primary' THEN
-        RAISE EXCEPTION 'Expected the earlier primary endpoint';
-    END IF;
-
-    PERFORM 1 FROM marie_scheduler.llm_queue_pool
-    WHERE fabric_group_id = 'default' FOR UPDATE;
-    IF (SELECT count(*) FROM marie_scheduler.llm_queue_pool
-        WHERE fabric_group_id = 'default') <> 4
-       OR EXISTS (
-           SELECT 1 FROM marie_scheduler.llm_queue_pool
-           WHERE fabric_group_id = 'default'
-             AND (pool_id NOT IN ('default', 'document-small', 'document-medium', 'document-large')
-                  OR metadata #>> '{llm_dispatch,endpoint_id}' IS DISTINCT FROM 'primary'
-                  OR metadata #>> '{llm_dispatch,revision}' IS DISTINCT FROM 'r1')
-       ) THEN
-        RAISE EXCEPTION 'Expected the earlier four pools bound to primary revision r1';
-    END IF;
-
-    dispatch_policy := (dispatch_policy - 'endpoints') || jsonb_build_object(
-        'endpoint_groups', jsonb_build_array(jsonb_build_object(
-            'group_id', 'primary',
-            'revision', 'r1',
-            'replicas', jsonb_build_array(
-                (registered_endpoint - 'endpoint_id')
-                || jsonb_build_object('replica_id', 'primary-1')
-            )
-        ))
-    );
-    UPDATE marie_scheduler.llm_queue_fabric_config
-    SET metadata = jsonb_set(fabric_metadata, '{llm_dispatch}', dispatch_policy)
-    WHERE fabric_group_id = 'default';
-
-    UPDATE marie_scheduler.llm_queue_pool
-    SET metadata = jsonb_set(
-        metadata, '{llm_dispatch}',
-        ((metadata -> 'llm_dispatch') - 'endpoint_id')
-        || jsonb_build_object('endpoint_group_id', 'primary')
-    )
-    WHERE fabric_group_id = 'default';
-END;
-$convert$;
-
-COMMIT;
-```
-
-After conversion, rerun the read-only verification queries above, supply the
-credential referenced by the policy in the gateway environment, restart the
-gateway, and verify the active policy generation. If you are provisioning a fresh database,
-use only the initial provisioning transaction; no conversion is needed.
 
 ## Configure the gateway
 

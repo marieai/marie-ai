@@ -200,6 +200,38 @@ class AsyncJobRepository:
             autocommit=True,
         )
 
+    async def initialize_cron(self) -> None:
+        """Remove obsolete scheduler jobs in the configured pg_cron coordinator."""
+        async with self._pool.acquire() as conn:
+            coordinator = await conn.fetchval(
+                "SELECT current_setting('cron.database_name', true)"
+            )
+        if not coordinator:
+            raise RuntimeFailToStart(
+                'pg_cron is not preloaded on the PostgreSQL server; '
+                'initialize it in the coordinator database using config/psql/init.sql'
+            )
+        psql_dir, _ = _scheduler_sql_paths()
+        command = create_sql_from_file(
+            DEFAULT_SCHEMA, os.path.join(psql_dir, 'cron_job_init.sql')
+        )
+        try:
+            async with await psycopg.AsyncConnection.connect(
+                host=self._config['hostname'],
+                port=self._config['port'],
+                user=self._config['username'],
+                password=self._config['password'],
+                dbname=coordinator,
+                autocommit=True,
+                connect_timeout=10,
+            ) as control:
+                await control.execute(command, (self._config['database'],))
+        except psycopg.Error as error:
+            raise RuntimeFailToStart(
+                f'Failed to initialize scheduler cron jobs in coordinator {coordinator!r} '
+                f"for database {self._config['database']!r}: {error}"
+            ) from error
+
     async def get_job_by_id(self, job_id: str) -> Optional[WorkInfo]:
         query = f"""
             SELECT {_WORK_INFO_COLUMNS}
@@ -3836,7 +3868,7 @@ class AsyncJobRepository:
         return True
 
     async def create_tables(self, schema: str = DEFAULT_SCHEMA) -> None:
-        psql_dir, schema_dir = _scheduler_sql_paths()
+        _, schema_dir = _scheduler_sql_paths()
         numbered = sorted(
             os.path.basename(path)
             for path in glob.glob(os.path.join(schema_dir, "*.sql"))
@@ -3864,14 +3896,6 @@ class AsyncJobRepository:
                 create_sql_from_file(
                     schema,
                     os.path.join(schema_dir, "monitoring", "throughput_analysis.sql"),
-                ),
-            )
-        )
-        migrations.append(
-            (
-                "cron_job_init.sql",
-                create_sql_from_file(
-                    schema, os.path.join(psql_dir, "cron_job_init.sql")
                 ),
             )
         )

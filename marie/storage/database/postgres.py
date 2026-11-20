@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from typing import Any, Callable, Dict, Optional
 
 import psycopg
-from psycopg import pq
+from psycopg import pq, sql
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from marie.excepts import BadConfigSource
@@ -25,7 +25,7 @@ class PostgresqlMixin:
         pool: Optional[ConnectionPool] = None,
     ) -> None:
         """
-        Setup PostgreSQL connection pool.
+        Create a missing PostgreSQL database, then initialize its pool and tables.
 
         @param config:
         @param create_table_callback: Create table if it doesn't exist.
@@ -56,6 +56,23 @@ class PostgresqlMixin:
                 config.get("pool_acquire_trace_after_seconds", 0.001)
             )
 
+            connection_kwargs = {
+                'user': username,
+                'password': password,
+                'dbname': database,
+                'host': hostname,
+                'port': port,
+                'options': '-c timezone=UTC -c statement_timeout=120000',
+                'application_name': application_name,
+                'connect_timeout': 10,
+                'keepalives': 1,
+                'keepalives_idle': 30,
+                'keepalives_interval': 10,
+                'keepalives_count': 3,
+            }
+            if pool is None:
+                self._ensure_database_exists(connection_kwargs)
+
             self.postgreSQL_pool = pool or ConnectionPool(
                 "",
                 connection_class=getattr(self, "connection_class", psycopg.Connection),
@@ -64,20 +81,7 @@ class PostgresqlMixin:
                 timeout=self._pg_pool_acquire_timeout_seconds,
                 open=True,
                 name=application_name,
-                kwargs={
-                    'user': username,
-                    'password': password,
-                    'dbname': database,
-                    'host': hostname,
-                    'port': port,
-                    'options': '-c timezone=UTC -c statement_timeout=120000',
-                    'application_name': application_name,
-                    'connect_timeout': 10,
-                    'keepalives': 1,
-                    'keepalives_idle': 30,
-                    'keepalives_interval': 10,
-                    'keepalives_count': 3,
-                },
+                kwargs=connection_kwargs,
             )
             if pool is None:
                 self.postgreSQL_pool.wait(
@@ -102,8 +106,45 @@ class PostgresqlMixin:
 
             self._init_table(create_table_callback, reset_table_callback)
 
+        except BadConfigSource:
+            raise
+        except psycopg.Error as error:
+            detail = error.diag.message_primary or str(error)
+            raise BadConfigSource(
+                f'Postgresql storage initialization failed: {detail}'
+            ) from None
         except Exception as e:
             raise BadConfigSource('Postgresql storage initialization failed') from None
+
+    def _ensure_database_exists(self, connection_kwargs: Dict[str, Any]) -> None:
+        try:
+            with psycopg.connect(**connection_kwargs):
+                return
+        except psycopg.OperationalError as connection_error:
+            database = connection_kwargs['dbname']
+            with psycopg.connect(
+                **{**connection_kwargs, 'dbname': 'postgres'}, autocommit=True
+            ) as connection:
+                exists_query = 'SELECT 1 FROM pg_database WHERE datname = %s'
+                if connection.execute(exists_query, (database,)).fetchone():
+                    raise connection_error
+                try:
+                    connection.execute(
+                        sql.SQL('CREATE DATABASE {}').format(sql.Identifier(database))
+                    )
+                except (
+                    psycopg.errors.DuplicateDatabase,
+                    psycopg.errors.UniqueViolation,
+                ):
+                    # Another gateway may have created the database concurrently.
+                    if not connection.execute(exists_query, (database,)).fetchone():
+                        raise
+                except psycopg.errors.InsufficientPrivilege:
+                    raise BadConfigSource(
+                        f'PostgreSQL database {database!r} does not exist; the configured '
+                        'role requires CREATEDB permission to create it during startup'
+                    ) from None
+            self.logger.info(f'PostgreSQL database {database!r} is ready')
 
     def _pool_counts(self) -> tuple[int | None, int | None]:
         pool = getattr(self, "postgreSQL_pool", None)

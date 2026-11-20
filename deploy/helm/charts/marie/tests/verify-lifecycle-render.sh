@@ -29,7 +29,6 @@ infrastructure=(
   lifecycle-proof-minio
   lifecycle-proof-clickhouse
   lifecycle-proof-otel-collector
-  lifecycle-proof-ferretdb
   lifecycle-proof-hyperdx
 )
 

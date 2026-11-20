@@ -177,9 +177,9 @@ show_help() {
     echo
     echo "Examples:"
     echo "  $0                                    # Interactive mode with default version"
-    echo "  $0 --version 5.1.0 marie-cuda        # Build CUDA image with version 5.1.0"
-    echo "  $0 -v 5.1.0 all                      # Build all images with version 5.1.0"
-    echo "  MARIE_VERSION=5.1.0 $0 marie-cuda    # Using environment variable"
+    echo "  $0 --version 5.2.0 marie-cuda        # Build CUDA image with version 5.2.0"
+    echo "  $0 -v 5.2.0 all                      # Build all images with version 5.2.0"
+    echo "  MARIE_VERSION=5.2.0 $0 marie-cuda    # Using environment variable"
 }
 
 # Select build profile
@@ -375,19 +375,6 @@ build_single_profile() {
 
     log_info "Building profile: $profile_key (Version: $VERSION)"
 
-    if [[ "$profile_key" == "marie-cuda" ]]; then
-        if ! command -v uv &> /dev/null; then
-            log_error "uv is required to synchronize the CUDA dependency lockfile"
-            return 1
-        fi
-
-        log_info "Synchronizing uv.lock..."
-        if ! uv lock --no-cache; then
-            log_error "Failed to synchronize uv.lock"
-            return 1
-        fi
-    fi
-
     parse_profile_config "$profile_key"
 
     if build_image "$DOCKERFILE_PATH" "$FULL_IMAGE_NAME" "$profile_key"; then
@@ -474,6 +461,18 @@ main() {
 
     local selected_profile
     selected_profile=$(select_profile "${remaining_args[@]}")
+
+    if [[ "$selected_profile" == "all" || "$selected_profile" == "marie-cuda" ]]; then
+        if ! command -v uv &> /dev/null; then
+            log_error "uv is required to validate the CUDA dependency lockfile"
+            exit 1
+        fi
+        log_info "Validating uv.lock..."
+        if ! uv lock --check --no-cache; then
+            log_error "Lockfile validation failed; run 'uv lock --no-cache' and commit uv.lock before building"
+            exit 1
+        fi
+    fi
 
     if [[ "$selected_profile" == "all" ]]; then
         build_all_profiles

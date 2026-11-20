@@ -7,6 +7,7 @@ SET search_path = public, marie_scheduler, pg_catalog;
 
 CREATE EXTENSION IF NOT EXISTS pgstattuple WITH SCHEMA public;
 CREATE EXTENSION IF NOT EXISTS pg_repack;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 DO $$
 BEGIN
@@ -24,21 +25,24 @@ BEGIN
   END IF;
 
 
-  -- DocumentDB extension for MongoDB wire protocol compatibility (FerretDB)
+  -- DocumentDB SQL API used by the native MongoDB gateway.
   IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='documentdb') THEN
     EXECUTE 'CREATE EXTENSION IF NOT EXISTS documentdb CASCADE';
   END IF;
 
+  CREATE EXTENSION IF NOT EXISTS documentdb_extended_rum;
+
 
 END$$;
 
+-- The upstream image initially registers maintenance jobs on its bootstrap port.
+UPDATE cron.job
+SET nodeport = current_setting('port')::integer
+WHERE database = current_database()
+  AND username = (SELECT pg_get_userbyid(extowner) FROM pg_extension WHERE extname = 'documentdb')
+  AND jobname ~ '^documentdb_'
+  AND nodeport IS DISTINCT FROM current_setting('port')::integer;
 
-CREATE TABLE IF NOT EXISTS embeddings (
-  id SERIAL PRIMARY KEY,
-  embedding vector,
-  text text,
-  created_at timestamptz DEFAULT now()
-);
 -- =========================================================
 -- Database creation for dependent services
 -- =========================================================

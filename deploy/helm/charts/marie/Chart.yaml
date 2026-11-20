@@ -4,7 +4,7 @@ description: Marie-AI - Agentic Document Intelligence Platform
 
 type: application
 version: 0.1.0
-appVersion: "5.1.0"
+appVersion: "5.2.0"
 
 keywords:
   - document-processing
@@ -75,12 +75,6 @@ dependencies:
     version: "0.1.0"
     repository: "file://charts/otel-collector"
     condition: otel-collector.enabled
-
-  # Optional: FerretDB (MongoDB wire protocol over PostgreSQL, state store for HyperDX)
-  - name: ferretdb
-    version: "0.1.0"
-    repository: "file://charts/ferretdb"
-    condition: ferretdb.enabled
 
   # Optional: HyperDX (alert evaluation for marie-studio)
   - name: hyperdx

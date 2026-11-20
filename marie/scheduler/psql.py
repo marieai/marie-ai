@@ -852,6 +852,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         """
         logger.info("Starting job scheduling agent")
         await self.repository.initialize()
+        await self.repository.initialize_cron()
         # Check if tables are installed and create if needed (delegate to repository)
         installed = await self.repository.is_installed(DEFAULT_SCHEMA)
         logger.info(f"Tables installed: {installed}")

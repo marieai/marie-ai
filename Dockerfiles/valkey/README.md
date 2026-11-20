@@ -13,15 +13,19 @@ From the Marie-AI repository root, generate a new bundle outside the configurati
 tree mounted into application containers. Set `--host` to the address clients
 already use to reach Valkey; `localhost` is appropriate for same-host clients.
 
+Keep each component's credentials in its own directory under
+`/mnt/data/marie-ai/security/`. Valkey uses `security/valkey/`; other components
+can use sibling directories. The Valkey container mounts only its `server/` directory.
+
 ```bash
-export VALKEY_SECURITY_DIR=/mnt/data/marie-ai/valkey-security
+export VALKEY_SECURITY_DIR=/mnt/data/marie-ai/security/valkey
 python3 tools/setup-valkey-auth.py --output-dir "$VALKEY_SECURITY_DIR" --host localhost
 ```
 
 Setup requires only Python's standard library. It prints file locations, never
 credentials, and refuses an existing output directory. Directories are mode 0700
 and files are mode 0600. A bundle-local ignore-all rule also prevents accidental
-staging when a bundle is created inside a checkout. Keep it backed up securely:
+staging when a bundle is created inside a checkout. Generated files:
 
 - `server/users.acl`: disabled default user and a SHA-256 password hash for `marie`.
 - `server/password`: password used by the authenticated health check.
@@ -38,7 +42,7 @@ distribute the existing client connection file securely instead.
 Store the client connection file outside Git with mode 0600 on each client host.
 Load it into that host's existing deployment secret/environment configuration.
 Use a reachable hostname in the URL on remote hosts, retaining the same credentials.
-For a shell-launched deployment:
+For a shell-launched deployment, optionally load the generated URL:
 
 ```bash
 export LLM_QUEUE_URL="$(cat "$VALKEY_SECURITY_DIR/clients/queue-url")"
@@ -51,70 +55,44 @@ code change or rebuilding the gateway/worker images. Recreate client containers
 to apply environment changes; `docker compose restart` retains their old environment.
 Keep shell tracing disabled and do not print connection URLs.
 
-## Back up and cut over
+## Start Valkey
 
-Schedule a coordinated restart. Pause submissions, drain active dispatches, then
-stop queue clients with the existing deployment tooling. Capture the existing
-Compose project and volume so the replacement uses the same dataset. Run the
-following fail-fast block from the repository root with `VALKEY_SECURITY_DIR`
-exported. It checks the planned volume before stopping anything, backs up the
-stopped server, verifies the archive checksum, and checks the replacement mount:
+For a new setup, run from the Marie-AI repository root after preparing credentials:
 
 ```bash
-bash -eu -o pipefail <<'SH'
-VALKEY_COMPOSE_PROJECT="$(docker inspect marie-valkey --format '{{index .Config.Labels "com.docker.compose.project"}}')"
-VALKEY_DATA_VOLUME="$(docker inspect marie-valkey --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
-VALKEY_IMAGE_ID="$(docker inspect marie-valkey --format '{{.Image}}')"
-VALKEY_BACKUP_DIR="/mnt/data/marie-ai/backups/valkey-$(date -u +%Y%m%dT%H%M%SZ)"
-test -n "$VALKEY_COMPOSE_PROJECT"
-test -n "$VALKEY_DATA_VOLUME"
-test -n "$VALKEY_IMAGE_ID"
-test -s "$VALKEY_SECURITY_DIR/server/password"
-test -s "$VALKEY_SECURITY_DIR/server/users.acl"
-docker volume inspect "$VALKEY_DATA_VOLUME" >/dev/null
-VALKEY_PLANNED_VOLUME="$(docker compose --env-file ./config/.env -p "$VALKEY_COMPOSE_PROJECT" \
-  -f ./Dockerfiles/docker-compose.valkey.yml --project-directory . config --format json \
-  | python3 -c 'import json, sys; print(json.load(sys.stdin)["volumes"]["valkey_data"]["name"])')"
-test "$VALKEY_PLANNED_VOLUME" = "$VALKEY_DATA_VOLUME"
-install -d -m 700 "$VALKEY_BACKUP_DIR"
-docker stop marie-valkey
-docker run --rm --network none --entrypoint sh \
-  --mount "type=volume,src=$VALKEY_DATA_VOLUME,dst=/data,readonly" \
-  --mount "type=bind,src=$VALKEY_BACKUP_DIR,dst=/backup" \
-  "$VALKEY_IMAGE_ID" -ec '
-    umask 077
-    tar -C /data -czf /backup/valkey-data.tar.gz .
-    cd /backup
-    sha256sum valkey-data.tar.gz > valkey-data.sha256
-    sha256sum -c valkey-data.sha256
-  '
-docker compose --env-file ./config/.env -p "$VALKEY_COMPOSE_PROJECT" \
-  -f ./Dockerfiles/docker-compose.valkey.yml --project-directory . \
+export VALKEY_SECURITY_DIR=/mnt/data/marie-ai/security/valkey
+
+docker network inspect marie_default >/dev/null 2>&1 \
+  || docker network create marie_default
+
+docker compose \
+  --env-file ./config/.env \
+  -p marie \
+  -f ./Dockerfiles/docker-compose.valkey.yml \
+  --project-directory . \
   up -d --force-recreate --wait valkey
-test "$VALKEY_DATA_VOLUME" = "$(docker inspect marie-valkey --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
-docker exec marie-valkey sh /etc/valkey/healthcheck.sh
-docker exec marie-valkey valkey-cli ping | grep -q NOAUTH
-SH
 ```
 
-The archive and checksum are owned by root. Restore through a privileged container
-into a new volume, never over the original volume. Keep the original volume intact.
-
-If any check fails, keep submissions paused and inspect the failure before
-continuing. On each client host, load the new URL and recreate affected services
-using that host's original project and Compose files. For example, after setting
-`CLIENT_COMPOSE_PROJECT`, `CLIENT_COMPOSE_FILE` and `CLIENT_SERVICE`:
+## Verify authentication
 
 ```bash
-export LLM_QUEUE_URL="$(cat "$VALKEY_SECURITY_DIR/clients/queue-url")"
-export LLM_QUEUE_VALKEY_URL="$LLM_QUEUE_URL"
-docker compose --env-file ./config/.env -p "${CLIENT_COMPOSE_PROJECT:?set existing project}" \
-  -f "${CLIENT_COMPOSE_FILE:?set existing Compose file}" --project-directory . \
-  up -d --force-recreate "${CLIENT_SERVICE:?set gateway or worker service}"
+docker exec marie-valkey sh /etc/valkey/healthcheck.sh \
+  && echo "Authenticated access OK"
+
+docker exec marie-valkey valkey-cli ping
 ```
 
-After all client containers are recreated, submit one representative queued request
-and confirm its reply. Do not use `down -v` on the shared deployment.
+The first command must print `Authenticated access OK`. The unauthenticated ping
+must report `NOAUTH Authentication required.`
+
+## Start gateways and workers
+
+Start gateways and workers with the authenticated `LLM_QUEUE_URL` in their existing
+deployment configuration. For existing Docker clients, use their original Compose
+project and files with `up -d --force-recreate` to apply the new environment.
+For host or IDE processes, restart them with the updated environment.
+
+Submit one representative queued request and confirm its reply.
 
 ## Roll back or rotate credentials
 

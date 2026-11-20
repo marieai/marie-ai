@@ -75,4 +75,4 @@ AS
     RAISE notice 'Deleted % jobs and % DAGs', v_jobs_deleted, v_dags_deleted;
   END;
   $$;
-  ALTER FUNCTION {schema}.delete_dags_and_jobs(uuid[]) owner TO postgres;
+  ALTER FUNCTION {schema}.delete_dags_and_jobs(uuid[]) OWNER TO CURRENT_USER;
