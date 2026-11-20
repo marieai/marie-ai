@@ -31,19 +31,18 @@ spec:
           image: {{ include "hyperdx.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            - name: POSTGRES_PASSWORD
-              {{- if .Values.postgresql.password }}
-              value: {{ .Values.postgresql.password | quote }}
+            - name: DOCUMENTDB_PASSWORD
+              {{- if .Values.mongo.password }}
+              value: {{ .Values.mongo.password | quote }}
               {{- else }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.postgresql.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
-                  key: postgres-password
+                  name: {{ .Values.mongo.existingSecret | default (printf "%s-postgresql" .Release.Name) }}
+                  key: documentdb-password
               {{- end }}
-            # FerretDB delegates authentication to PostgreSQL and supports SCRAM-SHA-256 only.
-            # Kubernetes expands $(POSTGRES_PASSWORD); it must be URL-safe
+            # Kubernetes expands DOCUMENTDB_PASSWORD; it must be URL-safe.
             - name: MONGO_URI
-              value: "mongodb://{{ .Values.postgresql.username }}:$(POSTGRES_PASSWORD)@{{ .Values.mongo.host | default (printf "%s-ferretdb" .Release.Name) }}:{{ .Values.mongo.port }}/{{ .Values.mongo.database }}?authMechanism=SCRAM-SHA-256"
+              value: "mongodb://{{ .Values.mongo.username }}:$(DOCUMENTDB_PASSWORD)@{{ .Values.mongo.host | default (printf "%s-postgresql" .Release.Name) }}:{{ .Values.mongo.port }}/{{ .Values.mongo.database }}?authMechanism=SCRAM-SHA-256"
             - name: HYPERDX_LOG_LEVEL
               value: {{ .Values.config.logLevel | quote }}
             - name: HYPERDX_APP_PORT

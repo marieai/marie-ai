@@ -38,7 +38,7 @@ def test_key_regex_parses_ids():
     assert m.group("source_id").startswith("3333")
 
 
-def _sensor():
+def _sensor(**config_overrides):
     return KbDocumentSensor(
         {
             "id": "sid",
@@ -47,6 +47,7 @@ def _sensor():
                 "subtype": "kb_document",
                 "provider": "s3",
                 "prefix": "tenants/",
+                **config_overrides,
             },
         }
     )
@@ -92,6 +93,51 @@ async def test_missing_binding_skips():
 
 def test_non_kb_key_ignored():
     assert KB_KEY_RE.match("tenants/t1/submissions/s1/file.pdf") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bucket', ['', 'stale-bucket'])
+async def test_system_poll_resolves_bucket_endpoint_region_and_credentials_together(monkeypatch, bucket):
+    for name, value in {
+        'S3_STORAGE_BUCKET_NAME': 'system-bucket',
+        'S3_ENDPOINT_URL': 'http://system-storage.invalid',
+        'S3_REGION': 'eu-west-1',
+        'S3_ACCESS_KEY_ID': 'synthetic-system-access',
+        'S3_SECRET_ACCESS_KEY': 'synthetic-system-secret',
+    }.items():
+        monkeypatch.setenv(name, value)
+    recorded_kwargs = {}
+
+    class Client:
+        def get_paginator(self, name):
+            return self
+
+        def paginate(self, **kwargs):
+            assert kwargs['Bucket'] == 'system-bucket'
+            return [{'Contents': [{
+                'Key': KEY, 'Size': 10, 'LastModified': datetime.now(timezone.utc),
+            }]}]
+
+    def fake_client(service_name, **kwargs):
+        recorded_kwargs.update(kwargs)
+        return Client()
+
+    monkeypatch.setattr('boto3.client', fake_client)
+    pool = AsyncMock()
+    pool.fetchrow.return_value = {'workflow_name': 'kb_indexing', 'run_params': {}}
+
+    sensor = _sensor(
+        bucket=bucket, region='ap-southeast-2', endpoint_url='http://stale.invalid',
+        aws_access_key_id='synthetic-stale-access',
+        aws_secret_access_key='synthetic-stale-secret',
+    )
+    result = await sensor.evaluate(_context(pool))
+
+    assert recorded_kwargs['region_name'] == 'eu-west-1'
+    assert recorded_kwargs['endpoint_url'] == 'http://system-storage.invalid'
+    assert recorded_kwargs['aws_access_key_id'] == 'synthetic-system-access'
+    assert recorded_kwargs['aws_secret_access_key'] == 'synthetic-system-secret'
+    assert result.run_requests[0].run_config['uri'] == f's3://system-bucket/{KEY}'
 
 
 @pytest.mark.asyncio

@@ -38,39 +38,31 @@ services:
   psql:
     container_name: marie-psql-server
     init: true
-    image: marie-postgres-documentdb:17-0.103.0-repack-1.5.3
+    image: marieai/postgres-documentdb:17-1.2.0
     build:
       context: ./Dockerfiles/postgres
     pull_policy: build
-    command: >
-      postgres
-      -c max_connections=200
-      -c shared_preload_libraries=pg_stat_statements,pg_cron,pg_documentdb
-      -c pg_stat_statements.track=all
-      -c pg_stat_statements.max=10000
-      -c pg_stat_statements.track_utility=off
-      -c pg_stat_statements.save=on
-      -c enable_partition_pruning=on
-      -c constraint_exclusion=partition
     restart: on-failure
     ports:
       - "5432:5432"
+      - "127.0.0.1:${DOCUMENTDB_PORT:-27017}:27017"
     environment:
-      - POSTGRES_HOST_AUTH_METHOD=trust
-      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=postgres
-      - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-marie}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-${POSTGRES_PASSWORD}}
     volumes:
-      - psql_data:/var/lib/postgresql/data
-      - ${DATA_DIR:-/mnt/data/marie-ai}/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - documentdb_data:/data
+      - ./config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - marie_default
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD", "/usr/local/bin/marie-documentdb-healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 120s
 
   # --------------- MinIO S3 Object Storage ---------------
   s3server:
@@ -187,16 +179,19 @@ services:
 
   # --------------- Database Initialization ---------------
   db-init:
-    image: ghcr.io/ferretdb/postgres-documentdb:17-0.103.0
+    image: marieai/postgres-documentdb:17-1.2.0
     container_name: marie-db-init
     depends_on:
       psql:
         condition: service_healthy
     restart: "no"
+    tmpfs:
+      - /data
     networks:
       - marie_default
     environment:
       - PGUSER=${POSTGRES_USER:-postgres}
+      - PGPASSWORD=${POSTGRES_PASSWORD}
       - PGHOST=psql
       - PGPORT=5432
     entrypoint:
@@ -207,27 +202,27 @@ services:
         echo "Initializing databases..."
 
         # Create gitea database if it does not exist
-        psql -U "$${PGUSER}" -h "$${PGHOST}" -tc \
+        psql -X -U "$${PGUSER}" -h "$${PGHOST}" -tc \
           "SELECT 1 FROM pg_database WHERE datname = 'gitea'" \
           | grep -q 1 || \
-          psql -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE gitea"
+          psql -X -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE gitea"
         echo "Database 'gitea' ready."
 
         # Create litellm database if it does not exist
-        psql -U "$${PGUSER}" -h "$${PGHOST}" -tc \
+        psql -X -U "$${PGUSER}" -h "$${PGHOST}" -tc \
           "SELECT 1 FROM pg_database WHERE datname = 'litellm'" \
           | grep -q 1 || \
-          psql -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE litellm"
+          psql -X -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE litellm"
         echo "Database 'litellm' ready."
 
         # Create mem0 database if it does not exist
-        psql -U "$${PGUSER}" -h "$${PGHOST}" -tc \
+        psql -X -U "$${PGUSER}" -h "$${PGHOST}" -tc \
           "SELECT 1 FROM pg_database WHERE datname = 'mem0'" \
           | grep -q 1 || \
-          psql -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE mem0"
+          psql -X -U "$${PGUSER}" -h "$${PGHOST}" -c "CREATE DATABASE mem0"
 
         # Enable pgvector extension on mem0 database
-        psql -U "$${PGUSER}" -h "$${PGHOST}" -d mem0 -c \
+        psql -X -U "$${PGUSER}" -h "$${PGHOST}" -d mem0 -c \
           "CREATE EXTENSION IF NOT EXISTS vector"
         echo "Database 'mem0' ready (pgvector enabled)."
 
@@ -383,9 +378,12 @@ services:
     init: true
     restart: unless-stopped
     depends_on:
+      psql:
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
     environment:
+      - MONGO_URI=mongodb://${DOCUMENTDB_USERNAME:-marie}:${DOCUMENTDB_PASSWORD:-${POSTGRES_PASSWORD}}@marie-psql-server:27017/hyperdx?authMechanism=SCRAM-SHA-256
       - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
       - HYPERDX_API_KEY=${HYPERDX_API_KEY:-}
       - HYPERDX_APP_PORT=${HYPERDX_APP_PORT:-8080}
@@ -455,7 +453,7 @@ services:
 
   # --------------- Marie-AI Gateway ---------------
   marie-gateway:
-    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-5.1.0-cpu}
+    image: marieai/marie-gateway:${GATEWAY_IMAGE_TAG:-5.2.0-cpu}
     restart: unless-stopped
     container_name: marieai-gateway
     init: true
@@ -521,7 +519,7 @@ services:
       start_period: 60s
     labels:
       - "marie.service=gateway"
-      - "marie.version=${GATEWAY_IMAGE_TAG:-5.1.0-cpu}"
+      - "marie.version=${GATEWAY_IMAGE_TAG:-5.2.0-cpu}"
     profiles:
       - application
 
@@ -531,7 +529,7 @@ services:
 
   # --------------- Marie-AI Extract Executor (GPU) ---------------
   marie-extract-executor:
-    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.1.0-cuda}
+    image: marieai/marie:${EXTRACT_IMAGE_TAG:-5.2.0-cuda}
     restart: unless-stopped
     container_name: marieai-${EXTRACT_STACK_NAME:-dev}-server
     init: true
@@ -575,7 +573,7 @@ services:
         max-file: "10"
     labels:
       - "marie.service=extract-executor"
-      - "marie.version=${EXTRACT_IMAGE_TAG:-5.1.0-cuda}"
+      - "marie.version=${EXTRACT_IMAGE_TAG:-5.2.0-cuda}"
     profiles:
       - gpu
 
@@ -584,7 +582,7 @@ services:
 # =====================================================================
 
 volumes:
-  psql_data:
+  documentdb_data:
     driver: local
   rabbitmq_data:
     driver: local

@@ -41,11 +41,14 @@ Use `m3top` during deployment verification and incident response to answer quest
 Static Linux binaries and SHA-256 files are published in the [Marie-AI GitHub Releases](https://github.com/marieai/marie-ai/releases) repository.
 
 m3top is versioned separately from Marie-AI: `m3top-v0.2.0` is a component
-release, while `v5.1.0` is a Marie-AI core release. The m3top source and release
-workflow live in `marieai/marie-studio`; its `m3top-v*` source tag triggers the
-public binaries and matching distribution tag in Marie-AI. Create release tags
-in Studio using `packages/m3top/releasing.md`, rather than running the Marie-AI
-core `scripts/release.sh` or manually tagging this checkout for m3top.
+release, while `v5.1.0` is a Marie-AI core release. The standalone Rust source
+lives in the top-level `m3top/` directory of this repository. Follow the
+[m3top release runbook](https://github.com/marieai/marie-ai/blob/develop-agents/m3top/releasing.md) to validate and tag a new
+component version in Marie-AI. The `Release m3top` workflow publishes the Linux
+binaries and checksums using the repository's built-in GitHub token.
+
+The published `m3top-v0.2.0` release predates the source move from Studio. Its
+existing tags and release assets remain unchanged.
 
 ### Install from a Marie-AI checkout
 
@@ -80,6 +83,15 @@ install -Dm755 "m3top-${M3TOP_VERSION}-${M3TOP_TARGET}/m3top" "$HOME/.local/bin/
 ```
 
 Add `~/.local/bin` to `PATH` if your shell cannot find `m3top`.
+
+### Build from source
+
+From the Marie-AI repository root:
+
+```bash
+cargo build --manifest-path m3top/Cargo.toml --release --locked
+./m3top/target/release/m3top --version
+```
 
 ## Connect a gateway
 

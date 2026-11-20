@@ -1,9 +1,9 @@
 enabled: true
 
 image:
-  registry: ghcr.io
-  repository: ferretdb/postgres-documentdb
-  tag: "17-0.103.0"
+  registry: docker.io
+  repository: marieai/postgres-documentdb
+  tag: "17-1.2.0"
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -13,6 +13,12 @@ auth:
   password: ""
   database: postgres
   schema: marie_scheduler
+
+documentdb:
+  port: 27017
+  username: marie
+  # Empty uses the shared PostgreSQL password Secret.
+  password: ""
 
 service:
   type: ClusterIP
@@ -34,7 +40,14 @@ initdb:
     initSql: |
       ALTER SYSTEM SET max_connections = 500;
 
+      -- =========================================================
+      -- 0) Namespaces & safety
+      -- =========================================================
       SET search_path = public, marie_scheduler, pg_catalog;
+
+      CREATE EXTENSION IF NOT EXISTS pgstattuple WITH SCHEMA public;
+      CREATE EXTENSION IF NOT EXISTS pg_repack;
+      CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
       DO $$
       BEGIN
@@ -46,25 +59,41 @@ initdb:
           EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron';
         END IF;
 
+
         IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='vector') THEN
           EXECUTE 'CREATE EXTENSION IF NOT EXISTS vector';
         END IF;
 
+
+        -- DocumentDB SQL API used by the native MongoDB gateway.
         IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname='documentdb') THEN
           EXECUTE 'CREATE EXTENSION IF NOT EXISTS documentdb CASCADE';
         END IF;
+
+        CREATE EXTENSION IF NOT EXISTS documentdb_extended_rum;
+
+
       END$$;
 
-      CREATE TABLE IF NOT EXISTS embeddings (
-        id SERIAL PRIMARY KEY,
-        embedding vector,
-        text text,
-        created_at timestamptz DEFAULT now()
-      );
+      -- The upstream image initially registers maintenance jobs on its bootstrap port.
+      UPDATE cron.job
+      SET nodeport = current_setting('port')::integer
+      WHERE database = current_database()
+        AND username = (SELECT pg_get_userbyid(extowner) FROM pg_extension WHERE extname = 'documentdb')
+        AND jobname ~ '^documentdb_'
+        AND nodeport IS DISTINCT FROM current_setting('port')::integer;
 
+      -- =========================================================
+      -- Database creation for dependent services
+      -- =========================================================
+      -- Create databases for services that depend on PostgreSQL
+      -- These are created here to ensure they exist before services start
+
+      -- Gitea database (self-hosted Git service)
       SELECT 'CREATE DATABASE gitea'
       WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'gitea')\gexec
 
+      -- LiteLLM database (if needed in future)
       SELECT 'CREATE DATABASE litellm'
       WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'litellm')\gexec
 

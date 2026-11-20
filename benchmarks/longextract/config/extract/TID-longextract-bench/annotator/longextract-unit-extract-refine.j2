@@ -1,4 +1,20 @@
-Verify the page extraction using only the supplied page evidence.
+Verify the current-page extraction using the supplied source evidence.
+
+Before verifying detail rows, resolve each source title into the separate
+attributes requested by the schema. Join wrapped title lines first. When
+population/group, location/site, and sample count have separate fields, keep
+each attribute in its own field. A population qualifier belongs with the age
+or group text, not with the location. Do not include a location in the
+population field or leave a required title attribute null when it is printed.
+Use the same resolved attributes for every row governed by that title.
+
+Validated attributes from current-page source titles:
+{{ SOURCE_TITLE_ATTRIBUTES_JSON }}
+
+For each matching unit and printed title, use its validated fields for the
+detail rows governed by that title. Keep different titles separate; a later
+title starts a new attribute scope. Do not replace these fields with a merged
+title string or null. Attribute citations supply context, not extra rows.
 
 Previous extraction:
 {{ PREVIOUS_EXTRACTION }}
@@ -15,11 +31,23 @@ Page number:
 Page text:
 {{ PAGE_TEXT }}
 
+Prior source context, for table identity and governing headings only:
+{{ PREVIOUS_PAGE_CONTEXT_JSON }}
+
 Page tables:
 {{ PAGE_TABLES_JSON }}
 
 Document aggregation policy:
 {{ AGGREGATION_POLICY_JSON }}
+
+Validated source headings for the page-opening detail rows:
+{{ INCOMING_SOURCE_HEADINGS_JSON }}
+
+Use each supplied heading for eligible opening rows of its named schema unit
+until the next qualifying current-page heading. These values have exact
+preceding-page source citations. Recover omitted opening rows and resolve their
+null headings from these citations; do not apply one heading to later blocks
+on the page.
 
 Re-read the page before accepting the previous extraction. Preserve valid
 records and their source order, recover missed current-page records and values,
@@ -27,6 +55,19 @@ remove unsupported values, and correct source metadata. Do not return the
 previous extraction unchanged unless every required leaf has been verified.
 
 Leaf verification rules:
+- Resolve the page-opening table and governing heading from prior source
+  context before judging its scope. The nearest preceding printed table title
+  takes precedence over older titles and detector-generated names. Eligible
+  detail rows before the first current-page heading still belong to that
+  preceding block; do not discard them because its heading is on another page.
+- Establish source-block eligibility from the array description before
+  enumerating rows. Similar columns do not make an unrelated source table
+  eligible. Match the printed table's scope, geography, subject, and level of
+  detail. Do not use a detector-generated name as a printed source title.
+- Apply the schema's row exclusions before data-row enumeration. Excluded
+  geography headings, group totals, and summary rows may have numeric cells;
+  those cells do not make them eligible detail rows. An out-of-scope table may
+  still supply explicitly requested document_fields, but must emit no array rows.
 - Check every emitted field against its schema description and the page
   evidence. Use the page image to align labels and value columns, and use
   the prepared page text above to transcribe exact text.
@@ -34,17 +75,35 @@ Leaf verification rules:
   transformations required by that field's description. Preserve every source
   character or delimiter that the description does not explicitly remove or
   reformat. Never borrow a transformation from another field.
-- Re-enumerate every visual row with a value in at least one data column named
-  by the selected array schema. Each must appear exactly once. A bold, indented,
+- Among eligible detail rows, re-enumerate every visual row with a value
+  in at least one data column named by the selected array schema. Each must appear
+  exactly once. A bold, indented,
   or subgroup label with data is still the subject of a data row.
 - Reconcile that enumeration against the supplied page-table row inventory.
   Every inventoried source line with a value in a schema data column must map to
-  one emitted row. Ignore inventoried headers, section-only rows, separators,
-  and blanks rather than treating every inventoried line as data.
-- For a field defined as the nearest preceding section-only or group heading, a
+  one emitted row only when it satisfies that array's scope and row rules.
+  Ignore inventoried headers, excluded aggregate headings, section-only rows,
+  separators, and blanks rather than treating every inventoried line as data.
+- For a field explicitly defined as the nearest preceding section-only heading, a
   line qualifies only when its visual row has no values in any data column.
   Assign headings only after all data rows have been enumerated. A data-bearing
   label must retain the preceding qualifying heading and must not replace it.
+- This value-less restriction is specific to section-only heading fields.
+  A field defined by a governing geography or group heading follows that
+  schema-defined role: an excluded heading can govern detail rows even when it
+  contains numeric group aggregates. Do not emit that heading as a detail row.
+- Use the prior source context to resolve a heading omitted at the current
+  page's start, within the same source table and block. A heading printed at
+  the preceding page's end governs following details even if no detail rows
+  followed it there. Do not carry the last emitted row's label in its place.
+  Scan backward past detail rows in the prior excerpt to find the nearest
+  heading of the category required by the field. It need not be the final
+  source line. A heading in that supplied source is printed evidence; do not
+  leave the field null merely because it is absent from the current image.
+  Current-page headings supersede prior headings in source order; never apply
+  one heading to an entire page containing several different blocks.
+  If a required heading cannot be resolved, retain eligible detail rows with
+  that heading field null rather than omitting the rows.
 - Apply the active qualifying heading to every following data row until another
   qualifying heading appears. When a field description names a heading category,
   use only the printed line or block that satisfies that category. Do not append
@@ -54,8 +113,9 @@ Leaf verification rules:
   Preserve all source delimiters unless that field description explicitly says
   to remove them. Whitespace-only normalization inside a delimiter pair changes
   `( value )` to `(value)`, never to `value`.
-- Re-audit every carried heading field. If its value is copied from a row that
-  has any data-column value, it is not a qualifying heading; restore the nearest
+- For section-only heading fields, re-audit every carried heading field.
+  If its value is copied from a row that has any data-column value, it is not a
+  qualifying heading; restore the nearest
   preceding value-less heading, or emit null on a continuation page so the
   ordered parser can carry it.
 - For a category-qualified heading, stop before an adjacent line whose role is
@@ -65,13 +125,20 @@ Leaf verification rules:
   value in the wrong unit is still incorrect.
 
 Continuation rules:
+- Re-audit the table identity using actual printed titles, identifiers, and the
+  supplied prior source context. A changed whole-table identifier starts a new
+  record with the appropriate schema unit, even if a supplied flag says otherwise.
+  A forward-looking continues footer is not evidence of incoming continuation.
+  This includes "Continues" appended to a printed table title in the footer;
+  compare table numbers before interpreting such a suffix.
 - Audit the supplied continuation flag against any current-of-total marker in
   the page text. For a marker belonging to the table, current 1 means a new
   table page and current greater than 1 means a continuation. Use the marker
   when the supplied flag contradicts it.
 - A table marked as a continuation after that audit is not a new schema unit,
   whether or not headers repeat.
-- A continuation whose owning unit is not explicitly identifiable on this page
+- A continuation whose owning unit is not explicitly identifiable from the
+  printed table identity and supplied source context
   must have unit_name null. Do not classify it by subject matter.
 - Leave an aggregation-policy carry field null when its value is omitted from a
   continuation page.
@@ -79,6 +146,15 @@ Continuation rules:
   assigns the document-wide sequence.
 - Do not merge records or emit rows from previous pages. The ordered parser
   performs cross-page aggregation after this pass.
+- Check document_fields against their own requested scope. A regional subtotal
+  cannot supply a requested national total. Leave unsupported scalars null.
+- Finally audit the first eligible row on the current page, including any
+  rows before the first printed heading. Recover these rows if the previous
+  extraction omitted them. Their labels may come from prior source context,
+  but their detail values must come from this page.
 
 Return JSON matching this intermediate contract exactly:
 {{ OUTPUT_CONTRACT_JSON }}
+
+Always return a top-level object. If no array records are eligible, return
+records as [] and document_fields from the current-page evidence, not a bare list.

@@ -28,31 +28,14 @@ spec:
         - name: postgresql
           image: {{ include "postgresql.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args:
-            - postgres
-            - -c
-            - max_connections=200
-            - -c
-            - shared_preload_libraries=pg_stat_statements,pg_cron,pg_documentdb_core,pg_documentdb
-            - -c
-            - pg_stat_statements.track=all
-            - -c
-            - pg_stat_statements.max=10000
-            - -c
-            - pg_stat_statements.track_utility=off
-            - -c
-            - pg_stat_statements.save=on
-            - -c
-            - enable_partition_pruning=on
-            - -c
-            - constraint_exclusion=partition
           ports:
             - name: postgresql
               containerPort: {{ .Values.service.port }}
               protocol: TCP
+            - name: mongodb
+              containerPort: {{ .Values.documentdb.port }}
+              protocol: TCP
           env:
-            - name: POSTGRES_HOST_AUTH_METHOD
-              value: trust
             - name: POSTGRES_USER
               value: {{ .Values.auth.username | default "postgres" | quote }}
             - name: POSTGRES_PASSWORD
@@ -62,10 +45,19 @@ spec:
                   key: password
             - name: POSTGRES_DB
               value: {{ .Values.auth.database | default "postgres" | quote }}
-            - name: POSTGRES_SHARED_PRELOAD_LIBRARIES
-              value: pg_stat_statements,pg_cron,pg_documentdb_core,pg_documentdb
-            - name: PGDATA
-              value: /var/lib/postgresql/data/pgdata
+            - name: POSTGRESQL_PORT
+              value: {{ .Values.service.port | quote }}
+            - name: DOCUMENTDB_PORT
+              value: {{ .Values.documentdb.port | quote }}
+            - name: DOCUMENTDB_USERNAME
+              value: {{ .Values.documentdb.username | quote }}
+            - name: DOCUMENTDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "postgresql.secretName" . }}
+                  key: documentdb-password
+            - name: DOCUMENTDB_USAGE_TELEMETRY
+              value: "false"
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
@@ -73,26 +65,20 @@ spec:
           startupProbe:
             exec:
               command:
-                - sh
-                - -c
-                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1
+                - /usr/local/bin/marie-documentdb-healthcheck
             initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 30
           livenessProbe:
             exec:
               command:
-                - sh
-                - -c
-                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1
+                - /usr/local/bin/marie-documentdb-healthcheck
             periodSeconds: 20
             timeoutSeconds: 5
           readinessProbe:
             exec:
               command:
-                - sh
-                - -c
-                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h 127.0.0.1
+                - /usr/local/bin/marie-documentdb-healthcheck
             periodSeconds: 10
             timeoutSeconds: 5
           {{- with .Values.primary.resources }}
@@ -101,7 +87,7 @@ spec:
           {{- end }}
           volumeMounts:
             - name: data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /data
             {{- if .Values.initdb.enabled }}
             - name: initdb
               mountPath: /docker-entrypoint-initdb.d/init.sql

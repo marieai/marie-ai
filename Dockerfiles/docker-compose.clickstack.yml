@@ -13,7 +13,7 @@
 # Prerequisites:
 #   - Network: docker network create --driver=bridge marie_default
 #   - ClickHouse: docker-compose.clickhouse.yml must be running
-#   - Storage: docker-compose.storage.yml must be running (marie-psql-server provides FerretDB for HyperDX state)
+#   - Storage: docker-compose.storage.yml must be running (marie-psql-server provides the native DocumentDB gateway for HyperDX state)
 #   - Schema: Apply schema/observability.sql to marie-clickhouse
 #
 # Usage:
@@ -102,29 +102,9 @@ services:
         limits:
           memory: ${LOG_COLLECTOR_MEMORY_LIMIT:-256M}
 
-  # ############### FerretDB - MongoDB Wire Protocol ###############
-  # Translates MongoDB queries to PostgreSQL (required by HyperDX)
-  # Only starts with --profile ui
-  ferretdb:
-    image: ghcr.io/ferretdb/ferretdb:2.7.0
-    container_name: marie-ferretdb
-    restart: unless-stopped
-    profiles:
-      - ui
-    environment:
-      - FERRETDB_POSTGRESQL_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@marie-psql-server:5432/postgres?sslmode=disable
-    networks:
-      - marie_default
-    healthcheck:
-      test: ["CMD", "/ferretdb", "ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
   # ############### HyperDX (Optional) ###############
   # Observability UI connected to external marie-clickhouse
-  # Requires: FerretDB for MongoDB-compatible state storage
+  # Uses the native DocumentDB gateway on marie-psql-server for state storage
   # Only starts with --profile ui
   hyperdx:
     image: docker.hyperdx.io/hyperdx/hyperdx:latest
@@ -139,15 +119,11 @@ services:
     extra_hosts:
       - "marie-studio:host-gateway"
     environment:
-      # FerretDB provides MongoDB wire protocol on port 27017
-      # FerretDB delegates auth to PostgreSQL, only SCRAM-SHA-256 is supported
-      - MONGO_URI=mongodb://${POSTGRES_USER}:${POSTGRES_PASSWORD}@marie-ferretdb:27017/hyperdx?authMechanism=SCRAM-SHA-256
+      # Native DocumentDB gateway credentials are separate from the SQL administrator.
+      - MONGO_URI=mongodb://${DOCUMENTDB_USERNAME:-marie}:${DOCUMENTDB_PASSWORD:-${POSTGRES_PASSWORD}}@marie-psql-server:27017/hyperdx?authMechanism=SCRAM-SHA-256
       - HYPERDX_LOG_LEVEL=${HYPERDX_LOG_LEVEL:-info}
       - HYPERDX_APP_PORT=${HYPERDX_APP_PORT:-8080}
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:${HYPERDX_UI_PORT:-8080}}
-    depends_on:
-      ferretdb:
-        condition: service_healthy
     ports:
       - "${HYPERDX_UI_PORT:-8080}:8080"       # HyperDX Web UI
       - "${HYPERDX_OTEL_PORT:-4327}:4317"     # HyperDX OTLP gRPC (separate from main collector)
@@ -183,11 +159,8 @@ networks:
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml up -d
 #
 # 4. (Optional) Start with HyperDX UI:
-#    FerretDB needs the documentdb extension in marie-psql-server. A fresh database gets it from
-#    config/psql/init.sql; one initialized before that was added needs it created once (idempotent):
-#    docker exec marie-psql-server psql -U postgres -c "CREATE EXTENSION IF NOT EXISTS documentdb CASCADE;"
-#    If that fails with "can only be loaded via shared_preload_libraries", recreate marie-psql-server
-#    from docker-compose.storage.yml first (its command must preload pg_documentdb_core).
+#    Start the fresh PostgreSQL 17 / DocumentDB 1.2 storage service first and wait for it to be healthy.
+#    DOCUMENTDB_USERNAME defaults to marie; DOCUMENTDB_PASSWORD defaults to POSTGRES_PASSWORD.
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml --profile ui up -d
 #
 # 5. (First-time only) Initialize HyperDX admin user:

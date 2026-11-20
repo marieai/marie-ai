@@ -22,7 +22,7 @@ function prompt_for_cluster() {
   ensure_yq_installed
 
   # Extract available clusters
-  available_clusters=$(yq 'keys | .[]' "$inventory_file" | sed 's/^"\(.*\)"$/\1/')
+  available_clusters=$(yq eval 'keys | .[]' "$inventory_file" | sed 's/^"\(.*\)"$/\1/')
 
   if [[ -z "$available_clusters" ]]; then
     echo "❌ No clusters found in inventory: $inventory_file"

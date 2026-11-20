@@ -120,6 +120,7 @@ class VectorStoreExecutor(MarieExecutor):
         table_name: str = "kb_vectors",
         use_gpu: bool = True,
         batch_size: int = 4,
+        schema_name: Optional[str] = None,
         **kwargs,
     ):
         """Initialize VectorStoreExecutor.
@@ -135,6 +136,7 @@ class VectorStoreExecutor(MarieExecutor):
                 GeminiEmbeddings at runtime. Flat embedding arguments remain
                 supported for existing service configs.
             table_name: Name of the vector store table.
+            schema_name: Schema for vectors; defaults to storage.psql.schema or marie_scheduler.
             use_gpu: Whether to use GPU for embeddings.
             batch_size: Batch size for embedding operations.
             **kwargs: Additional MarieExecutor arguments.
@@ -173,6 +175,8 @@ class VectorStoreExecutor(MarieExecutor):
             )
         )
         self._table_name = table_name
+        psql = (kwargs.get("storage") or {}).get("psql") or {}
+        self._schema_name = schema_name or psql.get("schema") or "marie_scheduler"
         self._batch_size = batch_size
 
         # Lazy initialization
@@ -198,6 +202,7 @@ class VectorStoreExecutor(MarieExecutor):
         self._vector_store = PGVectorStore(
             connection_string=self._connection_string,
             table_name=self._table_name,
+            schema_name=self._schema_name,
             embedding_dim=self._embedding_dim,
         )
         await self._vector_store.initialize()
@@ -285,8 +290,7 @@ class VectorStoreExecutor(MarieExecutor):
             )
             if not chunks:
                 raise ValueError(
-                    f"Extraction output for ref_id={ref_id} produced no "
-                    "chunkable text"
+                    f"Extraction output for ref_id={ref_id} produced no chunkable text"
                 )
 
             multimodal = bool(_run_param(parameters, "multimodal", False))

@@ -2000,7 +2000,7 @@ The `values-local.yaml` file is configured to match a typical local Docker envir
 
 | Component | Image | Notes |
 |-----------|-------|-------|
-| PostgreSQL | `ghcr.io/ferretdb/postgres-documentdb:17-0.103.0` | FerretDB with MongoDB compatibility |
+| PostgreSQL | `marieai/postgres-documentdb:17-1.2.0` | PostgreSQL 17 with DocumentDB 1.2 and its native MongoDB gateway; build and publish this repository's image before installation |
 | MinIO | `minio/minio:latest` | S3-compatible storage |
 | RabbitMQ | `rabbitmq:3-management-alpine` | Message queue with management UI |
 | Marie | `marieai/marie:3.0` | Main application |

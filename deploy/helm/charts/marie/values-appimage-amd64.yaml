@@ -21,7 +21,7 @@ executor:
         type: Recreate
       image:
         repository: docker.io/marieai/marie
-        tag: "5.1.0-cuda"
+        tag: "5.2.0-cuda"
         digest: sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
         pullPolicy: IfNotPresent
       resources:
@@ -38,7 +38,7 @@ gitea:
 
 postgresql:
   image:
-    digest: sha256:c2bd151a4ba2227d2f2a4c50406a104def04aef8780495505e6e1fcf6b8b2d8e
+    digest: sha256:e6d41884e1b091dd56546ead502027c660f5c90cdfa8d78c5ec253dd6868c106
 
 rabbitmq:
   image:
@@ -67,9 +67,6 @@ otel-collector:
   image:
     digest: sha256:54312b4534a545f052b5d8232754c5329f7ac8779a4e9af167955d9f2bb657d1
 
-ferretdb:
-  image:
-    digest: sha256:5d8966f7ec1267d35fc61acc56fd9f3f62f22b4baf65ecb6c331b63b86a52aac
 
 hyperdx:
   image:

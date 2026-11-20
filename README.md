@@ -107,7 +107,14 @@ Static Linux binaries are published for x86-64 and ARM64 with SHA-256 checksums.
 m3top --version
 ```
 
-See the [m3top Operational Terminal guide](./docs/docs/getting-started/deployment/m3top.md) for direct release installation, gateway configuration, keyboard controls, metric semantics, security boundaries, and troubleshooting.
+The standalone Rust source, tests, and release instructions live in the top-level [m3top/](./m3top/README.md) directory. Build it from this repository root with:
+
+```bash
+cargo build --manifest-path m3top/Cargo.toml --release --locked
+./m3top/target/release/m3top --version
+```
+
+See the [m3top Operational Terminal guide](./docs/docs/getting-started/deployment/m3top.md) for direct release installation, gateway configuration, keyboard controls, metric semantics, security boundaries, and troubleshooting, and the [m3top release runbook](./m3top/releasing.md) for publishing.
 
 ---
 

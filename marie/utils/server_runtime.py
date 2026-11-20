@@ -26,14 +26,12 @@ _sensor_storage_pool: Optional[Any] = None
 _sensor_worker_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
-def setup_auth(auth_config: Dict[str, Any]) -> None:
+def setup_auth(auth_config: Dict[str, Any] | None) -> None:
     """Set up the auth handler"""
     from marie.auth.api_key_manager import APIKeyManager
+    from marie.auth.boot_check import validate_auth_at_startup
 
-    if auth_config is None or not auth_config:
-        logger.warning("No auth config provided")
-        return
-
+    validate_auth_at_startup(auth_config)
     APIKeyManager.from_config(auth_config)
 
 

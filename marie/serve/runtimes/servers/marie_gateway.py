@@ -18,11 +18,8 @@ from docarray import DocList
 from docarray.documents import TextDoc
 from fastapi import FastAPI, Request
 from grpc_health.v1.health_pb2 import HealthCheckResponse
-from marie.engine.llm_queue.registry import (
-    SnapshotUnavailable,
-    dispatch_runtime_live_state,
-    dispatch_runtime_snapshot,
-)
+from marie.engine.llm_queue.config import resolve_fabric_id
+from marie.engine.llm_queue.registry import SnapshotUnavailable
 from marie.instrumentation import set_span_input
 from marie.registry.model_registry import ModelRegistry
 from opentelemetry import trace
@@ -348,6 +345,10 @@ class MarieServerGateway(CompositeServer):
 
         # OTel metrics for gateway request tracking
         self._gateway_request_seconds = None
+        self._infrastructure_started_at = time.time()
+        self._metric_capacity_pool_id: str | None = None
+        self._slot_observed_at: float | None = None
+        self._slot_observed_at_unix: float | None = None
         # Observable gauge observations — updated by refresh, read by OTel callbacks
         self._slot_observations = {"capacity": {}, "used": {}, "available": {}}
         self._node_observations = {
@@ -357,114 +358,6 @@ class MarieServerGateway(CompositeServer):
             "selection_count": {},
         }
         self._last_capacity_info_log_at = 0.0
-        if self.meter:
-            self._gateway_request_seconds = self.meter.create_histogram(
-                name="marie_gateway_request_seconds",
-                description="Time spent processing gateway API requests",
-                unit="s",
-            )
-            # Slot capacity metrics (observable gauges — callback-based for
-            # compatibility with all OTel exporters including ClickHouse/Prometheus)
-            from opentelemetry.metrics import Observation
-
-            self.meter.create_observable_gauge(
-                name="marie_executor_slot_capacity",
-                callbacks=[
-                    lambda _: [
-                        Observation(v, {"executor": k})
-                        for k, v in self._slot_observations["capacity"].items()
-                    ]
-                ],
-                description="Total slot capacity per executor",
-                unit="{slots}",
-            )
-            self.meter.create_observable_gauge(
-                name="marie_executor_slot_used",
-                callbacks=[
-                    lambda _: [
-                        Observation(v, {"executor": k})
-                        for k, v in self._slot_observations["used"].items()
-                    ]
-                ],
-                description="Currently used slots per executor",
-                unit="{slots}",
-            )
-            self.meter.create_observable_gauge(
-                name="marie_executor_slot_available",
-                callbacks=[
-                    lambda _: [
-                        Observation(v, {"executor": k})
-                        for k, v in self._slot_observations["available"].items()
-                    ]
-                ],
-                description="Available slots per executor",
-                unit="{slots}",
-            )
-            self.meter.create_observable_gauge(
-                name="marie_executor_node_inflight_requests",
-                callbacks=[
-                    lambda _: [
-                        Observation(
-                            value,
-                            {"executor": key[0], "address": key[1]},
-                        )
-                        for key, value in self._node_observations[
-                            "active_requests"
-                        ].items()
-                    ]
-                ],
-                description="In-flight gateway requests per executor node",
-                unit="{requests}",
-            )
-            self.meter.create_observable_gauge(
-                name="marie_executor_node_slot_capacity",
-                callbacks=[
-                    lambda _: [
-                        Observation(
-                            value,
-                            {"executor": key[0], "address": key[1]},
-                        )
-                        for key, value in self._node_observations[
-                            "slot_capacity"
-                        ].items()
-                    ]
-                ],
-                description="Configured slot capacity per executor node",
-                unit="{slots}",
-            )
-            self.meter.create_observable_gauge(
-                name="marie_executor_node_accepting_traffic",
-                callbacks=[
-                    lambda _: [
-                        Observation(
-                            value,
-                            {"executor": key[0], "address": key[1]},
-                        )
-                        for key, value in self._node_observations[
-                            "accepting_traffic"
-                        ].items()
-                    ]
-                ],
-                description="Whether an executor node can receive routed traffic",
-                unit="{node}",
-            )
-            self.meter.create_observable_gauge(
-                name="marie_executor_node_selection_count",
-                callbacks=[
-                    lambda _: [
-                        Observation(
-                            value,
-                            {"executor": key[0], "address": key[1]},
-                        )
-                        for key, value in self._node_observations[
-                            "selection_count"
-                        ].items()
-                    ]
-                ],
-                description="Gateway selections per executor node",
-                unit="{selections}",
-            )
-
         self.desired_map: Dict[tuple[str, str], DesiredDoc] = {}
         self.status_map: Dict[tuple[str, str], StatusDoc] = {}
 
@@ -551,6 +444,7 @@ class MarieServerGateway(CompositeServer):
             logger=self.logger,
             config=llm_queue_config,
         )
+        self._setup_infrastructure_metrics()
         self._last_llm_dispatch_event_fingerprint: Optional[str] = None
         self._last_llm_dispatch_event_monotonic: float = 0.0
         self._background_services_shutdown = False
@@ -658,6 +552,7 @@ class MarieServerGateway(CompositeServer):
                 failure_report_reader=lambda job_id, history_id: (
                     self.job_scheduler.diagnostics.failure_report(job_id, history_id)
                 ),
+                scheduler_debug=lambda: self.job_scheduler.debug_info(),
             )
 
             @app.api_route(
@@ -1181,7 +1076,11 @@ class MarieServerGateway(CompositeServer):
             ):
                 self.logger.info(f"Received request at {datetime.now(timezone.utc)}")
 
-                metric_labels = {"endpoint": "/api/v1/invoke", "status": "success"}
+                metric_labels = {
+                    **self._infrastructure_metric_scope,
+                    "endpoint": "/api/v1/invoke",
+                    "status": "success",
+                }
 
                 with MetricsTimer(self._gateway_request_seconds, metric_labels):
                     # Parse request payload with error handling
@@ -1611,6 +1510,149 @@ class MarieServerGateway(CompositeServer):
 
         marie.helper.extend_rest_interface = _extend_rest_function
 
+    def _setup_infrastructure_metrics(self) -> None:
+        from opentelemetry.metrics import Observation
+
+        from marie.serve.runtimes.gateway.marie.infrastructure_metrics import (
+            configured_metric_fabric,
+            gateway_metric_attributes,
+        )
+
+        queue_config = self.args.get("llm_queue") or {}
+        scheduler_config = queue_config.get("scheduler") or {}
+        fabric = configured_metric_fabric(
+            queue_config.get("fabric_group_id"),
+            (
+                scheduler_config.get("fabric_group_id")
+                if isinstance(scheduler_config, dict)
+                else None
+            ),
+            os.getenv("LLM_QUEUE_FABRIC_GROUP_ID"),
+        )
+        self._infrastructure_metric_scope = gateway_metric_attributes(
+            fabric,
+            self.llm_dispatch_runtime.config.gateway_id,
+            self.gateway_instance_id,
+            self._infrastructure_started_at,
+        )
+        self._infrastructure_metrics_enabled = self.meter is not None
+        if not self.meter:
+            return
+        if not self._infrastructure_metric_scope["fabric_group_id"]:
+            self.logger.warning(
+                "Infrastructure metrics require an explicit, consistent Runtime Fabric identity"
+            )
+        self._gateway_request_seconds = self.meter.create_histogram(
+            name="marie_gateway_request_seconds",
+            description="Time spent processing gateway API requests",
+            unit="s",
+        )
+        self.meter.create_observable_gauge(
+            name="marie_gateway_up",
+            callbacks=[lambda _: [Observation(1, self._infrastructure_metric_scope)]],
+            description="Gateway process reporting infrastructure telemetry",
+            unit="{gateway}",
+        )
+
+        def slots(key: str) -> list[Observation]:
+            if (
+                self._metric_capacity_pool_id is None
+                or self._slot_observed_at is None
+                or self._slot_observed_at_unix is None
+                or time.monotonic() - self._slot_observed_at > 180
+            ):
+                return []
+            return [
+                Observation(
+                    self._slot_observed_at_unix if key == "observed_at" else value,
+                    {
+                        **self._infrastructure_metric_scope,
+                        "executor": executor,
+                        "capacity_pool_id": self._metric_capacity_pool_id,
+                    },
+                )
+                for executor, value in self._slot_observations[
+                    "capacity" if key == "observed_at" else key
+                ].items()
+            ]
+
+        for metric, key, description in (
+            ("capacity", "capacity", "Total slot capacity per executor"),
+            ("used", "used", "Currently used slots per executor"),
+            ("available", "available", "Available slots per executor"),
+            (
+                "observed_at",
+                "observed_at",
+                "Unix time of the last successful capacity snapshot",
+            ),
+        ):
+            self.meter.create_observable_gauge(
+                name=f"marie_executor_slot_{metric}",
+                callbacks=[lambda _, key=key: slots(key)],
+                description=description,
+                unit="s" if key == "observed_at" else "{slots}",
+            )
+
+        def nodes(key: str) -> list[Observation]:
+            return [
+                Observation(
+                    value,
+                    {
+                        **self._infrastructure_metric_scope,
+                        "executor": executor,
+                        "address": address,
+                    },
+                )
+                for (executor, address), value in self._node_observations[key].items()
+            ]
+
+        for metric, key, unit, description in (
+            (
+                "inflight_requests",
+                "active_requests",
+                "{requests}",
+                "In-flight gateway requests per executor node",
+            ),
+            (
+                "slot_capacity",
+                "slot_capacity",
+                "{slots}",
+                "Configured slot capacity per executor node",
+            ),
+            (
+                "accepting_traffic",
+                "accepting_traffic",
+                "{node}",
+                "Whether an executor node can receive routed traffic",
+            ),
+            (
+                "selection_count",
+                "selection_count",
+                "{selections}",
+                "Gateway selections per executor node",
+            ),
+        ):
+            self.meter.create_observable_gauge(
+                name=f"marie_executor_node_{metric}",
+                callbacks=[lambda _, key=key: nodes(key)],
+                description=description,
+                unit=unit,
+            )
+
+    def _refresh_metric_capacity_pool_identity(self) -> None:
+        from marie.serve.runtimes.gateway.marie.infrastructure_metrics import (
+            capacity_pool_identity,
+        )
+
+        if self._metric_capacity_pool_id is not None:
+            return
+        response = self.etcd_client.client.get_response(
+            self.etcd_client._mangle_key("capacity/__telemetry_identity__")
+        )
+        self._metric_capacity_pool_id = capacity_pool_identity(
+            response.header.cluster_id, self.etcd_client.ns
+        )
+
     async def custom_stream(
         self, request_iterator, context=None, *args, **kwargs
     ) -> AsyncIterator["Request"]:
@@ -1626,7 +1668,11 @@ class MarieServerGateway(CompositeServer):
         """
         self.logger.debug(f"intercepting stream : custom_stream")
         async for request in request_iterator:
-            metric_labels = {"endpoint": "grpc", "status": "success"}
+            metric_labels = {
+                **self._infrastructure_metric_scope,
+                "endpoint": "grpc",
+                "status": "success",
+            }
             with MetricsTimer(self._gateway_request_seconds, metric_labels):
                 try:
                     decoded = await self.decode_request(request)
@@ -2077,6 +2123,7 @@ class MarieServerGateway(CompositeServer):
         setup servers inside CompositeServer
         """
         self.logger.debug(f"Setting up MarieGateway server")
+        setup_auth(self.args.get("auth", {}))
         await super().setup_server()
 
         self.grpc_broker = setup_toast_events(self.args.get("toast", {}))
@@ -2090,7 +2137,6 @@ class MarieServerGateway(CompositeServer):
                     break
         storage_config = self.args.get("storage", {})
         setup_storage(storage_config)
-        setup_auth(self.args.get("auth", {}))
         setup_llm_tracking(self.args.get("llm_tracking", {}))
 
         await self.setup_service_discovery(
@@ -2307,6 +2353,12 @@ class MarieServerGateway(CompositeServer):
             else:
                 self.logger.debug(summary)
 
+            if getattr(self, '_infrastructure_metrics_enabled', False):
+                try:
+                    self._refresh_metric_capacity_pool_identity()
+                except (grpc.RpcError, ValueError):
+                    self.logger.debug('Infrastructure capacity identity is unavailable')
+
             # Update observable gauge observations (read by OTel callbacks)
             # rows: [(slot, capacity, target, used, available, holders, notes), ...]
             if self._slot_observations is not None:
@@ -2320,6 +2372,8 @@ class MarieServerGateway(CompositeServer):
                 obs["used"]["_total"] = totals["used"]
                 obs["available"]["_total"] = totals["available"]
                 self._slot_observations = obs
+                self._slot_observed_at_unix = time.time()
+                self._slot_observed_at = time.monotonic()
 
             node_stats = self._node_capacity_snapshot()
             self._set_node_observations(node_stats)
@@ -2439,9 +2493,14 @@ class MarieServerGateway(CompositeServer):
         await self.job_scheduler.start()
 
         await self._start_gateway_background_runtimes()
-        setup_sensor_worker(
-            self.args.get("sensors", {}), self.args.get("kv_store_kwargs", {})
-        )
+
+        sensor_config = dict(self.args.get("sensors") or {})
+        if sensor_config:
+            sensor_config['fabric_group_id'] = resolve_fabric_id(
+                sensor_config.get('fabric_group_id'),
+                self.llm_dispatch_runtime.config.fabric_group_id,
+            )
+        setup_sensor_worker(sensor_config, self.args.get("kv_store_kwargs", {}))
 
         attached = attach_sensor_worker_scheduler(self.job_scheduler)
         self.logger.info(

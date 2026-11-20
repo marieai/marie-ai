@@ -1,5 +1,7 @@
 import json
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -14,7 +16,9 @@ from marie.executor.kb.vector_store_executor import (
     _has_usable_text,
     _run_param,
 )
+from marie.executor.marie_executor import MarieExecutor
 from marie.storage import StorageManager
+from marie.vector_stores.pgvector import PGVectorStore
 
 
 def _make_executor() -> VectorStoreExecutor:
@@ -411,3 +415,29 @@ def test_connection_string_from_storage_absent_or_incomplete():
     assert _connection_string_from_storage({}) is None
     assert _connection_string_from_storage({"psql": {}}) is None
     assert _connection_string_from_storage({"s3": {"enabled": True}}) is None
+
+
+@pytest.mark.parametrize(
+    'storage_schema, explicit_schema, expected',
+    [(None, None, 'marie_scheduler'), ('kb_storage', None, 'kb_storage'), ('kb_storage', 'override', 'override')],
+)
+async def test_vector_executor_passes_the_selected_schema_to_its_store(
+    monkeypatch, storage_schema, explicit_schema, expected
+):
+    monkeypatch.setattr(MarieExecutor, '__init__', lambda self, *args, **kwargs: None)
+    monkeypatch.setitem(
+        sys.modules,
+        'marie.embeddings',
+        SimpleNamespace(setup_embeddings=lambda _config: MagicMock()),
+    )
+    monkeypatch.setattr(PGVectorStore, 'initialize', AsyncMock())
+    executor = VectorStoreExecutor(
+        connection_string='postgresql://fixture.invalid/unused',
+        storage={'psql': {'schema': storage_schema}},
+        schema_name=explicit_schema,
+        use_gpu=False,
+    )
+
+    await executor._ensure_initialized()
+
+    assert executor._vector_store.schema_name == expected

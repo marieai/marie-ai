@@ -12,6 +12,7 @@ import torch.utils.data
 import torchvision.transforms as transforms
 from fairseq import utils
 from fairseq_cli import generate
+from marie.registry.model_registry import ModelRegistry
 from PIL import Image
 from torchvision.transforms import Compose, InterpolationMode
 
@@ -25,7 +26,6 @@ from marie.models.icr.memory_dataset import MemoryDataset
 # required to register text_recognition
 from marie.models.unilm.trocr.task import TextRecognitionTask
 from marie.models.utils import torch_gc
-from marie.registry.model_registry import ModelRegistry
 from marie.utils.utils import batchify
 
 faux_t = TextRecognitionTask
@@ -56,6 +56,18 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
 
     # FileNotFoundError: [Errno 2] No such file or directory when using decoder_pretrained
     # decoder_pretrained = None
+    tokenizer_dir = os.path.join(__model_path__, "assets", "gpt2")
+    tokenizer_overrides = {}
+    if os.path.isdir(tokenizer_dir):
+        for name, filename in (
+            ("gpt2_encoder_json", "encoder.json"),
+            ("gpt2_vocab_bpe", "vocab.bpe"),
+        ):
+            path = os.path.join(tokenizer_dir, filename)
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"TrOCR tokenizer file not found: {path}")
+            tokenizer_overrides[name] = path
+
     model, cfg, inference_task = fairseq.checkpoint_utils.load_model_ensemble_and_task(
         [model_path],
         arg_overrides={
@@ -65,6 +77,7 @@ def init(model_path, beam=5, device="") -> Tuple[Any, Any, Any, Any, Any, Compos
             "fp16": fp16,
             "bp16": bp16,
             "dict_path_or_url": decoder_pretrained,  # We are loading models from a local-path
+            **tokenizer_overrides,
             # "decoder_pretrained": None,
         },
     )

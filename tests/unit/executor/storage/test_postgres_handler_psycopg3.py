@@ -1,6 +1,8 @@
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
+import pytest
 
 from marie.executor.storage.PostgreSQLStorage.postgreshandler import PostgreSQLHandler
 
@@ -87,3 +89,29 @@ def test_add_converts_embedding_to_pgvector_literal():
 
     _query, params = conn.cursor_instance.executemany_calls[0]
     assert params[0][5] == "[1.0,2.0]"
+
+
+@pytest.mark.parametrize('schema', ['marie_scheduler', 'document_storage'])
+def test_metadata_tables_use_the_document_storage_schema(schema):
+    handler = make_handler(FakeConnection())
+    handler.schema = schema
+    handler._execute_sql_gracefully = Mock(return_value=[(2,)])
+
+    handler._create_meta_table()
+    handler._create_model_table()
+    handler._assert_table_schema_version()
+
+    statements = handler._execute_sql_gracefully.call_args_list
+    assert f'CREATE TABLE IF NOT EXISTS "{schema}"."metas"' in statements[0].args[0]
+    assert f'CREATE TABLE IF NOT EXISTS "{schema}"."models"' in statements[1].args[0]
+    assert f'FROM "{schema}"."metas"' in statements[2].args[0]
+    assert statements[2].args[1] == (f'{schema}.documents',)
+
+
+def test_missing_storage_schema_defaults_to_marie_scheduler(monkeypatch):
+    setup = Mock()
+    monkeypatch.setattr(PostgreSQLHandler, '_setup_storage', setup)
+
+    PostgreSQLHandler(schema=None)
+
+    assert setup.call_args.args[0]['schema'] == 'marie_scheduler'

@@ -1,0 +1,76 @@
+---
+sglang_image: lmsysorg/sglang:v0.5.19
+sglang_model_path: nvidia/Qwen3.8-27B-NVFP4
+sglang_served_model_name: Qwen3.8-27B
+sglang_container_prefix: sglang-qwen3-8-27b-nvfp4
+sglang_cache_dir: /var/cache/marie/sglang/huggingface
+sglang_bind_address: 127.0.0.1
+sglang_api_key: ""
+sglang_hf_token: ""
+sglang_state: started
+sglang_wait_for_ready: true
+sglang_ready_timeout: 1800
+
+sglang_replicas:
+  - name: replica-0
+    gpu_id: "0"
+    port: 8000
+  - name: replica-1
+    gpu_id: "1"
+    port: 8001
+  - name: replica-2
+    gpu_id: "2"
+    port: 8002
+  - name: replica-3
+    gpu_id: "3"
+    port: 8003
+
+sglang_context_length: 32768
+sglang_max_total_tokens: 32768
+sglang_max_running_requests: 1
+sglang_max_mamba_cache_size: 4
+sglang_mem_fraction_static: 0.90
+sglang_chunked_prefill_size: 2048
+sglang_extra_args: []
+
+sglang_server_command:
+  - python3
+  - -m
+  - sglang.launch_server
+  - --model-path
+  - "{{ sglang_model_path }}"
+  - --served-model-name
+  - "{{ sglang_served_model_name }}"
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8000"
+  - --tp-size
+  - "1"
+  - --attention-backend
+  - flashinfer
+  - --kv-cache-dtype
+  - fp8_e4m3
+  - --mamba-ssm-dtype
+  - float32
+  - --mamba-radix-cache-strategy
+  - extra_buffer_lazy
+  - --max-mamba-cache-size
+  - "{{ sglang_max_mamba_cache_size | string }}"
+  - --max-running-requests
+  - "{{ sglang_max_running_requests | string }}"
+  - --cuda-graph-max-bs-decode
+  - "{{ sglang_max_running_requests | string }}"
+  - --context-length
+  - "{{ sglang_context_length | string }}"
+  - --max-total-tokens
+  - "{{ sglang_max_total_tokens | string }}"
+  - --mem-fraction-static
+  - "{{ sglang_mem_fraction_static | string }}"
+  - --chunked-prefill-size
+  - "{{ sglang_chunked_prefill_size | string }}"
+  - --reasoning-parser
+  - qwen3
+  - --tool-call-parser
+  - qwen3_coder
+  - --enable-metrics

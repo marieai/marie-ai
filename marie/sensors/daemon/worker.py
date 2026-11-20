@@ -17,6 +17,7 @@ Integration:
 """
 
 import asyncio
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -52,7 +53,18 @@ _ENVELOPE_KEYS = (
     "index_name",
     "source_id",
     "run_params",
+    'storage_ref',
+    'remote_source',
+    'fabric_group_id',
 )
+
+
+def sensor_targets_fabric(sensor: Dict[str, Any], fabric_group_id: str | None) -> bool:
+    config = sensor.get('config') or {}
+    target = config.get('fabric_group_id') or (config.get('storage_ref') or {}).get(
+        'fabric_group_id'
+    )
+    return not target or target == fabric_group_id
 
 
 def build_work_info(
@@ -76,6 +88,8 @@ def build_work_info(
         name=job_name,
         dag_id=dag_id,
         priority=run_request.priority,
+        routing_fabric_group_id=(run_request.run_config or {}).get('fabric_group_id'),
+        routing_request_source='workflow',
         data=build_job_data(run_request, sensor_id, sensor_name),
         state=WorkState.CREATED,
         retry_limit=3,
@@ -157,6 +171,21 @@ class SensorWorker:
 
         # Resources shared across evaluations
         self._resources: Dict[str, Any] = {}
+        queue_config = config.get('llm_queue') or {}
+        scheduler_config = config.get('scheduler') or {}
+        identities = [
+            config.get('fabric_group_id'),
+            queue_config.get('fabric_group_id'),
+            scheduler_config.get('fabric_group_id'),
+            (queue_config.get('scheduler') or {}).get('fabric_group_id'),
+            os.getenv('LLM_QUEUE_FABRIC_GROUP_ID'),
+        ]
+        self._fabric_group_id = None
+        if any(identities):
+            from marie.engine.llm_queue.config import resolve_fabric_id
+
+            self._fabric_group_id = resolve_fabric_id(*identities)
+            self._resources['fabric_group_id'] = self._fabric_group_id
 
         # Statistics
         self._stats = {
@@ -342,7 +371,11 @@ class SensorWorker:
             logger.warning("Storage not initialized, skipping evaluation")
             return
 
-        sensors = await self._storage.get_active_sensors()
+        sensors = [
+            sensor
+            for sensor in await self._storage.get_active_sensors()
+            if sensor_targets_fabric(sensor, self._fabric_group_id)
+        ]
 
         if not sensors:
             logger.debug("No active sensors to evaluate")
@@ -415,6 +448,13 @@ class SensorWorker:
 
             # Evaluate the sensor
             result = await evaluator.evaluate(context)
+            for request in result.run_requests:
+                target = (
+                    sensor.get('config', {}).get('fabric_group_id')
+                    or self._fabric_group_id
+                )
+                if target:
+                    request.run_config['fabric_group_id'] = target
 
             # Process result
             if result.has_run_requests():
@@ -611,6 +651,11 @@ class SensorWorker:
         Attempts to resume job submission for any reserved runs
         that weren't submitted.
         """
+        for request in tick.get('run_requests') or []:
+            if not sensor_targets_fabric(
+                {'config': request.get('run_config') or {}}, self._fabric_group_id
+            ):
+                return
         tick_id = tick.get("id")
         sensor_id = tick.get("sensor_id")
         sensor_name = tick.get("sensor_name", "unknown")

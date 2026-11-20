@@ -61,6 +61,7 @@ def _scheduler_for_start() -> PostgreSQLJobScheduler:
     scheduler.known_queues = set()
     scheduler.repository = SimpleNamespace(
         initialize=AsyncMock(),
+        initialize_cron=AsyncMock(),
         is_installed=AsyncMock(return_value=True),
         validate_durable_scheduler_schema=AsyncMock(),
         get_defined_queues=AsyncMock(return_value=set()),
@@ -122,6 +123,7 @@ async def test_start_tasks_observe_running_after_suspending_dependency_start() -
     await scheduler._start_locked()
     await asyncio.sleep(0)
 
+    scheduler.repository.initialize_cron.assert_awaited_once_with()
     assert observed_running == [True] * 4
     scheduler._semaphore_store.reconcile_all.assert_called_once_with(
         delete_orphan_holders=True,

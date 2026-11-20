@@ -81,3 +81,22 @@ def test_get_client_falls_back_to_credential_chain_without_config_creds(
 
     assert "aws_access_key_id" not in recorded_kwargs
     assert "aws_secret_access_key" not in recorded_kwargs
+
+
+def test_explicit_sensor_does_not_inherit_system_storage_settings(monkeypatch) -> None:
+    monkeypatch.setenv('S3_ENDPOINT_URL', 'http://system-storage.invalid')
+    monkeypatch.setenv('S3_ACCESS_KEY_ID', 'synthetic-system-access')
+    monkeypatch.setenv('S3_SECRET_ACCESS_KEY', 'synthetic-system-secret')
+    sensor = _mk_sensor()
+    recorded_kwargs = {}
+
+    def fake_client(service_name, **kwargs):
+        recorded_kwargs.update(kwargs)
+        return object()
+
+    monkeypatch.setattr('boto3.client', fake_client)
+    sensor._get_client()
+
+    assert 'endpoint_url' not in recorded_kwargs
+    assert 'aws_access_key_id' not in recorded_kwargs
+    assert 'aws_secret_access_key' not in recorded_kwargs

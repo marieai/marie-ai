@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "strict": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "document_title": {
+        "type": "string",
+        "description": "Title printed on the document page"
+      },
+      "line_items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string",
+              "description": "Description of an item on this page"
+            },
+            "amount": {
+              "type": "number",
+              "description": "Printed amount, preserving the decimal value and sign"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}

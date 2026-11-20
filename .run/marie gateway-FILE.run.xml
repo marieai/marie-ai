@@ -6,6 +6,7 @@
     <option name="INTERPRETER_OPTIONS" value="" />
     <option name="PARENT_ENVS" value="true" />
     <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
       <env name="COLUMNS" value="180" />
       <env name="GRPC_TRACE" value="ALL" />
       <env name="GRPC_VERBOSITY" value="DEBUG" />
@@ -21,10 +22,9 @@
       <env name="OPENAI_API_BASE_PR" value="http://192.222.48.192" />
       <env name="OPENAI_API_KEY" value="mock-key" />
       <env name="OPENAI_API_KEY_PR" value="EMPTY" />
-      <env name="PYTHONUNBUFFERED" value="1" />
     </envs>
     <option name="SDK_HOME" value="" />
-    <option name="SDK_NAME" value="Python 3.12 virtualenv at ~/dev/marieai/marie-ai/.venv" />
+    <option name="SDK_NAME" value="Python 3.12 (marie-ai)" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/" />
     <option name="IS_MODULE_SDK" value="false" />
     <option name="ADD_CONTENT_ROOTS" value="true" />

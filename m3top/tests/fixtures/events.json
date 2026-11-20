@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-30T14:30:05Z",
+  "window_seconds": 900,
+  "query_ms": 12.4,
+  "page": {
+    "limit": 25,
+    "has_next": true,
+    "next_before_at": "2026-07-30T14:29:58Z",
+    "next_before_id": "attempt:84f69f16-ceb6-7c75-8000-37d2d2acb56e:activated"
+  },
+  "filters": {
+    "severity": null,
+    "component": null,
+    "search": null
+  },
+  "facets": {
+    "severities": ["bad", "info", "warning"],
+    "components": ["scheduler.attempt", "scheduler.dag", "scheduler.job"]
+  },
+  "items": [
+    {
+      "event_id": "job:1204",
+      "occurred_at": "2026-07-30T14:30:04Z",
+      "severity": "bad",
+      "component": "scheduler.job",
+      "code": "JOB_FAILED",
+      "affected_type": "job",
+      "affected_id": "06a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "job_id": "06a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "dag_id": "92a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "run_attempt_id": "84f69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "executor": "corr_index/rep-2",
+      "gateway_instance_id": "gateway-2",
+      "summary": "Job state changed to failed"
+    },
+    {
+      "event_id": "attempt:84f69f16-ceb6-7c75-8000-37d2d2acb56e:activated",
+      "occurred_at": "2026-07-30T14:29:58Z",
+      "severity": "info",
+      "component": "scheduler.attempt",
+      "code": "ATTEMPT_ACTIVATED",
+      "affected_type": "attempt",
+      "affected_id": "84f69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "job_id": "06a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "dag_id": "92a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "run_attempt_id": "84f69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "executor": "corr_index/rep-2",
+      "gateway_instance_id": "gateway-2",
+      "summary": "Execution attempt activated"
+    }
+  ]
+}

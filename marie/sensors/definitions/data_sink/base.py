@@ -72,7 +72,11 @@ class DataSinkSensor(BaseSensor):
     def __init__(self, sensor_data: Dict[str, Any]):
         super().__init__(sensor_data)
         self.provider = DataSinkProvider(self.get_required_config("provider"))
-        self.bucket: str = self.get_required_config("bucket")
+        self.bucket: str = (
+            self.get_config_value('bucket', '')
+            if self.get_config_value('storage_ref')
+            else self.get_required_config('bucket')
+        )
         self.prefix: str = self.get_config_value("prefix", "")
         self.file_patterns: List[str] = self.get_config_value("file_patterns", [])
         self.max_files_per_tick: int = self.get_config_value("max_files_per_tick", 100)
@@ -150,7 +154,7 @@ class DataSinkSensor(BaseSensor):
         if len(objects) > self.max_files_per_tick:
             objects = objects[: self.max_files_per_tick]
             context.log_info(
-                f"Limited to {self.max_files_per_tick} files " f"(more files available)"
+                f"Limited to {self.max_files_per_tick} files (more files available)"
             )
 
         if not objects:
@@ -232,7 +236,7 @@ class DataSinkSensor(BaseSensor):
         """Validate data sink sensor configuration."""
         from marie.sensors.exceptions import SensorConfigError
 
-        if not self.bucket:
+        if not self.bucket and not self.get_config_value('storage_ref'):
             raise SensorConfigError(
                 "Data sink sensor requires 'bucket' configuration",
                 field="bucket",

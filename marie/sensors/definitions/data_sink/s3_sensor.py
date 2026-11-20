@@ -7,6 +7,7 @@ for new files and triggers jobs to process them.
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from marie.sensors.context import SensorEvaluationContext
 from marie.sensors.definitions.data_sink.base import (
@@ -16,7 +17,8 @@ from marie.sensors.definitions.data_sink.base import (
 )
 from marie.sensors.exceptions import SensorConfigError, SensorEvaluationError
 from marie.sensors.registry import register_sensor
-from marie.sensors.types import SensorType
+from marie.sensors.types import SensorResult, SensorType
+from marie.storage.runtime import resolve_storage_reference_async
 
 
 @register_sensor(SensorType.DATA_SINK, subtype="s3")
@@ -72,6 +74,39 @@ class S3DataSinkSensor(DataSinkSensor):
         self.region: str = self.get_config_value("region", "us-east-1")
         self.endpoint_url: Optional[str] = self.get_config_value("endpoint_url")
         self._client = None
+
+    async def evaluate(self, context: SensorEvaluationContext) -> SensorResult:
+        reference = self.get_config_value('storage_ref')
+        if not reference:
+            return await super().evaluate(context)
+        target = await resolve_storage_reference_async(
+            reference,
+            context.resources.get('postgres_pool'),
+            fabric_group_id=context.resources.get('fabric_group_id'),
+        )
+        self.bucket, self.region, self.endpoint_url = (
+            target.bucket,
+            target.region,
+            target.endpoint_url,
+        )
+        self._client = target.create_client()
+        try:
+            result = await super().evaluate(context)
+            for request in result.run_requests:
+                run_config = request.run_config
+                if reference['source'] == 'connection':
+                    remote_source = {'storage_ref': target.reference}
+                    for key in ('uri', 'files'):
+                        if key in run_config:
+                            remote_source[key] = run_config.pop(key)
+                    run_config['remote_source'] = remote_source
+                else:
+                    run_config['storage_ref'] = target.reference
+                run_config['fabric_group_id'] = reference['fabric_group_id']
+            return result
+        finally:
+            self._client.close()
+            self._client = None
 
     def _get_client(self):
         """Get or create the S3 client."""
@@ -166,7 +201,7 @@ class S3DataSinkSensor(DataSinkSensor):
 
     def get_uri(self, key: str) -> str:
         """Get the S3 URI for a key."""
-        return f"s3://{self.bucket}/{key}"
+        return f"s3://{self.bucket}/{quote(key, safe='/')}"
 
     def validate_config(self) -> None:
         """Validate S3 sensor configuration."""

@@ -12,42 +12,40 @@
 #
 # Access:
 #   - PostgreSQL: localhost:5432
+#   - Native DocumentDB gateway: localhost:27017
 
 services:
   psql:
     container_name: marie-psql-server
     init: true
     shm_size: 1gb
-    image: marie-postgres-documentdb:17-0.103.0-repack-1.5.3
+    image: marieai/postgres-documentdb:17-1.2.0
     build:
       context: ./Dockerfiles/postgres
     pull_policy: build
-    command: >
-      postgres
-      -c max_connections=500
-      -c shared_preload_libraries=pg_stat_statements,pg_cron,pg_documentdb_core,pg_documentdb
-      -c pg_stat_statements.track=all
-      -c pg_stat_statements.max=10000
-      -c pg_stat_statements.track_utility=off
-      -c pg_stat_statements.save=on
-      -c enable_partition_pruning=on
-      -c constraint_exclusion=partition
     restart: on-failure
     ports:
       - "5432:5432"
+      - "127.0.0.1:${DOCUMENTDB_PORT:-27017}:27017"
     environment:
-      - POSTGRES_HOST_AUTH_METHOD=trust
-      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=postgres
-      - POSTGRES_SHARED_PRELOAD_LIBRARIES=pg_stat_statements,pg_cron,pg_documentdb_core,pg_documentdb
+      - DOCUMENTDB_USERNAME=${DOCUMENTDB_USERNAME:-marie}
+      - DOCUMENTDB_PASSWORD=${DOCUMENTDB_PASSWORD:-${POSTGRES_PASSWORD}}
     volumes:
-      - psql_data:/var/lib/postgresql/data
-      - ${DATA_DIR:-/mnt/data/marie-ai}/config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - documentdb_data:/data
+      - ./config/psql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - marie_default
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/marie-documentdb-healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 volumes:
-  psql_data:
+  documentdb_data:
     driver: local
 
 ## ############### Networks ###############

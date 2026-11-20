@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-07-30T14:30:05Z",
+  "query_ms": 18.7,
+  "page": {
+    "limit": 25,
+    "offset": 0,
+    "total": 42,
+    "has_next": true
+  },
+  "filters": {
+    "states": [],
+    "attention": "any",
+    "gateway": null,
+    "executor": null,
+    "search": null,
+    "sort": "attention"
+  },
+  "thresholds": {
+    "active_too_long_seconds": 900,
+    "stale_update_seconds": 600
+  },
+  "facets": {
+    "gateways": ["gateway-1", "gateway-2"],
+    "executors": ["corr_index/rep-2", "extract/rep-1"]
+  },
+  "items": [
+    {
+      "run_attempt_id": "84f69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "job_id": "06a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "queue": "default",
+      "dag_id": "92a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "run_owner": "gateway-2",
+      "scheduler_lease_owner": "scheduler-2",
+      "gateway_instance_id": "gateway-2",
+      "executor": "corr_index/rep-2",
+      "state": "failed",
+      "activated_at": "2026-07-30T14:29:58Z",
+      "terminal_at": "2026-07-30T14:30:04Z",
+      "terminal_status": "failed",
+      "terminal_work_state": "failed",
+      "terminal_source": "executor",
+      "terminal_gateway_instance_id": "gateway-2",
+      "terminal_scheduler_lease_owner": "scheduler-2",
+      "terminal_accepted": true,
+      "recovery_at": null,
+      "recovery_state": null,
+      "created_at": "2026-07-30T14:29:58Z",
+      "updated_at": "2026-07-30T14:30:04Z",
+      "age_seconds": 7.0,
+      "last_update_age_seconds": 1.0,
+      "attention": []
+    },
+    {
+      "run_attempt_id": "71b29c04-ceb6-7c75-8000-37d2d2acb56e",
+      "job_id": "36bd9210-ceb6-7c75-8000-37d2d2acb56e",
+      "queue": "claims",
+      "dag_id": "77a69f16-ceb6-7c75-8000-37d2d2acb56e",
+      "run_owner": "gateway-1",
+      "scheduler_lease_owner": "scheduler-1",
+      "gateway_instance_id": "gateway-1",
+      "executor": "extract/rep-1",
+      "state": "activated",
+      "activated_at": "2026-07-30T14:10:04Z",
+      "terminal_at": null,
+      "terminal_status": null,
+      "terminal_work_state": null,
+      "terminal_source": null,
+      "terminal_gateway_instance_id": null,
+      "terminal_scheduler_lease_owner": null,
+      "terminal_accepted": null,
+      "recovery_at": null,
+      "recovery_state": null,
+      "created_at": "2026-07-30T14:10:04Z",
+      "updated_at": "2026-07-30T14:10:04Z",
+      "age_seconds": 1201.0,
+      "last_update_age_seconds": 1201.0,
+      "attention": [
+        {
+          "code": "ACTIVE_TOO_LONG",
+          "severity": "warning",
+          "message": "attempt exceeded the active threshold",
+          "age_seconds": 1201.0,
+          "count": null
+        }
+      ]
+    }
+  ]
+}

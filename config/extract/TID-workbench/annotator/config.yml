@@ -1,0 +1,22 @@
+layout_id: workbench
+
+annotators:
+  extract:
+    annotator_type: llm
+    mode: per-page
+    model_config:
+      model_name: gpt-4o-mini
+      multimodal: true
+      prompt_path: ./schema-extract.j2
+      system_prompt_text: >
+        Extract only values supported by the supplied document page.
+        Return one JSON object matching the configured output schema.
+      temperature: 0.0
+      top_p: 1.0
+      expect_output: json
+      mini_batch_size: 1
+    parser_name: default
+    validators: []
+
+grounding:
+  key-value: []

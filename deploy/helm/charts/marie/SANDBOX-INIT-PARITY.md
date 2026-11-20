@@ -15,7 +15,7 @@ Tracks every bootstrap step performed by `bootstrap-marie.sh` and
 
 | Init concern | Bootstrap mechanism | Sandbox coverage | Status |
 |---|---|---|---|
-| **PostgreSQL — extensions in `postgres` DB** (`pg_stat_statements`, `pg_cron`, `vector`, `documentdb`) | `config/psql/init.sql` mounted via `docker-entrypoint-initdb.d` | `charts/postgresql/values.yaml` `initdb.scripts.initSql` (identical SQL block) | **Covered** |
+| **PostgreSQL — extensions in `postgres` DB** (`pg_stat_statements`, `pg_cron`, `vector`, `documentdb`, `documentdb_extended_rum`) | `config/psql/init.sql` mounted via `docker-entrypoint-initdb.d` | `charts/postgresql/values.yaml` `initdb.scripts.initSql` (identical SQL block) | **Covered** |
 | **PostgreSQL — `gitea` database** | `config/psql/init.sql` `CREATE DATABASE gitea` | Same `initdb.scripts.initSql` | **Covered** |
 | **PostgreSQL — `litellm` database** | `config/psql/init.sql` `CREATE DATABASE litellm` | Same `initdb.scripts.initSql` | **Covered** |
 | **PostgreSQL — `mem0` database** | `bootstrap-marie.sh` `initialize_databases()` line 1329 | Added to `initdb.scripts.initSql` (this PR) | **Covered** (PR) |
