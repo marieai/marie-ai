@@ -49,14 +49,14 @@ while ! /usr/local/bin/documentdb-healthcheck >/dev/null 2>&1; do
 done
 
 if [[ ! -f "${DATA_PATH:-/data}/.marie-sql-initialized" ]]; then
-    psql --username documentdb --port "$POSTGRESQL_PORT" --dbname postgres \
+    psql -X --username documentdb --port "$POSTGRESQL_PORT" --dbname postgres \
         --set=ON_ERROR_STOP=1 <<'SQL'
 \getenv app_user POSTGRES_USER
 \getenv app_password POSTGRES_PASSWORD
 SELECT format('CREATE ROLE %I LOGIN SUPERUSER PASSWORD %L', :'app_user', :'app_password')
 WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = :'app_user')\gexec
 SQL
-    psql --username "$POSTGRES_USER" --port "$POSTGRESQL_PORT" --dbname postgres \
+    psql -X --username "$POSTGRES_USER" --port "$POSTGRESQL_PORT" --dbname postgres \
         --set=ON_ERROR_STOP=1 --file=/docker-entrypoint-initdb.d/init.sql
     touch "${DATA_PATH:-/data}/.marie-sql-initialized"
 fi

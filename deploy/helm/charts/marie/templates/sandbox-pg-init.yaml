@@ -86,14 +86,14 @@ spec:
               echo "PostgreSQL ready."
 
               # Create mem0 database (idempotent)
-              psql -d postgres -tc \
+              psql -X -d postgres -tc \
                 "SELECT 1 FROM pg_database WHERE datname = 'mem0'" \
                 | grep -q 1 \
-                || psql -d postgres -c "CREATE DATABASE mem0"
+                || psql -X -d postgres -c "CREATE DATABASE mem0"
               echo "Database mem0 ensured."
 
               # Enable pgvector in mem0 (idempotent, requires connection to mem0)
-              psql -d mem0 -c "CREATE EXTENSION IF NOT EXISTS vector"
+              psql -X -d mem0 -c "CREATE EXTENSION IF NOT EXISTS vector"
               echo "pgvector extension enabled in mem0."
           resources:
             requests:

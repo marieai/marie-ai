@@ -38,7 +38,7 @@ gitea:
 
 postgresql:
   image:
-    digest: ""
+    digest: sha256:e6d41884e1b091dd56546ead502027c660f5c90cdfa8d78c5ec253dd6868c106
 
 rabbitmq:
   image:

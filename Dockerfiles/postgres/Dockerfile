@@ -23,6 +23,7 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/marie-documentdb-entrypoint
 COPY --chmod=755 healthcheck.sh /usr/local/bin/marie-documentdb-healthcheck
 
 ENV POSTGRES_USER=postgres POSTGRES_DB=postgres \
+    PGDATABASE=postgres \
     DOCUMENTDB_USERNAME=marie POSTGRESQL_PORT=5432 DOCUMENTDB_PORT=27017 \
     ALLOW_EXTERNAL_CONNECTIONS=true DOCUMENTDB_USAGE_TELEMETRY=false
 

@@ -53,12 +53,11 @@ verify_platform() {
   cat >"$expected" <<'EOF'
 docker.hyperdx.io/hyperdx/hyperdx@sha256:0f88ad527e43f8352f7decc44381c8741c4d5e0122429e95986e14340b98f3dc
 docker.io/clickhouse/clickhouse-server@sha256:c67cd26ea87301f3115e5fa7822905bcbb89cbd81e52bdd1ab7a938d1d5b77d8
+docker.io/coollabsio/minio@sha256:4f75fd76598afa23919555d1363e1fb13c632d9bcd4ce8edcf21d3cca2ed0579
 docker.io/gitea/gitea@sha256:fd917399b5bbde18348d52eda18b3690d75ae1c108630c6dc3a2bf10a3e0c353
 docker.io/library/rabbitmq@sha256:3c498e636fd64462480c5f9ff842eb224ab84160a8ada1ded5375e9569e9230c
 docker.io/marieai/marie-gateway@sha256:e65a1a3b2b7f3e2999229f2b1c898d0b83fa2a1f61d19af642daf4c9d21fa997
 docker.io/marieai/marie@sha256:adce03b5acd2fd3dda279ccee8eaa6e92bca859e1e8ac461839f391271262000
-docker.io/minio/mc@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
-docker.io/minio/minio@sha256:a1a8bd4ac40ad7881a245bab97323e18f971e4d4cba2c2007ec1bedd21cbaba2
 docker.io/otel/opentelemetry-collector-contrib@sha256:54312b4534a545f052b5d8232754c5329f7ac8779a4e9af167955d9f2bb657d1
 docker.io/valkey/valkey@sha256:3fe38a705227d29534a199e876b38d5474dec4d3baca980ac6894df539416562
 quay.io/coreos/etcd@sha256:893a99e64e181fede58348cc824cdfae956ea8b64e0e008f7105e950d9cb3f33
@@ -71,7 +70,7 @@ EOF
     echo "Online AppImage dependencies must pull once and reuse the local cache" >&2
     exit 1
   fi
-  if [[ "$(grep -c '^  progressDeadlineSeconds: 1800$' "$rendered" || true)" -ne 3 ]]; then
+  if [[ "$(grep -c '^  progressDeadlineSeconds: 1800$' "$rendered" || true)" -ne 4 ]]; then
     echo "AppImage Deployments must allow the pinned images 30 minutes to download and start" >&2
     exit 1
   fi

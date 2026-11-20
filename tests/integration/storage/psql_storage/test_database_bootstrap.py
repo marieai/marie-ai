@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -10,6 +12,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+import yaml
 from psycopg import sql
 
 from marie.excepts import BadConfigSource, RuntimeFailToStart
@@ -17,6 +20,215 @@ from marie.logging_core.logger import MarieLogger
 from marie.scheduler.repository.async_job_repository import AsyncJobRepository
 from marie.storage.database.postgres import PostgresqlMixin
 from marie.storage.kv.psql import PostgreSQLKV
+
+
+def test_native_helm_fresh_volume_and_pod_replacement(tmp_path: Path) -> None:
+    if os.environ.get('MARIE_TEST_NATIVE_HELM') != '1':
+        pytest.skip('Set MARIE_TEST_NATIVE_HELM=1 to create an owned k3d cluster')
+
+    root = Path(__file__).resolve().parents[4]
+    chart = root / 'deploy/helm/charts/marie'
+    name = f'marie-smoke-{uuid4().hex[:12]}'
+    kubeconfig = tmp_path / 'kubeconfig'
+    environment = {**os.environ, 'KUBECONFIG': str(kubeconfig)}
+    with socket.socket() as listener:
+        listener.bind(('127.0.0.1', 0))
+        api_port = listener.getsockname()[1]
+    values_path = tmp_path / 'values.yaml'
+    sql_password, document_password = uuid4().hex, uuid4().hex
+    values = {
+        service: {'enabled': False}
+        for service in (
+            'server',
+            'executor',
+            'rabbitmq',
+            'etcd',
+            'valkey',
+            'minio',
+            'clickhouse',
+            'otel-collector',
+            'hyperdx',
+            'gitea',
+        )
+    }
+    values['postgresql'] = {
+        'image': {'pullPolicy': 'Never'},
+        'auth': {'password': sql_password, 'postgresPassword': sql_password},
+        'documentdb': {'username': 'marie_smoke_doc', 'password': document_password},
+        'primary': {'persistence': {'size': '1Gi'}},
+    }
+    values_path.write_text(yaml.safe_dump(values))
+    values_path.chmod(0o600)
+
+    def run(*args: str) -> str:
+        return subprocess.check_output(args, text=True, timeout=300, env=environment)
+
+    def kubectl(*args: str) -> str:
+        return run('kubectl', '--kubeconfig', str(kubeconfig), *args)
+
+    def install(phase: str) -> None:
+        run(
+            'helm',
+            'upgrade',
+            '--install',
+            name,
+            str(chart),
+            '--kubeconfig',
+            str(kubeconfig),
+            '--values',
+            str(chart / 'values-appimage.yaml'),
+            '--values',
+            str(values_path),
+            '--set',
+            f'global.lifecycle.phase={phase}',
+            '--wait',
+            '--wait-for-jobs',
+            '--timeout',
+            '180s',
+        )
+
+    try:
+        run(
+            'k3d',
+            'cluster',
+            'create',
+            name,
+            '--image',
+            'rancher/k3s:v1.36.2-k3s1',
+            '--servers-memory',
+            '4g',
+            '--no-lb',
+            '--api-port',
+            f'127.0.0.1:{api_port}',
+            '--kubeconfig-update-default=false',
+            '--kubeconfig-switch-context=false',
+            '--k3s-arg',
+            '--disable=traefik@server:0',
+            '--timeout',
+            '180s',
+        )
+        kubeconfig.write_text(run('k3d', 'kubeconfig', 'get', name))
+        kubeconfig.chmod(0o600)
+        run(
+            'k3d',
+            'image',
+            'import',
+            'marieai/postgres-documentdb:17-1.2.0',
+            '--cluster',
+            name,
+        )
+        install('infrastructure')
+        install('migrating')
+        pod = f'{name}-postgresql-0'
+        before = json.loads(kubectl('get', 'pod', pod, '-o', 'json'))
+        pvc = f'data-{pod}'
+        volume_uid = json.loads(kubectl('get', 'pvc', pvc, '-o', 'json'))['metadata'][
+            'uid'
+        ]
+        assert before['status']['containerStatuses'][0]['restartCount'] == 0
+        assert kubectl(
+            'exec',
+            pod,
+            '--',
+            'bash',
+            '-ec',
+            'PGPASSWORD="$POSTGRES_PASSWORD" psql -X -h 127.0.0.1 '
+            '-U "$POSTGRES_USER" -Atc '
+            '"SELECT current_database(); SHOW cron.database_name; '
+            'SELECT count(*) >= 0 FROM pg_stat_statements;"',
+        ).strip().splitlines() == ['postgres', 'postgres', 't']
+
+        logical = f'marie_smoke_{uuid4().hex[:16]}'
+        connect = (
+            'const c = new Mongo("mongodb://" + '
+            'encodeURIComponent(process.env.DOCUMENTDB_USERNAME) + ":" + '
+            'encodeURIComponent(process.env.DOCUMENTDB_PASSWORD) + '
+            '"@127.0.0.1:27017/?authMechanism=SCRAM-SHA-256");'
+            f'const d = c.getDB("{logical}");'
+        )
+        kubectl(
+            'exec',
+            pod,
+            '--',
+            'mongosh',
+            '--nodb',
+            '--quiet',
+            '--norc',
+            '--eval',
+            connect + 'd.documents.insertOne({_id:1,amount:7});'
+            'if(d.documents.createIndex({amount:1}) !== "amount_1") throw Error("index failed");',
+        )
+        kubectl('delete', 'pod', pod, '--wait=true', '--timeout=60s')
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            result = subprocess.run(
+                [
+                    'kubectl',
+                    '--kubeconfig',
+                    str(kubeconfig),
+                    'get',
+                    'pod',
+                    pod,
+                    '-o',
+                    'json',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                after = json.loads(result.stdout)
+                if after['metadata']['uid'] != before['metadata']['uid'] and any(
+                    condition['type'] == 'Ready' and condition['status'] == 'True'
+                    for condition in after.get('status', {}).get('conditions', [])
+                ):
+                    break
+            time.sleep(1)
+        else:
+            pytest.fail('Owned PostgreSQL pod did not recover after replacement')
+        assert (
+            json.loads(kubectl('get', 'pvc', pvc, '-o', 'json'))['metadata']['uid']
+            == volume_uid
+        )
+        kubectl(
+            'exec',
+            pod,
+            '--',
+            'mongosh',
+            '--nodb',
+            '--quiet',
+            '--norc',
+            '--eval',
+            connect
+            + 'if(d.documents.countDocuments({amount:7}) !== 1) throw Error("data missing");'
+            'if(d.documents.createIndex({other:1}) !== "other_1") throw Error("index after replacement failed");'
+            'if(d.documents.getIndexes().length !== 3) throw Error("indexes missing");',
+        )
+    except BaseException:
+        if kubeconfig.exists():
+            subprocess.run(
+                ['kubectl', '--kubeconfig', str(kubeconfig), 'get', 'pods,pvc,events'],
+                timeout=30,
+            )
+            subprocess.run(
+                [
+                    'kubectl',
+                    '--kubeconfig',
+                    str(kubeconfig),
+                    'logs',
+                    f'{name}-postgresql-0',
+                    '--tail=60',
+                ],
+                timeout=30,
+            )
+        raise
+    finally:
+        subprocess.run(
+            ['k3d', 'cluster', 'delete', name],
+            check=True,
+            timeout=120,
+            env=environment,
+        )
 
 
 @pytest.fixture(scope='module', params=['baked', 'empty'])
@@ -278,6 +490,65 @@ async def test_native_fresh_install_sql_wire_indexes_and_restart(
         'if(d.documents.createIndex({other:1}) !== "other_1") throw Error("index build failed after restart");'
         'if(d.documents.getIndexes().length !== 3) throw Error("index missing after restart");'
     )
+
+
+def test_allinone_database_init_uses_postgres_and_is_idempotent(native_server) -> None:
+    container, config, _, _ = native_server
+    params = config()
+    root = Path(__file__).resolve().parents[4]
+    compose = yaml.safe_load(
+        (root / 'Dockerfiles/docker-compose.allinone.yml').read_text()
+    )
+    script = compose['services']['db-init']['entrypoint'][-1].replace('$$', '$')
+    environment = {
+        **os.environ,
+        'PGUSER': params['username'],
+        'PGPASSWORD': params['password'],
+    }
+    for _ in range(2):
+        subprocess.run(
+            [
+                'docker',
+                'run',
+                '--rm',
+                '--pull',
+                'never',
+                '--name',
+                f'marie_smoke_dbinit_{uuid4().hex[:12]}',
+                '--network',
+                f'container:{container}',
+                '--tmpfs',
+                '/data',
+                '--env',
+                'PGUSER',
+                '--env',
+                'PGPASSWORD',
+                '--env',
+                'PGHOST=127.0.0.1',
+                '--env',
+                'PGPORT=5432',
+                '--entrypoint',
+                '/bin/sh',
+                os.environ.get(
+                    'MARIE_TEST_NATIVE_IMAGE', 'marieai/postgres-documentdb:17-1.2.0'
+                ),
+                '-c',
+                script,
+            ],
+            env=environment,
+            check=True,
+            timeout=30,
+        )
+    with psycopg.connect(
+        host=params['hostname'],
+        port=params['port'],
+        user=params['username'],
+        password=params['password'],
+        dbname='mem0',
+    ) as connection:
+        assert connection.execute(
+            "SELECT extname FROM pg_extension WHERE extname='vector'"
+        ).fetchone() == ('vector',)
 
 
 @pytest.fixture(scope='module')

@@ -38,8 +38,8 @@ spec:
                 sleep 2
               done
               {{- range .Values.databaseInit.databases }}
-              if [ "$(psql -h {{ include "postgresql.fullname" $ }} -U "$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '{{ . }}'")" != "1" ]; then
-                psql -h {{ include "postgresql.fullname" $ }} -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE "{{ . }}"'
+              if [ "$(psql -X -h {{ include "postgresql.fullname" $ }} -U "$POSTGRES_USER" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '{{ . }}'")" != "1" ]; then
+                psql -X -h {{ include "postgresql.fullname" $ }} -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE "{{ . }}"'
               fi
               {{- end }}
           env:
