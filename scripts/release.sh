@@ -454,7 +454,11 @@ show_plan() {
     printf '\nRelease plan\n'
     printf '  Version:  %s -> %s\n' "$current" "$target"
     if [[ "$current" == "$target" ]]; then
-        printf '  Commit:   reuse current HEAD\n'
+        if [[ "$SKIP_BUILD" == false && ( "$PROFILE" == "all" || "$PROFILE" == "marie-cuda" ) ]]; then
+            printf '  Commit:   reuse HEAD if uv.lock is unchanged; otherwise commit the refreshed lock\n'
+        else
+            printf '  Commit:   reuse current HEAD\n'
+        fi
     else
         printf '  Commit:   chore(release): release %s\n' "$target"
     fi
@@ -531,22 +535,28 @@ commit_version() {
     local target=$2
     local -a release_files
 
-    if [[ "$current" == "$target" ]]; then
-        "$UPDATE_VERSION" --check
-        log "Release files already use ${target}; reusing current HEAD"
-        return
+    if [[ "$current" != "$target" ]]; then
+        "$UPDATE_VERSION" "$target"
     fi
-
-    "$UPDATE_VERSION" "$target"
     "$UPDATE_VERSION" --check
     mapfile -t release_files < <("$UPDATE_VERSION" --files)
+    if [[ "$SKIP_BUILD" == false && ( "$PROFILE" == "all" || "$PROFILE" == "marie-cuda" ) ]]; then
+        log "Synchronizing uv.lock before the release commit"
+        uv lock --no-cache || die "failed to synchronize uv.lock; no release commit was created"
+        release_files+=(uv.lock)
+    fi
     git add -- "${release_files[@]}"
 
     git diff --cached --check
-    git diff --cached --quiet && die "version update produced no staged changes"
     git diff --quiet || die "version update left unexpected unstaged changes"
     [[ -z "$(git ls-files --others --exclude-standard)" ]] || \
         die "version update left unexpected untracked files"
+
+    if git diff --cached --quiet; then
+        [[ "$current" == "$target" ]] || die "version update produced no staged changes"
+        log "Release files and dependency lock are unchanged; reusing current HEAD"
+        return
+    fi
 
     git commit -m "chore(release): release ${target}"
 }
