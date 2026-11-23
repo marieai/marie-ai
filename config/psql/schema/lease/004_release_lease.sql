@@ -1,4 +1,4 @@
-CREATE OR REPLACE FUNCTION {schema}.release_lease(_ids uuid[])
+CREATE OR REPLACE FUNCTION {schema}.release_lease(_ids uuid[], _owner text)
 RETURNS uuid[] LANGUAGE sql AS
 $$
   WITH upd AS (
@@ -7,6 +7,7 @@ $$
         lease_expires_at = NULL
     FROM unnest(_ids) u(id)
     WHERE j.id = u.id
+      AND j.lease_owner = _owner
       AND j.lease_expires_at IS NOT NULL
     RETURNING j.id
   )

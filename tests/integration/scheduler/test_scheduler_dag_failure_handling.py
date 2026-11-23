@@ -49,7 +49,7 @@ class RecordingRepository:
         self.resolve_calls: list[str] = []
         self.cancel_calls: list[dict] = []
         self.mark_active_calls: list[str] = []
-        self.released_lease_calls: list[list[str]] = []
+        self.released_lease_calls: list[tuple[list[str], str]] = []
 
     async def mark_dag_as_active(self, dag_id: str, *, subscribed_queues) -> bool:
         self.mark_active_calls.append(dag_id)
@@ -80,8 +80,8 @@ class RecordingRepository:
     async def get_dag_by_id(self, _dag_id: str):
         return None
 
-    async def release_lease(self, job_ids: list[str]) -> set[str]:
-        self.released_lease_calls.append(job_ids)
+    async def release_lease(self, job_ids: list[str], owner: str) -> set[str]:
+        self.released_lease_calls.append((job_ids, owner))
         return set(job_ids)
 
 
@@ -457,7 +457,7 @@ async def test_control_flow_node_requeues_when_active_dag_limit_is_full():
     await scheduler.control_flow_service.process_node(work_item)
 
     assert repository.mark_active_calls == []
-    assert repository.released_lease_calls == [[work_item.id]]
+    assert repository.released_lease_calls == [([work_item.id], scheduler.lease_owner)]
     assert released_local == [work_item.id]
     assert work_item.dag_id not in scheduler.active_dags
 

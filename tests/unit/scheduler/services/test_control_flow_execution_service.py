@@ -105,7 +105,9 @@ async def test_process_node_returns_cleaned_up_when_dag_is_missing() -> None:
     outcome = await service.process_node(work_item('noop'))
 
     assert outcome is ControlFlowExecutionOutcome.CLEANED_UP
-    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+    service.repository.release_lease.assert_awaited_once_with(
+        job_ids=['noop'], owner='scheduler-1'
+    )
     service.frontier.release_lease_local.assert_awaited_once_with('noop')
 
 
@@ -118,7 +120,9 @@ async def test_process_node_returns_admission_refused() -> None:
     outcome = await service.process_node(work_item('noop'))
 
     assert outcome is ControlFlowExecutionOutcome.ADMISSION_REFUSED
-    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+    service.repository.release_lease.assert_awaited_once_with(
+        job_ids=['noop'], owner='scheduler-1'
+    )
 
 
 async def test_process_node_returns_activation_refused() -> None:
@@ -129,7 +133,9 @@ async def test_process_node_returns_activation_refused() -> None:
     outcome = await service.process_node(work_item('noop'))
 
     assert outcome is ControlFlowExecutionOutcome.ACTIVATION_REFUSED
-    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+    service.repository.release_lease.assert_awaited_once_with(
+        job_ids=['noop'], owner='scheduler-1'
+    )
 
 
 async def test_process_node_returns_completion_rejected() -> None:
@@ -154,7 +160,9 @@ async def test_process_node_returns_failed_after_handled_error() -> None:
     outcome = await service.process_node(work_item('noop'))
 
     assert outcome is ControlFlowExecutionOutcome.FAILED
-    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+    service.repository.release_lease.assert_awaited_once_with(
+        job_ids=['noop'], owner='scheduler-1'
+    )
 
 
 async def test_process_node_preserves_progress_when_followup_fails() -> None:
@@ -173,7 +181,9 @@ async def test_process_node_preserves_progress_when_followup_fails() -> None:
 
     assert outcome is ControlFlowExecutionOutcome.COMPLETED_WITH_ERROR
     assert outcome.made_progress is True
-    service.repository.release_lease.assert_awaited_once_with(job_ids=['noop'])
+    service.repository.release_lease.assert_awaited_once_with(
+        job_ids=['noop'], owner='scheduler-1'
+    )
 
 
 async def test_process_nodes_batches_simple_node_persistence() -> None:

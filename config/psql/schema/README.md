@@ -122,14 +122,18 @@ parallel `schema-v*` or environment-specific schema directories.
 
 ## Canonical Function Definitions
 
-Deployed SQL history is immutable. When a function must replace a definition
-from an earlier artifact, add a new forward SQL file instead of editing the old
-file. Schema version 76 gives each logical function its own final artifact:
+Maintain the `activate_from_lease` overloads together in
+[`lease/002_activate_from_lease.sql`](lease/002_activate_from_lease.sql).
+The five-argument executor call supplies attempt IDs from its ticket reservations.
+The four-argument control-flow call generates attempt IDs and calls the same
+implementation. Both return the job ID and attempt ID for each successful
+activation. Fresh installs and the Helm bundle use this definition.
+
+Other functions consolidated at schema version 76 include:
 
 - `lease/012_job_update_trigger_function.sql`
 - `lease/013_resolve_dag_state.sql`
 - `lease/014_release_expired_leases.sql`
-- `lease/015_activate_from_lease.sql` for the overload family
 - `lease/016_hydrate_frontier_jobs.sql`
 - `lease/017_admission_candidate_dags.sql`
 
@@ -137,25 +141,7 @@ Schema version 96 supersedes admission with `lease/018_queue_scoped_admission.sq
 and expired-run claims with `lease/019_queue_scoped_run_recovery.sql`; these
 forward files retire the corresponding unscoped overloads.
 
-Tests and reviews should use those files as the current contracts. The earlier
-definitions remain only because existing deployments may already have applied
-them.
-
-### `activate_from_lease()` compatibility
-
-| Signature | Status | Removal date |
-|-----------|--------|--------------|
-| `(uuid[], uuid[], text, interval, text)` returning `(job_id, run_attempt_id)` | Current regular-dispatch contract; introduced by build `4ed95423` | No removal planned |
-| `(uuid[], text, interval, text)` returning `(job_id, run_attempt_id)` | Current control-flow contract and rolling-upgrade contract for builds containing `c4048865` or a descendant | No removal planned while control-flow activation uses it |
-| `(uuid[], text, interval)` returning `uuid[]` | Legacy rolling-upgrade contract for builds older than `c4048865` | Fleet convergence date on builds containing `c4048865`, plus 30 days |
-
-The package version remained `5.0.0` across these changes, so it is not a safe
-retirement signal. Inventory every running gateway's `git-commit` value from
-its `/status` response. Record the last-old-gateway removal date during the
-rollout; the three-argument overload may be removed by a later forward SQL file
-only after the resulting 30-day rollback window has expired. If any gateway
-reports `unknown`, retain the overload. An exact calendar date is intentionally
-unset until the fleet inventory supplies the convergence date.
+Tests and reviews should use the active definitions listed above.
 
 ## Testing Changes
 

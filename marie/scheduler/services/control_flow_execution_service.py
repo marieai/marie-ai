@@ -745,7 +745,7 @@ class ControlFlowExecutionService:
         return False
 
     async def _release_lease(self, job_id: str) -> None:
-        await self.repository.release_lease(job_ids=[job_id])
+        await self.repository.release_lease(job_ids=[job_id], owner=self._lease_owner)
         await self.frontier.release_lease_local(job_id)
 
     async def _evaluate_and_mark_branch_paths(

@@ -2027,12 +2027,12 @@ class AsyncJobRepository:
             rows = await conn.fetch(query, *params)
         return {str(row[0]) for row in rows if row[0] is not None}
 
-    async def release_lease(self, job_ids: List[str]) -> set[str]:
+    async def release_lease(self, job_ids: List[str], owner: str) -> set[str]:
         if not job_ids:
             return set()
-        query = f"SELECT unnest({DEFAULT_SCHEMA}.release_lease(%s::uuid[]))"
+        query = f"SELECT unnest({DEFAULT_SCHEMA}.release_lease(%s::uuid[], %s))"
         async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query, job_ids)
+            rows = await conn.fetch(query, job_ids, owner)
         return {str(row[0]) for row in rows}
 
     async def defer_leased_job(
@@ -4099,6 +4099,14 @@ class AsyncJobRepository:
             ):
                 raise RuntimeFailToStart(
                     f"{schema}.activate_from_lease is not attempt-audited"
+                )
+            if (
+                "FOR NO KEY UPDATE OF j" not in activation
+                or "clock_timestamp()" not in activation
+            ):
+                raise RuntimeFailToStart(
+                    f"{schema}.activate_from_lease must recheck lease eligibility after locking "
+                    "(lease/002_activate_from_lease.sql)"
                 )
             extension = await conn.fetchval(
                 """

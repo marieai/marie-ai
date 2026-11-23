@@ -1168,19 +1168,16 @@ async def test_complete_job_attempts_fences_batch_by_attempt() -> None:
 def test_activate_from_lease_sql_owns_attempt_audit_atomically() -> None:
     project_root = Path(__file__).parents[4]
     sql = (
-        project_root / "config/psql/schema/lease/015_activate_from_lease.sql"
+        project_root / "config/psql/schema/lease/002_activate_from_lease.sql"
     ).read_text()
-
-    functions = sql.split("CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(")[
-        1:
-    ]
-    assert len(functions) == 3
-    core, table_wrapper, array_wrapper = functions
+    _, core, table_wrapper = sql.split(
+        "CREATE OR REPLACE FUNCTION {schema}.activate_from_lease("
+    )
     assert "_run_attempt_ids     uuid[]" in core
     assert "_gateway_instance_id text" in core
     assert "RETURNS TABLE(job_id uuid, run_attempt_id uuid)" in core
     assert "UPDATE {schema}.job" in core
-    assert "run_attempt_id        = ok.run_attempt_id" in core
+    assert "run_attempt_id        = locked.run_attempt_id" in core
     assert "INSERT INTO {schema}.job_attempt" in core
     assert "split_part(j.data #>> '{metadata,on}', '://', 1)" in core
     assert "executor = COALESCE(EXCLUDED.executor, existing.executor)" in core
@@ -1188,8 +1185,6 @@ def test_activate_from_lease_sql_owns_attempt_audit_atomically() -> None:
     assert "JOIN audited" in core
     assert "gen_random_uuid()" in table_wrapper
     assert "FROM {schema}.activate_from_lease(" in table_wrapper
-    assert "RETURNS uuid[]" in array_wrapper
-    assert "FROM {schema}.activate_from_lease(" in array_wrapper
 
 
 def test_run_lease_renewal_and_recovery_share_attempt_fence() -> None:
@@ -1233,7 +1228,8 @@ async def test_schema_validation_requires_atomic_activation_contract() -> None:
             (
                 "run_attempt_id lease_owner = _run_owner INSERT INTO "
                 "marie_scheduler.job_attempt _gateway_instance_id "
-                "_run_attempt_ids"
+                "_run_attempt_ids FOR NO KEY UPDATE OF j "
+                "LEAST(j.lease_expires_at, locked.lease_expires_at) > clock_timestamp()"
             ),
             "_run_attempt_id",
         ],

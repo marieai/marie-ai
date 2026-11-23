@@ -3154,9 +3154,7 @@ class PostgreSQLJobScheduler(JobScheduler):
     async def _activate_from_lease_db(
         self, ids: list[str], run_attempt_ids: dict[str, str]
     ) -> dict[str, str]:
-        """
-        Promote leased jobs to active in DB once dispatch is acknowledged.
-        """
+        """Activate reserved jobs and record their attempts before dispatch."""
         if not ids:
             return {}
 
@@ -3191,7 +3189,7 @@ class PostgreSQLJobScheduler(JobScheduler):
         if not ids:
             return set()
 
-        return await self.repository.release_lease(job_ids=ids)
+        return await self.repository.release_lease(job_ids=ids, owner=self.lease_owner)
 
     async def _reserve_semaphore_slots_serial(
         self,

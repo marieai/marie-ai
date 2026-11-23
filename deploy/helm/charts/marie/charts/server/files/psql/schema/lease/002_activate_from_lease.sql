@@ -12,26 +12,33 @@ $$
     FROM unnest(_ids, _run_attempt_ids) AS input(job_id, run_attempt_id)
     WHERE cardinality(_ids) = cardinality(_run_attempt_ids)
       AND input.run_attempt_id IS NOT NULL
-  ), ok AS (
-    SELECT j.id, requested.run_attempt_id
+  ), locked AS MATERIALIZED (
+    SELECT j.id, j.lease_expires_at, requested.run_attempt_id
     FROM {schema}.job j
     JOIN requested ON requested.job_id = j.id
-    WHERE j.lease_expires_at IS NOT NULL
-      AND j.lease_expires_at > now()
+    WHERE j.state IN ('created', 'retry')
       AND j.lease_owner = _run_owner
+      AND j.lease_expires_at > statement_timestamp()
+    ORDER BY j.id
+    FOR NO KEY UPDATE OF j
   ), activated AS (
     UPDATE {schema}.job j
     SET state                 = 'active',
         retry_count           = CASE WHEN j.started_on IS NOT NULL THEN j.retry_count + 1 ELSE j.retry_count END,
         started_on            = COALESCE(j.started_on, now()),
         run_owner             = _run_owner,
-        run_attempt_id        = ok.run_attempt_id,
+        run_attempt_id        = locked.run_attempt_id,
         run_lease_expires_at  = now() + _run_ttl,
-        -- clear the acquisition lease
         lease_owner           = NULL,
         lease_expires_at      = NULL
-    FROM ok
-    WHERE j.id = ok.id
+    FROM locked
+    WHERE j.id = locked.id
+      AND j.state IN ('created', 'retry')
+      AND j.lease_owner = _run_owner
+      AND j.lease_expires_at IS NOT NULL
+      -- Check the clock when the target and the locked row are joined. A batch
+      -- can wait on a lock even when no other transaction changes the row.
+      AND LEAST(j.lease_expires_at, locked.lease_expires_at) > clock_timestamp()
     RETURNING j.id AS job_id,
               j.name AS job_name,
               j.dag_id,
@@ -88,7 +95,7 @@ $$
     ON audited.audited_attempt_id = activated.run_attempt_id;
 $$;
 
--- Preserve DB-generated attempts for control-flow nodes and rolling gateways.
+-- Control-flow jobs generate their attempt IDs here because they do not reserve tickets.
 CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(
   _ids                 uuid[],
   _run_owner           text,
@@ -108,22 +115,5 @@ $$
     _run_owner,
     _run_ttl,
     _gateway_instance_id
-  ) AS activated;
-$$;
-
--- Preserve the uuid[] result expected by gateways during rolling upgrades.
-CREATE OR REPLACE FUNCTION {schema}.activate_from_lease(
-  _ids       uuid[],
-  _run_owner text,
-  _run_ttl   interval DEFAULT '5 minutes'
-)
-RETURNS uuid[] LANGUAGE sql AS
-$$
-  SELECT COALESCE(array_agg(activated.job_id), '{}')
-  FROM {schema}.activate_from_lease(
-    _ids,
-    _run_owner,
-    _run_ttl,
-    NULL
   ) AS activated;
 $$;
