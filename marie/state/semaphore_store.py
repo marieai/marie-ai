@@ -22,6 +22,13 @@ class CapacityDoc:
     owner: Optional[str] = None
     source: Optional[str] = None
     updated_at: str = ""
+    requested_limit: Optional[int] = None
+
+    @property
+    def admission_limit(self) -> int:
+        if self.requested_limit is None:
+            return self.limit
+        return min(self.limit, self.requested_limit)
 
     @classmethod
     def from_json(cls, raw: bytes | str) -> "CapacityDoc":
@@ -30,7 +37,14 @@ class CapacityDoc:
         owner = data.get("owner")
         source = data.get("source")
         updated_at = data.get("updated_at") or _now_iso()
-        return cls(limit=limit, owner=owner, source=source, updated_at=str(updated_at))
+        requested = data.get("requested_limit")
+        return cls(
+            limit=limit,
+            owner=owner,
+            source=source,
+            updated_at=str(updated_at),
+            requested_limit=int(requested) if requested is not None else None,
+        )
 
 
 @dataclass
@@ -183,7 +197,7 @@ class SemaphoreStore(BaseStore):
         owner: Optional[str] = "capacity-manager",
         source: Optional[str] = "auto",
     ) -> int:
-        """Set capacity, never writing a limit below the concurrent used count.
+        """Persist the admission target while optionally clamping limit to usage.
 
         Invariant: every WRITE this method performs is committed in a txn that
         proves the count key is unchanged since `target` was computed from it.
@@ -216,13 +230,17 @@ class SemaphoreStore(BaseStore):
             val_bytes, meta = self._get_capacity_raw(slot_type)
             if val_bytes is not None:
                 cur = CapacityDoc.from_json(val_bytes)
-                if int(cur.limit) == int(target):
+                if cur.limit == target and cur.requested_limit == requested:
                     # nothing to write; avoids one etcd revision per slot per
                     # gateway capacity pass
                     return cur.limit
 
             doc = CapacityDoc(
-                limit=target, owner=owner, source=source, updated_at=_now_iso()
+                limit=target,
+                owner=owner,
+                source=source,
+                updated_at=_now_iso(),
+                requested_limit=requested,
             )
             t = self.etcd.txn()
             if val_bytes is None:
@@ -242,13 +260,16 @@ class SemaphoreStore(BaseStore):
                 return target
             # capacity or count moved underneath us — recompute and retry
 
-        # retries exhausted under contention: only report a value that still
-        # honors the invariant; otherwise fail loudly (caller
-        # slot_capacity_manager._safe_set_capacity catches and falls back)
+        # Only report success if both the target and the usage clamp persisted.
         latest_used = max(0, int(self.read_count(slot_type)))
-        latest = self.get_capacity(slot_type)
-        if latest is not None and int(latest) >= latest_used:
-            return int(latest)
+        latest_raw, _meta = self._get_capacity_raw(slot_type)
+        latest = CapacityDoc.from_json(latest_raw) if latest_raw is not None else None
+        if (
+            latest is not None
+            and latest.requested_limit == requested
+            and (not never_below_used or latest.limit >= latest_used)
+        ):
+            return latest.limit
         raise RuntimeError(
             f"Failed to safely set capacity for {slot_type}: "
             f"requested={requested}, latest={latest}, used={latest_used}"
@@ -261,8 +282,12 @@ class SemaphoreStore(BaseStore):
         return val if val is not None else 0
 
     def available_slot_count(self, slot_type: str) -> int:
-        cap = self.get_capacity(slot_type)
-        if cap is None or cap < 0:
+        raw = self._get_raw(_cap_key(slot_type))
+        if not raw:
+            return 0
+        try:
+            cap = CapacityDoc.from_json(raw).admission_limit
+        except (ValueError, TypeError, AttributeError, OverflowError):
             return 0
         used = self.read_count(slot_type)
         return max(0, cap - used)
@@ -308,7 +333,7 @@ class SemaphoreStore(BaseStore):
         if not cap_raw:
             return False
         try:
-            limit = CapacityDoc.from_json(cap_raw).limit
+            limit = CapacityDoc.from_json(cap_raw).admission_limit
         except Exception:
             return False
         if limit <= 0:
@@ -409,7 +434,7 @@ class SemaphoreStore(BaseStore):
             if not cap_raw:
                 return set()
             try:
-                limit = CapacityDoc.from_json(cap_raw).limit
+                limit = CapacityDoc.from_json(cap_raw).admission_limit
             except Exception:
                 return set()
             if limit <= 0:
@@ -830,17 +855,10 @@ class SemaphoreStore(BaseStore):
         return counts
 
     def available_count_all(self) -> Dict[str, int]:
-        caps: Dict[str, int] = {}
-        cap_iter = self._scan_prefix(self.etcd._mangle_key("capacity/"))
-        for val_bytes, meta in cap_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
-            if len(parts) == 2 and parts[0] == "capacity":
-                try:
-                    limit = CapacityDoc.from_json(val_bytes).limit
-                except Exception:
-                    limit = 0
-                caps[parts[1]] = max(0, int(limit))
+        caps = {
+            slot: max(0, doc.admission_limit)
+            for slot, doc in self._capacity_docs_all().items()
+        }
 
         used: Dict[str, int] = {}
         sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
@@ -885,20 +903,25 @@ class SemaphoreStore(BaseStore):
         return result
 
     def capacities_all(self) -> Dict[str, int]:
-        caps: Dict[str, int] = {}
+        return {
+            slot: max(0, doc.limit) for slot, doc in self._capacity_docs_all().items()
+        }
+
+    def _capacity_docs_all(self) -> Dict[str, CapacityDoc]:
+        caps: Dict[str, CapacityDoc] = {}
         cap_iter = self._scan_prefix(self.etcd._mangle_key("capacity/"))
         for val_bytes, meta in cap_iter:
             key = self.etcd._demangle_key(meta.key)
             parts = key.split("/")
             if len(parts) == 2 and parts[0] == "capacity":
                 try:
-                    caps[parts[1]] = max(0, int(CapacityDoc.from_json(val_bytes).limit))
-                except Exception:
-                    caps[parts[1]] = 0
+                    caps[parts[1]] = CapacityDoc.from_json(val_bytes)
+                except (ValueError, TypeError, AttributeError, OverflowError):
+                    caps[parts[1]] = CapacityDoc(limit=0)
         return caps
 
     def snapshot_all(self, include_holders: bool = False) -> Dict[str, dict]:
-        caps = self.capacities_all()
+        caps = self._capacity_docs_all()
 
         used: Dict[str, int] = {}
         holders_map: Dict[str, Dict[str, SemaphoreHolder]] = {}
@@ -940,12 +963,14 @@ class SemaphoreStore(BaseStore):
 
         out: Dict[str, dict] = {}
         for st in sorted(all_slots):
-            cap = caps.get(st, 0)
+            doc = caps.get(st, CapacityDoc(limit=0))
+            cap = max(0, doc.limit)
             u = max(0, used.get(st, 0))
-            avail = max(0, cap - u)
+            avail = max(0, doc.admission_limit - u)
             hc = holder_counts.get(st, 0)
             entry = {
                 "capacity": cap,
+                "target": max(0, doc.admission_limit),
                 "used": u,
                 "available": avail,
                 "holder_count": hc,
