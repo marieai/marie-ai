@@ -1356,6 +1356,12 @@ class EtcdClient(object):
         )
 
     @reconn_reauth_adaptor
+    def get_prefix_keys(self, key_prefix: str) -> list[str]:
+        """Return namespace-relative keys with their stored path encoding."""
+        rows = self.client.get_prefix(self._mangle_key(key_prefix), keys_only=True)
+        return [self._demangle_key(meta.key) for _, meta in rows]
+
+    @reconn_reauth_adaptor
     def get_prefix_dict(
         self, key_prefix: str, sort_order=None, sort_target="key"
     ) -> dict:

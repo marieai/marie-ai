@@ -1586,7 +1586,7 @@ class PostgreSQLJobScheduler(JobScheduler):
                             await self.frontier.release_lease_local(wi.id)
                             try:
                                 await asyncio.to_thread(
-                                    self._semaphore_store.release_owned,
+                                    self._semaphore_store.release,
                                     slot_type,
                                     wi.id,
                                     owner=owner,
@@ -3105,7 +3105,7 @@ class PostgreSQLJobScheduler(JobScheduler):
 
         try:
             released = await asyncio.to_thread(
-                self._semaphore_store.release_owned,
+                self._semaphore_store.release,
                 executor,
                 wi.id,
                 owner=owner,

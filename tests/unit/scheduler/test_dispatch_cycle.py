@@ -348,7 +348,7 @@ async def test_dispatch_cycle_does_not_wait_for_confirmation(
     assert result == DispatchCycleResult(scheduled=True)
     assert list(scheduler._pending_dispatches) == ["attempt-1"]
     scheduler._handle_dispatch_failure.assert_not_awaited()
-    scheduler._semaphore_store.release_owned.assert_not_called()
+    scheduler._semaphore_store.release.assert_not_called()
 
     release_confirmation.set()
     await settle_dispatches(scheduler)
@@ -548,7 +548,7 @@ async def test_dispatch_cycle_releases_resources_when_database_activation_fails(
     assert result == DispatchCycleResult(scheduled=False)
     scheduler._release_lease_db.assert_awaited_once_with([work_item.id])
     scheduler.frontier.release_lease_local.assert_awaited_once_with(work_item.id)
-    scheduler._semaphore_store.release_owned.assert_called_once_with(
+    scheduler._semaphore_store.release.assert_called_once_with(
         "extract",
         work_item.id,
         owner=work_item.id,

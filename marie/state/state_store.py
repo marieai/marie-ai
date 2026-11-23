@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Callable, Dict, Iterator, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Optional
 
 from grpc_health.v1.health_pb2 import HealthCheckResponse
 
 from .base import BaseStore, _now_iso
+
+if TYPE_CHECKING:
+    from marie.serve.discovery.etcd_client import EtcdClient
 
 # Key structure:
 # marie/deployments/{node}/{deployment}/desired   # gateway-only writer
@@ -100,33 +103,17 @@ class StatusDoc:
         return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
 
 
-def _iter_node_depl_pairs(etcd, suffix: str) -> Iterator[Tuple[str, str]]:
-    root = "deployments/"
-    nested = etcd.get_prefix_dict(root)
-
-    def _walk(d: dict, base: str):
-        for k, v in d.items():
-            full = f"{base.rstrip('/')}/{k}" if k else base.rstrip("/")
-            if isinstance(v, dict):
-                yield from _walk(v, full)
-            else:
-                yield full
-
-    for key in _walk(nested, root.rstrip('/')):
-        if key.endswith("/" + suffix):
-            parts = key.split("/")
-            try:
-                i = parts.index("deployments")
-                yield parts[i + 1], parts[i + 2]
-            except Exception:
-                continue
+def _iter_node_depl_pairs(etcd: EtcdClient, suffix: str) -> Iterator[tuple[str, str]]:
+    for key in etcd.get_prefix_keys("deployments/"):
+        match key.split("/"):
+            case ["deployments", node, deployment, kind] if (
+                node and deployment and kind == suffix
+            ):
+                yield node, deployment
 
 
 class DesiredStore(BaseStore):
     """Gateway-only: desired intent/spec."""
-
-    def __init__(self, etcd_client):  # Removed 'prefix' argument
-        super().__init__(etcd_client)
 
     def _desired_key(self, node: str, depl: str) -> str:
         return _dkey(node, depl)
@@ -274,72 +261,6 @@ class DesiredStore(BaseStore):
                 time.sleep(0.01)
                 val, meta = self.etcd.get(k, metadata=True, serializable=False)
         raise RuntimeError(f"DesiredStore.schedule_new_epoch CAS failed for {k}")
-
-    def _create(
-        self,
-        node: str,
-        depl: str,
-        phase: str,
-        epoch: int,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> DesiredDoc:
-        """
-        Create desired doc atomically:
-          - If key is absent -> create with epoch provided.
-          - If someone else created concurrently -> return the current stored doc (no overwrite).
-        """
-        k = self._desired_key(node, depl)
-        doc = DesiredDoc(
-            phase=phase,
-            epoch=int(epoch),
-            params=params or {},
-            updated_at=_now_iso(),
-        )
-        payload = json.dumps(asdict(doc))
-
-        for attempt in range(8):
-            if self.etcd.put_if_absent(k, payload):
-                return doc
-            raw = self._get_raw(k)
-            if raw is not None:
-                return DesiredDoc.from_json(raw)
-            # The winner was deleted before the read; retry the atomic create.
-            if attempt < 7:
-                time.sleep(0.01)
-        raise RuntimeError(f"DesiredStore._create failed repeatedly for {k}")
-
-    def _update_phase(self, node: str, depl: str, phase: str) -> DesiredDoc:
-        """
-        Atomic phase update (epoch unchanged).
-        """
-        k = self._desired_key(node, depl)
-        val, meta = self.etcd.get(k, metadata=True, serializable=False)
-        if val is None:
-            # Create with epoch=1 if absent (preserves your original semantics)
-            doc = DesiredDoc(phase=phase, epoch=1, params={}, updated_at=_now_iso())
-            if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
-                return doc
-
-        for _ in range(8):
-            val, meta = self.etcd.get(k, metadata=True, serializable=False)
-            if val is None:
-                # try again
-                doc = DesiredDoc(phase=phase, epoch=1, params={}, updated_at=_now_iso())
-                if self.etcd.put_if_absent(k, json.dumps(asdict(doc))):
-                    return doc
-                time.sleep(0.01)
-                continue
-
-            cur = DesiredDoc.from_json(val)
-            cur.phase = phase
-            cur.updated_at = _now_iso()
-
-            if self.etcd.update_if_unchanged(
-                k, json.dumps(asdict(cur)), meta.mod_revision
-            ):
-                return cur
-            time.sleep(0.01)
-        raise RuntimeError(f"DesiredStore._update_phase CAS failed for {k}")
 
 
 class StatusStore(BaseStore):

@@ -183,7 +183,7 @@ class RecordingSemaphoreStore:
     def __init__(self) -> None:
         self.releases: list[tuple[str, str, str, str | None]] = []
 
-    def release_owned(
+    def release(
         self,
         executor: str,
         job_id: str,

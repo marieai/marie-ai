@@ -86,7 +86,7 @@ class SlotCapacityManager:
             raise errors[0]
 
         rows, totals = self.compute_summary_rows_and_totals(targets)
-        summary = self.format_summary(targets=targets)
+        summary = self._format_summary(rows, totals)
         return rows, totals, summary
 
     def compute_summary_rows_and_totals(
@@ -141,7 +141,9 @@ class SlotCapacityManager:
         Returns the formatted string. Caller is responsible for logging/printing.
         """
         rows, totals = self.compute_summary_rows_and_totals(targets)
+        return self._format_summary(rows, totals)
 
+    def _format_summary(self, rows: list[tuple], totals: dict[str, int]) -> str:
         if not rows:
             return "[capacity] No slots discovered."
 

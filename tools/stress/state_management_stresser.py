@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Comprehensive stress tester for state management components:
-  - SemaphoreStore (reserve, release, release_owned, renew)
+  - SemaphoreStore (reserve, release, renew)
   - SlotCapacityManager (capacity reconciliation, node discovery)
   - SemaphoreHolder (ownership validation, lease management)
 
@@ -228,10 +228,10 @@ class StateManagementStresser:
             time.sleep(random.uniform(0.0001, 0.001))
 
             # Release
-            ok_rel = self._sema.release(slot, ticket_id)
+            result = self._sema.release_owned_result(slot, ticket_id, owner=owner)
             wm.active_tickets.discard(ticket_id)
 
-            if ok_rel:
+            if result.reason == "released":
                 wm.releases_success += 1
                 self.metrics.release_success += 1
                 return True
@@ -284,7 +284,7 @@ class StateManagementStresser:
             time.sleep(random.uniform(0.0001, 0.001))
 
             # Release with ownership check
-            ok_rel = self._sema.release_owned(slot, ticket_id, owner=owner)
+            ok_rel = self._sema.release(slot, ticket_id, owner=owner)
             wm.active_tickets.discard(ticket_id)
 
             if ok_rel:
@@ -347,17 +347,15 @@ class StateManagementStresser:
                     wm.renewals_failed += 1
                     self.metrics.renew_failed += 1
                     renewal_failed = True
-                    # CRITICAL: Abort immediately when renewal fails to prevent lease expiration
-                    # If we continue, the lease will expire, etcd will auto-delete the holder,
-                    # but the counter won't be decremented (because release() will fail with no holder)
+                    # Stop work before the lease expires and etcd removes the holder.
                     logger.warning(
-                        f"Worker {worker_id} renewal #{renewal_num+1} failed for {ticket_id} "
+                        f"Worker {worker_id} renewal #{renewal_num + 1} failed for {ticket_id} "
                         f"on {slot}, aborting job to prevent lease expiration"
                     )
                     break
 
             # Release
-            ok_rel = self._sema.release_owned(slot, ticket_id, owner=owner)
+            ok_rel = self._sema.release(slot, ticket_id, owner=owner)
             wm.active_tickets.discard(ticket_id)
 
             if ok_rel:
@@ -371,12 +369,12 @@ class StateManagementStresser:
                 holder = self._sema.get_holder(slot, ticket_id)
                 if holder is None:
                     logger.warning(
-                        f"Worker {worker_id} release_owned failed for {ticket_id} on {slot}: "
+                        f"Worker {worker_id} release failed for {ticket_id} on {slot}: "
                         f"holder not found (possibly expired lease)"
                     )
                 else:
                     logger.warning(
-                        f"Worker {worker_id} release_owned failed for {ticket_id} on {slot}: "
+                        f"Worker {worker_id} release failed for {ticket_id} on {slot}: "
                         f"holder exists but CAS failed or owner mismatch"
                     )
                 return False
@@ -413,7 +411,7 @@ class StateManagementStresser:
             self.metrics.reserve_success += 1
 
             # Try to release with WRONG owner - should fail
-            ok_wrong = self._sema.release_owned(slot, ticket_id, owner=wrong_owner)
+            ok_wrong = self._sema.release(slot, ticket_id, owner=wrong_owner)
 
             if ok_wrong:
                 # This is a security violation!
@@ -426,7 +424,7 @@ class StateManagementStresser:
                 return False
 
             # Now release with correct owner - should succeed
-            ok_rel = self._sema.release_owned(slot, ticket_id, owner=correct_owner)
+            ok_rel = self._sema.release(slot, ticket_id, owner=correct_owner)
 
             if ok_rel:
                 wm.releases_success += 1
@@ -479,7 +477,7 @@ class StateManagementStresser:
             time.sleep(random.uniform(0.001, 0.005))
 
             # Release should handle missing counter gracefully (Bug #2 fix)
-            ok_rel = self._sema.release_owned(slot, ticket_id, owner=owner)
+            ok_rel = self._sema.release(slot, ticket_id, owner=owner)
 
             if ok_rel:
                 wm.releases_success += 1
@@ -528,7 +526,7 @@ class StateManagementStresser:
 
             time.sleep(random.uniform(0.001, 0.01))
 
-            ok_rel = self._sema.release_owned(slot, ticket_id, owner=owner)
+            ok_rel = self._sema.release(slot, ticket_id, owner=owner)
 
             if ok_rel:
                 wm.releases_success += 1
@@ -590,7 +588,7 @@ class StateManagementStresser:
 
             time.sleep(random.uniform(0.0001, 0.001))
 
-            ok_rel = self._sema.release_owned(slot, ticket_id, owner=owner)
+            ok_rel = self._sema.release(slot, ticket_id, owner=owner)
 
             if ok_rel:
                 wm.releases_success += 1
@@ -896,10 +894,10 @@ class StateManagementStresser:
         logger.info(f"\n[OPERATIONS]")
         logger.info(f"  Total:   {self.metrics.total_ops:,} ops ({tps:,.2f} ops/s)")
         logger.info(
-            f"  Success: {self.metrics.success_ops:,} ({100*self.metrics.success_ops/max(1,self.metrics.total_ops):.1f}%)"
+            f"  Success: {self.metrics.success_ops:,} ({100 * self.metrics.success_ops / max(1, self.metrics.total_ops):.1f}%)"
         )
         logger.info(
-            f"  Failed:  {self.metrics.failed_ops:,} ({100*self.metrics.failed_ops/max(1,self.metrics.total_ops):.1f}%)"
+            f"  Failed:  {self.metrics.failed_ops:,} ({100 * self.metrics.failed_ops / max(1, self.metrics.total_ops):.1f}%)"
         )
 
         logger.info(f"\n[BREAKDOWN]")

@@ -182,7 +182,7 @@ def run_consumer(
         def renew(self, executor, job_id, **kwargs):
             return self.holders.get(job_id) == kwargs["run_attempt_id"]
 
-        def release_owned(self, executor, job_id, **kwargs):
+        def release(self, executor, job_id, **kwargs):
             if self.holders.get(job_id) == kwargs.get("run_attempt_id"):
                 self.holders.pop(job_id)
             return SemaphoreReleaseResult(True, "test_release", 1)
@@ -333,7 +333,7 @@ def run_consumer(
                         ),
                     )
 
-                scheduler._semaphore_store.release_owned(
+                scheduler._semaphore_store.release(
                     info.entrypoint.split("://", 1)[0],
                     job_id,
                     run_attempt_id=info.run_attempt_id,

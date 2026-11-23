@@ -65,6 +65,12 @@ def test_desired_set_and_get(desired_store: DesiredStore):
     assert got.epoch == 1
     assert got.params == params
 
+    replaced = desired_store.set(ids["node"], ids["depl"], {"new": 2}, phase="RUNNING")
+    assert replaced.epoch == 2
+    assert replaced.phase == "RUNNING"
+    assert replaced.params == {"new": 2}
+    assert desired_store.get(ids["node"], ids["depl"]) == replaced
+
 
 def test_desired_schedule_new_epoch_creation_and_increment(desired_store: DesiredStore):
     ids = _mk_ids()
@@ -108,14 +114,23 @@ def test_desired_schedule_new_epoch_dispatch_fanout(desired_store: DesiredStore)
 
 def test_desired_bump_epoch(desired_store: DesiredStore):
     ids = _mk_ids()
-    created = desired_store.set(ids["node"], ids["depl"], params={}, phase="SCHEDULED")
+    assert desired_store.bump_epoch(ids["node"], ids["depl"]) is None
+    assert desired_store.update_params(ids["node"], ids["depl"], lambda p: p) is None
+    assert desired_store.get(ids["node"], ids["depl"]) is None
+    created = desired_store.set(
+        ids["node"], ids["depl"], {"job": "old"}, phase="RUNNING"
+    )
     assert created.epoch == 1
     bumped = desired_store.bump_epoch(ids["node"], ids["depl"])
     assert bumped is not None
     assert bumped.epoch == 2
+    assert bumped.phase == "RUNNING"
+    assert bumped.params == {"job": "old"}
 
 
-def test_desired_update_params_keeps_bumped_epoch(desired_store: DesiredStore):
+def test_desired_update_params_keeps_bumped_epoch(
+    desired_store: DesiredStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
     ids = _mk_ids()
     desired_store.set(
         ids["node"], ids["depl"], params={"existing": "keep"}, phase="SCHEDULED"
@@ -124,6 +139,10 @@ def test_desired_update_params_keeps_bumped_epoch(desired_store: DesiredStore):
     bumped = desired_store.bump_epoch(ids["node"], ids["depl"])
     assert bumped is not None
 
+    # A fresh timestamp must be distinguishable from the stored one.
+    monkeypatch.setattr(
+        "marie.state.state_store._now_iso", lambda: "2099-01-01T00:00:00Z"
+    )
     updated = desired_store.update_params(
         ids["node"],
         ids["depl"],
@@ -154,18 +173,8 @@ def test_desired_iter_pairs(desired_store: DesiredStore):
     assert (ids2["node"], ids2["depl"]) in pairs
 
 
-def test_desired_update_phase_keeps_epoch(desired_store: DesiredStore):
-    ids = _mk_ids()
-    created = desired_store.set(ids["node"], ids["depl"], params={}, phase="SCHEDULED")
-    old_epoch = created.epoch
-
-    updated = desired_store._update_phase(ids["node"], ids["depl"], phase="RUNNING")
-    assert updated.phase == "RUNNING"
-    assert updated.epoch == old_epoch  # epoch must not change
-
-
-def test_desired_create_retries_when_the_winner_is_deleted(
-    desired_store: DesiredStore, monkeypatch
+def test_desired_set_retries_when_the_winner_is_deleted(
+    desired_store: DesiredStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ids = _mk_ids()
     put_if_absent = desired_store.etcd.put_if_absent
@@ -182,36 +191,55 @@ def test_desired_create_retries_when_the_winner_is_deleted(
 
     monkeypatch.setattr(desired_store.etcd, "put_if_absent", delete_winner)
 
-    created = desired_store._create(
-        ids["node"], ids["depl"], phase="SCHEDULED", epoch=7, params={"job": "new"}
+    created = desired_store.set(
+        ids["node"], ids["depl"], phase="RUNNING", params={"job": "new"}
     )
 
     assert desired_store.get(ids["node"], ids["depl"]) == created
     assert attempts == 2
-    assert created.epoch == 7
+    assert created.epoch == 1
+    assert created.phase == "RUNNING"
+    assert created.params == {"job": "new"}
 
 
-def test_desired_create_preserves_the_existing_winner(
+@pytest.mark.parametrize(
+    ("method_name", "expected_params"),
+    [
+        ("set", {"job": "new"}),
+        ("schedule_new_epoch", {"job": "new", "keep": 1}),
+    ],
+)
+def test_desired_mutation_when_another_writer_creates_first(
     desired_store: DesiredStore,
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    expected_params: dict,
 ) -> None:
     ids = _mk_ids()
-    winner = desired_store.set(ids["node"], ids["depl"], {"job": "existing"})
+    node, depl = ids["node"], ids["depl"]
+    put_if_absent = desired_store.etcd.put_if_absent
 
-    result = desired_store._create(
-        ids["node"], ids["depl"], phase="RUNNING", epoch=7, params={"job": "new"}
-    )
+    def create_winner_first(key: str, payload: str) -> bool:
+        monkeypatch.setattr(desired_store.etcd, "put_if_absent", put_if_absent)
+        desired_store.set(node, depl, {"job": "old", "keep": 1}, phase="RUNNING")
+        return put_if_absent(key, payload)
 
-    assert result == winner
-    assert desired_store.get(ids["node"], ids["depl"]) == winner
+    monkeypatch.setattr(desired_store.etcd, "put_if_absent", create_winner_first)
+    result = getattr(desired_store, method_name)(node, depl, {"job": "new"})
+
+    assert result.epoch == 2
+    assert result.phase == "SCHEDULED"
+    assert result.params == expected_params
+    assert desired_store.get(node, depl) == result
 
 
-def test_desired_create_raises_after_repeated_contention(
-    desired_store: DesiredStore, monkeypatch
+def test_desired_set_raises_after_repeated_contention(
+    desired_store: DesiredStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(desired_store.etcd, "put_if_absent", lambda *_: False)
 
-    with pytest.raises(RuntimeError, match="DesiredStore._create"):
-        desired_store._create("node", "deployment", phase="SCHEDULED", epoch=1)
+    with pytest.raises(RuntimeError, match=r"DesiredStore\.set"):
+        desired_store.set("node", "deployment", params={})
 
 
 # ---------------- StatusStore tests ----------------

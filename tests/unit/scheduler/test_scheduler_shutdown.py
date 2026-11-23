@@ -423,7 +423,7 @@ async def test_stop_keeps_unresolved_dispatch_attempt_fenced() -> None:
 
     assert scheduler._pending_dispatches == {}
     scheduler._handle_dispatch_failure.assert_not_awaited()
-    scheduler._semaphore_store.release_owned.assert_not_called()
+    scheduler._semaphore_store.release.assert_not_called()
     scheduler._close_runtime_resources.assert_awaited_once_with()
 
 

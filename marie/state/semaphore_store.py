@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import random
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from typing import Dict, Optional, Set
 
@@ -45,6 +46,24 @@ class CapacityDoc:
             updated_at=str(updated_at),
             requested_limit=int(requested) if requested is not None else None,
         )
+
+
+def _decode_capacity(
+    raw: bytes | str | None,
+    *,
+    errors: tuple[type[Exception], ...] = (
+        ValueError,
+        TypeError,
+        AttributeError,
+        OverflowError,
+    ),
+) -> CapacityDoc | None:
+    if not raw:
+        return None
+    try:
+        return CapacityDoc.from_json(raw)
+    except errors:
+        return None
 
 
 @dataclass
@@ -105,7 +124,7 @@ def _holder_key(slot_type: str, ticket_id: str) -> str:
 
 
 def _decode_count(raw) -> Optional[int]:
-    """Counter decode shared by every counter-reading path.
+    """Decode a counter for point reads and transactions.
 
     None/empty -> 0 (missing counter means zero holders).
     Malformed  -> None (caller decides: repair via reconcile, or treat as 0
@@ -118,6 +137,14 @@ def _decode_count(raw) -> Optional[int]:
         return int(s.strip())
     except Exception:
         return None
+
+
+def _reported_count(raw: bytes | str) -> int:
+    # Aggregate reads use int directly. Point reads also strip control characters.
+    try:
+        return int(raw.decode() if isinstance(raw, (bytes, bytearray)) else raw)
+    except (ValueError, TypeError, OverflowError):
+        return 0
 
 
 def _retry_after_contention(attempt: int) -> None:
@@ -143,10 +170,8 @@ class SemaphoreStore(BaseStore):
       validate the holder identity and keep its existing lease alive.
 
     release():
-      TX compare: count unchanged AND holder exists -> delete holder, put count-1
-
-    release_owned():
-      Like release(), but only if holder.owner == owner (prevents hijack).
+      Check the stored owner and run attempt, then atomically delete the holder
+      and decrement the counter. release_owned_result() also reports the outcome.
 
     reconcile():
       recompute count from holders and CAS update counter.
@@ -172,13 +197,8 @@ class SemaphoreStore(BaseStore):
     # ---------- Capacity (single) ----------
 
     def get_capacity(self, slot_type: str) -> Optional[int]:
-        raw = self._get_raw(_cap_key(slot_type))
-        if not raw:
-            return None
-        try:
-            return CapacityDoc.from_json(raw).limit
-        except Exception:
-            return None
+        doc = _decode_capacity(self._get_raw(_cap_key(slot_type)), errors=(Exception,))
+        return doc.limit if doc is not None else None
 
     def set_capacity(self, slot_type: str, limit: int) -> None:
         doc = CapacityDoc(limit=max(0, int(limit)))
@@ -282,15 +302,11 @@ class SemaphoreStore(BaseStore):
         return val if val is not None else 0
 
     def available_slot_count(self, slot_type: str) -> int:
-        raw = self._get_raw(_cap_key(slot_type))
-        if not raw:
-            return 0
-        try:
-            cap = CapacityDoc.from_json(raw).admission_limit
-        except (ValueError, TypeError, AttributeError, OverflowError):
+        doc = _decode_capacity(self._get_raw(_cap_key(slot_type)))
+        if doc is None:
             return 0
         used = self.read_count(slot_type)
-        return max(0, cap - used)
+        return max(0, doc.admission_limit - used)
 
     def list_holders(self, slot_type: str) -> Dict[str, SemaphoreHolder]:
         prefix = _holders_prefix(slot_type)
@@ -330,14 +346,10 @@ class SemaphoreStore(BaseStore):
         h_k = _holder_key(slot_type, ticket_id)
 
         cap_raw = self._get_raw(cap_k)
-        if not cap_raw:
+        doc = _decode_capacity(cap_raw, errors=(Exception,))
+        if doc is None or doc.admission_limit <= 0:
             return False
-        try:
-            limit = CapacityDoc.from_json(cap_raw).admission_limit
-        except Exception:
-            return False
-        if limit <= 0:
-            return False
+        limit = doc.admission_limit
 
         cnt_raw = self._get_raw(cnt_k)
         old_count = _decode_count(cnt_raw)
@@ -431,14 +443,10 @@ class SemaphoreStore(BaseStore):
 
         for attempt in range(max_retries):
             cap_raw = self._get_raw(cap_k)
-            if not cap_raw:
+            doc = _decode_capacity(cap_raw, errors=(Exception,))
+            if doc is None or doc.admission_limit <= 0:
                 return set()
-            try:
-                limit = CapacityDoc.from_json(cap_raw).admission_limit
-            except Exception:
-                return set()
-            if limit <= 0:
-                return set()
+            limit = doc.admission_limit
 
             cnt_raw = self._get_raw(cnt_k)
             old_count = _decode_count(cnt_raw)
@@ -602,70 +610,11 @@ class SemaphoreStore(BaseStore):
         slot_type: str,
         ticket_id: str,
         *,
-        owner: Optional[str] = None,
-        max_retries: int = 5,
-    ) -> bool:
-        """
-        Atomically release a slot. Returns True if released, False otherwise.
-
-        Repair a missing or malformed counter from live holders before the
-        atomic counter decrement and holder deletion.
-
-        Uses CAS with automatic retry on contention to prevent holder leaks under high load.
-        """
-        import time
-
-        cnt_k = _count_key(slot_type)
-        h_k = _holder_key(slot_type, ticket_id)
-
-        for attempt in range(max_retries):
-            # Read holder - if it doesn't exist, we're done (already released or never existed)
-            h_raw = self._get_raw(h_k)
-            if not h_raw:
-                return (
-                    True if attempt > 0 else False
-                )  # True if deleted during retry, False if never existed
-
-            cnt_raw = self._get_raw(cnt_k)
-            old_count = _decode_count(cnt_raw)
-            if cnt_raw is None or old_count is None:
-                _count, reconciled, _attempts = self._reconcile_count(
-                    slot_type, max_retries=max_retries
-                )
-                if not reconciled:
-                    return False
-                cnt_raw = self._get_raw(cnt_k)
-                old_count = _decode_count(cnt_raw)
-                if cnt_raw is None or old_count is None:
-                    continue
-            new_count = max(0, old_count - 1)
-
-            t = self.etcd.txn()
-            t.if_value(cnt_k, "==", cnt_raw)  # count unchanged
-            t.if_value(h_k, "==", h_raw)  # holder unchanged & exists (CAS)
-            t.put(cnt_k, str(new_count))
-            t.delete(h_k)
-
-            ok, _resp = t.commit()
-            if ok:
-                return True
-            # CAS failed - retry with backoff
-            if attempt < max_retries - 1:
-                time.sleep(0.001 * (2**attempt))
-            continue
-
-        return False  # All retries exhausted
-
-    def release_owned(
-        self,
-        slot_type: str,
-        ticket_id: str,
-        *,
         owner: str,
         run_attempt_id: Optional[str] = None,
         max_retries: int = 12,
     ) -> bool:
-        """Release an owned ticket and report whether capacity was restored."""
+        """Return True after release or successful reconciliation of an absent holder."""
 
         return bool(
             self.release_owned_result(
@@ -743,24 +692,8 @@ class SemaphoreStore(BaseStore):
                 )
 
             cnt_raw = self._get_raw(cnt_k)
-
-            if cnt_raw is None:
-                _count, reconciled, reconcile_attempts = self._reconcile_count(
-                    slot_type,
-                    max_retries=retries,
-                )
-                if not reconciled:
-                    return SemaphoreReleaseResult(
-                        success=False,
-                        reason="reconcile_contention",
-                        attempts=attempts + reconcile_attempts,
-                        retryable=True,
-                        counter_reconciled=False,
-                    )
-                continue
-
             old_count = _decode_count(cnt_raw)
-            if old_count is None:
+            if cnt_raw is None or old_count is None:
                 _count, reconciled, reconcile_attempts = self._reconcile_count(
                     slot_type,
                     max_retries=retries,
@@ -801,105 +734,66 @@ class SemaphoreStore(BaseStore):
 
     # ---------- Multi-slot helpers (for summaries & audits) ----------
 
-    def list_slot_types(self) -> Set[str]:
-        slots: Set[str] = set()
-
-        cap_iter = self._scan_prefix(self.etcd._mangle_key("capacity/"))
-        for _val, meta in cap_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
+    def _capacity_items(self) -> Iterator[tuple[str, bytes]]:
+        for raw, meta in self._scan_prefix(self.etcd._mangle_key("capacity/")):
+            parts = self.etcd._demangle_key(meta.key).split("/")
             if len(parts) == 2 and parts[0] == "capacity":
-                slots.add(parts[1])
+                yield parts[1], raw
 
-        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
-        for _val, meta in sem_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
+    def _semaphore_items(self) -> Iterator[tuple[list[str], bytes]]:
+        for raw, meta in self._scan_prefix(self.etcd._mangle_key("semaphores/")):
+            parts = self.etcd._demangle_key(meta.key).split("/")
             if len(parts) >= 3 and parts[0] == "semaphores":
-                slots.add(parts[1])
+                yield parts, raw
 
+    def list_slot_types(self) -> Set[str]:
+        slots = {slot for slot, _ in self._capacity_items()}
+        slots.update(parts[1] for parts, _ in self._semaphore_items())
         return slots
 
     def read_count_all(self) -> Dict[str, int]:
-        used: Dict[str, int] = {s: 0 for s in self.list_slot_types()}
-
-        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
-        for val_bytes, meta in sem_iter:
-            key = self.etcd._demangle_key(meta.key)
-            if key.endswith("/count"):
-                parts = key.split("/")
-                if len(parts) == 3 and parts[0] == "semaphores":
-                    st = parts[1]
-                    try:
-                        used[st] = int(
-                            val_bytes.decode()
-                            if isinstance(val_bytes, (bytes, bytearray))
-                            else val_bytes
-                        )
-                    except Exception:
-                        used[st] = 0
+        used = {slot: 0 for slot, _ in self._capacity_items()}
+        for parts, raw in self._semaphore_items():
+            slot = parts[1]
+            if len(parts) == 3 and parts[2] == "count":
+                used[slot] = _reported_count(raw)
+            else:
+                used.setdefault(slot, 0)
         return used
 
     def holder_counts_all(self) -> Dict[str, int]:
-        counts: Dict[str, int] = {}
-        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
-        for _val, meta in sem_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
-            if len(parts) == 4 and parts[0] == "semaphores" and parts[2] == "holders":
-                st = parts[1]
-                counts[st] = counts.get(st, 0) + 1
-
-        for st in self.list_slot_types():
-            counts.setdefault(st, 0)
+        counts = {slot: 0 for slot, _ in self._capacity_items()}
+        for parts, _ in self._semaphore_items():
+            slot = parts[1]
+            counts.setdefault(slot, 0)
+            if len(parts) == 4 and parts[2] == "holders":
+                counts[slot] += 1
         return counts
 
     def available_count_all(self) -> Dict[str, int]:
-        caps = {
+        available = {
             slot: max(0, doc.admission_limit)
             for slot, doc in self._capacity_docs_all().items()
         }
-
-        used: Dict[str, int] = {}
-        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
-        for val_bytes, meta in sem_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
-            if len(parts) == 3 and parts[0] == "semaphores" and parts[2] == "count":
-                try:
-                    used[parts[1]] = int(
-                        val_bytes.decode()
-                        if isinstance(val_bytes, (bytes, bytearray))
-                        else val_bytes
-                    )
-                except Exception:
-                    used[parts[1]] = 0
-
-        all_slots = set(caps.keys()) | set(used.keys())
-        out: Dict[str, int] = {}
-        for st in all_slots:
-            cap = caps.get(st, 0)
-            u = used.get(st, 0)
-            out[st] = max(0, cap - max(0, u))
-        return out
+        for parts, raw in self._semaphore_items():
+            if len(parts) == 3 and parts[2] == "count":
+                slot = parts[1]
+                used = max(0, _reported_count(raw))
+                available[slot] = max(0, available.get(slot, 0) - used)
+        return available
 
     def list_holders_all(self) -> Dict[str, Dict[str, SemaphoreHolder]]:
-        result: Dict[str, Dict[str, SemaphoreHolder]] = {}
-        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
-        for val_bytes, meta in sem_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
-            if len(parts) == 4 and parts[0] == "semaphores" and parts[2] == "holders":
-                st = parts[1]
-                ticket_id = parts[3]
+        result: Dict[str, Dict[str, SemaphoreHolder]] = {
+            slot: {} for slot, _ in self._capacity_items()
+        }
+        for parts, raw in self._semaphore_items():
+            holders = result.setdefault(parts[1], {})
+            if len(parts) == 4 and parts[2] == "holders":
                 try:
-                    holder = SemaphoreHolder.from_json(val_bytes)
+                    holder = SemaphoreHolder.from_json(raw)
                 except Exception:
                     continue
-                result.setdefault(st, {})[ticket_id] = holder
-
-        for st in self.list_slot_types():
-            result.setdefault(st, {})
+                holders[parts[3]] = holder
         return result
 
     def capacities_all(self) -> Dict[str, int]:
@@ -908,43 +802,27 @@ class SemaphoreStore(BaseStore):
         }
 
     def _capacity_docs_all(self) -> Dict[str, CapacityDoc]:
-        caps: Dict[str, CapacityDoc] = {}
-        cap_iter = self._scan_prefix(self.etcd._mangle_key("capacity/"))
-        for val_bytes, meta in cap_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
-            if len(parts) == 2 and parts[0] == "capacity":
-                try:
-                    caps[parts[1]] = CapacityDoc.from_json(val_bytes)
-                except (ValueError, TypeError, AttributeError, OverflowError):
-                    caps[parts[1]] = CapacityDoc(limit=0)
-        return caps
+        return {
+            slot: _decode_capacity(raw) or CapacityDoc(limit=0)
+            for slot, raw in self._capacity_items()
+        }
 
     def snapshot_all(self, include_holders: bool = False) -> Dict[str, dict]:
         caps = self._capacity_docs_all()
+        all_slots = set(caps)
 
         used: Dict[str, int] = {}
         holders_map: Dict[str, Dict[str, SemaphoreHolder]] = {}
         holder_counts: Dict[str, int] = {}
 
-        sem_iter = self._scan_prefix(self.etcd._mangle_key("semaphores/"))
-        for val_bytes, meta in sem_iter:
-            key = self.etcd._demangle_key(meta.key)
-            parts = key.split("/")
-            if len(parts) == 3 and parts[0] == "semaphores" and parts[2] == "count":
-                st = parts[1]
-                try:
-                    used[st] = int(
-                        val_bytes.decode()
-                        if isinstance(val_bytes, (bytes, bytearray))
-                        else val_bytes
-                    )
-                except Exception:
-                    used[st] = 0
+        for parts, val_bytes in self._semaphore_items():
+            st = parts[1]
+            all_slots.add(st)
+            if len(parts) == 3 and parts[2] == "count":
+                used[st] = _reported_count(val_bytes)
                 continue
 
-            if len(parts) == 4 and parts[0] == "semaphores" and parts[2] == "holders":
-                st = parts[1]
+            if len(parts) == 4 and parts[2] == "holders":
                 ticket_id = parts[3]
                 holder_counts[st] = holder_counts.get(st, 0) + 1
                 if include_holders:
@@ -953,13 +831,6 @@ class SemaphoreStore(BaseStore):
                         holders_map.setdefault(st, {})[ticket_id] = holder
                     except Exception:
                         pass
-
-        all_slots: Set[str] = (
-            set(caps.keys())
-            | set(used.keys())
-            | set(holder_counts.keys())
-            | self.list_slot_types()
-        )
 
         out: Dict[str, dict] = {}
         for st in sorted(all_slots):
@@ -1066,7 +937,7 @@ class SemaphoreStore(BaseStore):
             mangled_prefix = self.etcd._mangle_key(holders_prefix)
 
             # 1) Scan holders and detect orphans
-            orphan_keys: list[str] = []
+            orphans: list[tuple[str, int]] = []
             malformed = 0
 
             scan_iter = self._scan_prefix(mangled_prefix)
@@ -1081,17 +952,20 @@ class SemaphoreStore(BaseStore):
                 # etcd-python metadata usually exposes lease_id (0 or None if none)
                 lease_id = getattr(meta, "lease_id", 0) or getattr(meta, "lease", 0)
                 if not lease_id:
-                    orphan_keys.append(key)
+                    orphans.append((key, meta.mod_revision))
 
             # 2) Delete orphan holder keys (best-effort) — no counter math here;
             # we'll recompute and CAS the counter in step (4)
             deleted_orphans = 0
-            if delete_orphan_holders and orphan_keys:
-                for k in orphan_keys:
+            if delete_orphan_holders:
+                for key, revision in orphans:
                     try:
-                        # Direct delete; even if already gone, it's fine
-                        self.etcd.delete(k)
-                        deleted_orphans += 1
+                        txn = self.etcd.txn()
+                        txn.if_mod_revision(key, "==", revision)
+                        txn.delete(key)
+                        deleted, _ = txn.commit()
+                        if deleted:
+                            deleted_orphans += 1
                     except Exception:
                         # ignore individual delete failures
                         pass

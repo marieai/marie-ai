@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -5,10 +6,11 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
+import grpc
 import pytest
 
 from marie.serve.discovery.etcd_client import EtcdClient
-from marie.state.semaphore_store import SemaphoreHolder, SemaphoreStore
+from marie.state.semaphore_store import CapacityDoc, SemaphoreHolder, SemaphoreStore
 from marie.state.slot_capacity_manager import SlotCapacityManager
 
 
@@ -88,7 +90,7 @@ def test_removed_executor_stays_unavailable_after_holder_release(
     assert rows == [(slot, 1, 0, 1, 0, 1, "CLAMPED")]
     assert manager.compute_summary_rows_and_totals()[0] == rows
     assert sema.renew(slot, "old-job", owner="old-job")
-    assert sema.release_owned(slot, "old-job", owner="old-job")
+    assert sema.release(slot, "old-job", owner="old-job")
 
     # A new store instance must enforce the discovered limit without a refresh.
     restarted_store = SemaphoreStore(sema.etcd)
@@ -103,6 +105,31 @@ def test_removed_executor_stays_unavailable_after_holder_release(
     assert restarted_store.reserve(slot, "new-job", node="worker")
 
 
+def test_refresh_reports_capacity_after_downscale(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MARIE_SLOTS_LLM_PER_NODE", "1")
+    sema.set_capacity_safe("llm", 3)
+    manager = SlotCapacityManager(sema)
+
+    rows, totals, summary = manager.refresh_from_nodes(
+        {"llm": [{"address": "worker:1"}]}
+    )
+
+    assert rows == [("llm", 1, 1, 0, 1, 0, "")]
+    assert totals["available"] == 1
+    assert sema.available_count_all() == {"llm": 1}
+    assert [cell.strip() for cell in summary.splitlines()[3].split("|")] == [
+        "llm",
+        "1",
+        "1",
+        "0",
+        "1",
+        "0",
+        "",
+    ]
+
+
 def test_capacity_downscale_does_not_reopen_released_slots(
     sema: SemaphoreStore,
 ) -> None:
@@ -110,13 +137,13 @@ def test_capacity_downscale_does_not_reopen_released_slots(
     sema.set_capacity(slot, 3)
     assert sema.reserve_many(slot, ["a", "b", "c"], node="worker") == {"a", "b", "c"}
     assert sema.set_capacity_safe(slot, 1) == 3
-    assert sema.release(slot, "a")
+    assert sema.release(slot, "a", owner="worker:a")
     assert sema.available_slot_count(slot) == 0
     assert not sema.reserve(slot, "new-job", node="worker")
     assert sema.reserve_many(slot, ["new-job"], node="worker") == set()
-    assert sema.release(slot, "b")
+    assert sema.release(slot, "b", owner="worker:b")
     assert sema.available_count_all()[slot] == 0
-    assert sema.release(slot, "c")
+    assert sema.release(slot, "c", owner="worker:c")
     assert sema.available_slot_count(slot) == 1
     assert sema.reserve_many(slot, ["d", "e"], node="worker") == {"d"}
 
@@ -129,9 +156,9 @@ def test_capacity_target_changes_when_clamped_limit_is_unchanged(
     assert sema.reserve_many(slot, ["a", "b"], node="worker") == {"a", "b"}
     assert sema.set_capacity_safe(slot, 0) == 2
     assert sema.set_capacity_safe(slot, 1) == 2
-    assert sema.release(slot, "a")
+    assert sema.release(slot, "a", owner="worker:a")
     assert sema.available_slot_count(slot) == 0
-    assert sema.release(slot, "b")
+    assert sema.release(slot, "b", owner="worker:b")
     assert sema.available_slot_count(slot) == 1
 
 
@@ -150,22 +177,90 @@ def test_failed_capacity_refresh_preserves_previous_admission_target(
     manager = SlotCapacityManager(sema)
     with pytest.raises(RuntimeError, match="capacity update failed"):
         manager.refresh_from_nodes({slot: []})
-    assert sema.release(slot, "a")
+    assert sema.release(slot, "a", owner="worker:a")
     assert sema.available_slot_count(slot) == 0
 
 
-@pytest.mark.parametrize("raw_capacity", ["null", "[]", '{"limit":1e999}'])
+def test_point_and_aggregate_count_grammars_with_legacy_capacity(
+    sema: SemaphoreStore,
+) -> None:
+    slot = _slot()
+    sema.etcd.put(f"capacity/{slot}", '{"limit":"5"}')
+    sema.etcd.put(f"semaphores/{slot}/count", "4\x1c")
+
+    assert sema.get_capacity(slot) == 5
+    assert sema.read_count(slot) == 4
+    assert sema.available_slot_count(slot) == 1
+    assert sema.read_count_all()[slot] == 0
+    assert sema.available_count_all()[slot] == 5
+    # Polling sees five slots, but the reservation rechecks the stored counter.
+    assert sema.reserve_many(slot, ["a", "b"], node="worker") == {"a"}
+    assert not sema.reserve(slot, "b", node="worker")
+
+
+@pytest.mark.parametrize(
+    "raw_capacity, error",
+    [
+        ("null", AttributeError),
+        ("[]", AttributeError),
+        ("{", ValueError),
+        ('{"limit":"x"}', ValueError),
+        ('{"limit":1e999}', OverflowError),
+        ('{"limit":1,"requested_limit":"x"}', ValueError),
+    ],
+)
 def test_malformed_capacity_document_blocks_admission(
-    sema: SemaphoreStore, raw_capacity: str
+    sema: SemaphoreStore, raw_capacity: str, error: type[Exception]
 ) -> None:
     slot = _slot()
     sema.etcd.put(f"capacity/{slot}", raw_capacity)
+    assert sema.get_capacity(slot) is None
+    with pytest.raises(error):
+        sema.set_capacity_safe(slot, 2)
     assert sema.available_slot_count(slot) == 0
     assert sema.capacities_all()[slot] == 0
     assert sema.available_count_all()[slot] == 0
     assert sema.snapshot_all()[slot]["available"] == 0
     assert not sema.reserve(slot, "a", node="worker")
     assert sema.reserve_many(slot, ["a"], node="worker") == set()
+
+
+def test_reservation_refuses_unexpected_decoder_error_while_availability_raises(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 1)
+
+    def fail_decode(raw: bytes) -> CapacityDoc:
+        raise RecursionError("nested capacity document")
+
+    monkeypatch.setattr(CapacityDoc, "from_json", fail_decode)
+    assert sema.get_capacity(slot) is None
+    assert not sema.reserve(slot, "a", node="worker")
+    assert sema.reserve_many(slot, ["a"], node="worker") == set()
+    with pytest.raises(RecursionError):
+        sema.available_slot_count(slot)
+    with pytest.raises(RecursionError):
+        sema.capacities_all()
+
+
+def test_point_read_outage_propagates_before_decoding(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outage = grpc.RpcError("point read failed")
+
+    def fail_get(*args: Any, **kwargs: Any) -> None:
+        raise outage
+
+    monkeypatch.setattr(sema.etcd, "get", fail_get)
+    for read in (sema.get_capacity, sema.available_slot_count, sema.read_count):
+        with pytest.raises(grpc.RpcError) as caught:
+            read("llm")
+        assert caught.value is outage
+    with pytest.raises(grpc.RpcError):
+        sema.reserve("llm", "a", node="worker")
+    with pytest.raises(grpc.RpcError):
+        sema.reserve_many("llm", ["a"], node="worker")
 
 
 def test_failed_capacity_refresh_still_blocks_other_absent_executors(
@@ -182,7 +277,7 @@ def test_failed_capacity_refresh_still_blocks_other_absent_executors(
     with pytest.raises(RuntimeError, match="malformed count"):
         manager.refresh_from_nodes({broken_slot: [{"address": "grpc://worker:1234"}]})
 
-    assert sema.release(removed_slot, "a")
+    assert sema.release(removed_slot, "a", owner="worker:a")
     assert sema.available_slot_count(removed_slot) == 0
     assert not sema.reserve(removed_slot, "b", node="worker")
 
@@ -215,10 +310,72 @@ def test_reserve_success_and_release(sema: SemaphoreStore):
     assert ok_r is True
     assert sema.read_count(slot) == 1
 
-    ok_rel = sema.release(slot, ticket)
+    ok_rel = sema.release(slot, ticket, owner=f"node:{ticket}")
     assert ok_rel is True
     assert sema.read_count(slot) == 0
     assert sema.available_slot_count(slot) == 1
+
+
+def test_owned_release_rejects_wrong_owner(sema: SemaphoreStore) -> None:
+    slot, ticket = _slot(), _ticket()
+    sema.set_capacity(slot, 1)
+    assert sema.reserve(slot, ticket, node="n", owner="A")
+
+    assert not sema.release(slot, ticket, owner="B")
+    assert sema.get_holder(slot, ticket).owner == "A"
+    assert sema.read_count(slot) == 1
+    assert sema.release(slot, ticket, owner="A")
+    assert sema.get_holder(slot, ticket) is None
+    assert sema.read_count(slot) == 0
+
+
+@pytest.mark.parametrize("raw", ['{"owner":1}', "null", "invalid"])
+def test_owned_release_rejects_invalid_holder_before_counter_repair(
+    sema: SemaphoreStore, raw: str
+) -> None:
+    slot, ticket = _slot(), _ticket()
+    key = f"semaphores/{slot}/holders/{ticket}"
+    count_key = f"semaphores/{slot}/count"
+    sema.etcd.put(key, raw)
+    sema.etcd.put(count_key, "invalid")
+
+    assert not sema.release(slot, ticket, owner="A")
+    assert sema.etcd.get(key) == raw
+    assert sema.etcd.get(count_key) == "invalid"
+
+
+def test_release_repairs_missing_counter_for_legacy_holder(sema: SemaphoreStore) -> None:
+    slot, ticket = _slot(), _ticket()
+    key = f"semaphores/{slot}/holders/{ticket}"
+    sema.etcd.put(key, json.dumps({"job_id": ticket, "node": "worker"}))
+
+    result = sema.release_owned_result(slot, ticket, owner="worker", max_retries=2)
+
+    assert result.success and result.reason == "released"
+    assert result.attempts == 2
+    assert sema.etcd.get(key) is None
+    assert sema.etcd.get(f"semaphores/{slot}/count") == "0"
+
+
+def test_owned_release_rechecks_owner_after_contention(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slot, ticket = _slot(), _ticket()
+    sema.set_capacity(slot, 1)
+    assert sema.reserve(slot, ticket, node="n", owner="A")
+    get_holder_raw = sema._get_holder_raw
+
+    def replace_after_read(slot_type: str, ticket_id: str) -> tuple:
+        observed = get_holder_raw(slot_type, ticket_id)
+        monkeypatch.setattr(sema, "_get_holder_raw", get_holder_raw)
+        assert sema.release(slot, ticket, owner="A")
+        assert sema.reserve(slot, ticket, node="n", owner="B")
+        return observed
+
+    monkeypatch.setattr(sema, "_get_holder_raw", replace_after_read)
+    assert not sema.release(slot, ticket, owner="A")
+    assert sema.get_holder(slot, ticket).owner == "B"
+    assert sema.read_count(slot) == 1
 
 
 def test_attempt_bound_holder_rejects_stale_renew_and_release(
@@ -264,7 +421,7 @@ def test_attempt_bound_holder_rejects_stale_renew_and_release(
     )
     assert not stale_release
     assert stale_release.reason == "attempt_mismatch"
-    assert sema.release_owned(
+    assert sema.release(
         slot,
         ticket,
         owner=ticket,
@@ -393,6 +550,67 @@ def test_reconcile_retries_counter_contention(sema: SemaphoreStore) -> None:
     assert sema.read_count(slot) == 1
 
 
+@pytest.mark.parametrize("change", ["replace", "attach_lease", "remove"])
+def test_reconcile_all_preserves_replacement_holder(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    slot, ticket = _slot(), _ticket()
+    key = f"semaphores/{slot}/holders/{ticket}"
+    prefix = sema.etcd._mangle_key(f"semaphores/{slot}/holders/")
+    original = json.dumps({"ticket_id": ticket, "owner": "worker", "run_attempt_id": "A"})
+    sema.set_capacity(slot, 1)
+    sema.etcd.put(key, original)
+    sema.etcd.put(f"semaphores/{slot}/count", "1")
+    get_prefix = sema.etcd.client.get_prefix
+
+    def change_after_scan(scan_prefix: bytes) -> Any:
+        rows = list(get_prefix(scan_prefix))
+        if scan_prefix == prefix:
+            monkeypatch.setattr(sema.etcd.client, "get_prefix", get_prefix)
+            if change == "attach_lease":
+                sema.etcd.put(key, original, lease=sema.etcd.lease(30))
+            else:
+                assert sema.release(slot, ticket, owner="worker", run_attempt_id="A")
+                if change == "replace":
+                    assert sema.reserve(
+                        slot, ticket, node="n", owner="worker", run_attempt_id="B", ttl=30
+                    )
+        return rows
+
+    monkeypatch.setattr(sema.etcd.client, "get_prefix", change_after_scan)
+    result = sema.reconcile_all()[slot]
+
+    assert result["deleted_orphans"] == 0
+    if change == "remove":
+        assert sema.get_holder(slot, ticket) is None
+        assert sema.read_count(slot) == 0
+    else:
+        assert sema.validate_holder(
+            slot, ticket, owner="worker", run_attempt_id="B" if change == "replace" else "A"
+        )
+        assert sema.read_count(slot) == 1
+
+
+def test_reconcile_all_deletes_only_unchanged_orphan(sema: SemaphoreStore) -> None:
+    slot, ticket = _slot(), _ticket()
+    sema.etcd.put(f"semaphores/{slot}/holders/{ticket}", "{}")
+    sema.etcd.put(f"semaphores/{slot}/count", "1")
+
+    result = sema.reconcile_all()[slot]
+
+    attempts = result.pop("reconcile_attempts")
+    assert attempts >= 1
+    assert result == {
+        "before_count": 1,
+        "after_count": 0,
+        "deleted_orphans": 1,
+        "malformed_holders": 0,
+        "counter_reconciled": True,
+    }
+    assert sema.get_holder(slot, ticket) is None
+    assert sema.read_count(slot) == 0
+
+
 def test_reserve_many_reserves_available_tickets(sema: SemaphoreStore):
     slot = _slot()
     sema.set_capacity(slot, 3)
@@ -450,22 +668,16 @@ def test_reserve_many_falls_back_when_one_ticket_exists(sema: SemaphoreStore):
     assert sema.read_count(slot) == 3
 
 
-def test_release_requires_existing_holder_and_count(sema: SemaphoreStore):
-    slot = _slot()
+def test_owned_release_of_unknown_ticket_preserves_other_holder(sema: SemaphoreStore):
+    slot, ticket = _slot(), _ticket()
     sema.set_capacity(slot, 1)
+    assert sema.release(slot, ticket, owner="A")
+    assert sema.reserve(slot, ticket, node="n", owner="A")
 
-    # release without reserve -> False (no counter)
-    assert sema.release(slot, _ticket()) is False
-
-    # reserve once
-    ticket = _ticket()
-    assert sema.reserve(slot, ticket, node="n") is True
-
-    # releasing unknown ticket -> False (holder missing)
-    assert sema.release(slot, _ticket()) is False
-
-    # correct ticket -> True
-    assert sema.release(slot, ticket) is True
+    result = sema.release_owned_result(slot, _ticket(), owner="A")
+    assert result.success and result.reason == "already_absent"
+    assert sema.get_holder(slot, ticket).owner == "A"
+    assert sema.read_count(slot) == 1
 
 
 def test_list_holders(sema: SemaphoreStore):
@@ -506,7 +718,7 @@ def test_reconcile_updates_counter(sema: SemaphoreStore):
     assert sema.read_count(slot) == 3
 
     # release one and reconcile again
-    assert sema.release(slot, tickets[0]) is True
+    assert sema.release(slot, tickets[0], owner=f"n0:{tickets[0]}") is True
     # Intentionally skew count up
     sema.etcd.put(cnt_key, "10")
     assert sema.reconcile(slot) in (2, 10)  # if CAS lost due to concurrent ops it's okay
@@ -528,7 +740,7 @@ def test_lease_ttl_does_not_block_basic_flow(sema: SemaphoreStore):
     time.sleep(0.05)
 
     # release should still work if holder exists
-    assert sema.release(slot, t) is True
+    assert sema.release(slot, t, owner=f"node:{t}") is True
 
 
 def test_list_slot_types_and_capacities_all(sema: SemaphoreStore):
@@ -650,41 +862,6 @@ def test_snapshot_all_basic_and_with_holders(sema: SemaphoreStore):
     # s3 should include empty holders map
     assert isinstance(snap_h[s3]["holders"], dict) and len(snap_h[s3]["holders"]) == 0
 
-def test_release_with_missing_counter(sema: SemaphoreStore):
-    """
-    Bug #2 fix: Test that release() handles missing counter gracefully.
-    Previously, if the counter was deleted but holder existed, release would fail
-    and the holder would be stuck until lease expiration.
-    """
-    slot = _slot()
-    sema.set_capacity(slot, 2)
-
-    # Reserve a slot
-    ticket = _ticket()
-    assert sema.reserve(slot, ticket, node="node1") is True
-    assert sema.read_count(slot) == 1
-
-    # Simulate counter deletion (e.g., manual deletion, etcd issue, bug)
-    cnt_key = f"semaphores/{slot}/count"
-    sema.etcd.delete(cnt_key)
-
-    # Verify counter is missing but holder still exists
-    assert sema.read_count(slot) == 0  # Counter missing returns 0
-    holders = sema.list_holders(slot)
-    assert ticket in holders  # Holder still exists
-
-    # The fix: release() should succeed even with missing counter
-    ok_rel = sema.release(slot, ticket)
-    assert ok_rel is True
-
-    # After release:
-    # - Holder should be deleted
-    # - Counter should be initialized to 0
-    assert sema.read_count(slot) == 0
-    holders_after = sema.list_holders(slot)
-    assert ticket not in holders_after
-
-
 @pytest.mark.parametrize("counter_value", [None, "invalid"])
 @pytest.mark.parametrize("max_retries", [1, 5])
 def test_release_repairs_counter_without_losing_other_holders(
@@ -694,14 +871,20 @@ def test_release_repairs_counter_without_losing_other_holders(
     sema.set_capacity(slot, 3)
     tickets = [_ticket() for _ in range(3)]
     for ticket in tickets:
-        assert sema.reserve(slot, ticket, node="worker", ttl=30)
+        assert sema.reserve(slot, ticket, node="worker", owner="worker", ttl=30)
     count_key = f"semaphores/{slot}/count"
     if counter_value is None:
         sema.etcd.delete(count_key)
     else:
         sema.etcd.put(count_key, counter_value)
 
-    assert sema.release(slot, tickets[0], max_retries=max_retries)
+    if max_retries == 1:
+        # Repair uses the first iteration. A fresh call can then release safely.
+        result = sema.release_owned_result(slot, tickets[0], owner="worker", max_retries=1)
+        assert not result and result.retryable
+        assert sema.read_count(slot) == 3
+        assert set(sema.list_holders(slot)) == set(tickets)
+    assert sema.release(slot, tickets[0], owner="worker", max_retries=max_retries)
 
     assert sema.read_count(slot) == 2
     assert set(sema.list_holders(slot)) == set(tickets[1:])
@@ -717,7 +900,7 @@ def test_release_repair_preserves_a_concurrent_reservation(
     sema.set_capacity(slot, 3)
     tickets = [_ticket() for _ in range(2)]
     for ticket in tickets:
-        assert sema.reserve(slot, ticket, node="worker", ttl=30)
+        assert sema.reserve(slot, ticket, node="worker", owner="worker", ttl=30)
     sema.etcd.delete(f"semaphores/{slot}/count")
     get_prefix = sema.etcd.client.get_prefix
     injected = False
@@ -733,7 +916,7 @@ def test_release_repair_preserves_a_concurrent_reservation(
 
     monkeypatch.setattr(sema.etcd.client, "get_prefix", reserve_during_scan)
 
-    assert sema.release(slot, tickets[0])
+    assert sema.release(slot, tickets[0], owner="worker")
 
     assert injected
     assert sema.read_count(slot) == 2
@@ -742,26 +925,32 @@ def test_release_repair_preserves_a_concurrent_reservation(
     assert not sema.reserve(slot, _ticket(), node="overflow", ttl=30)
 
 
+@pytest.mark.parametrize("counter_value", [None, "invalid"])
 def test_release_leaves_holder_intact_when_counter_repair_fails(
-    sema: SemaphoreStore, monkeypatch
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch, counter_value: str | None
 ) -> None:
     slot = _slot()
     sema.set_capacity(slot, 2)
     ticket = _ticket()
-    assert sema.reserve(slot, ticket, node="worker", ttl=30)
+    assert sema.reserve(slot, ticket, node="worker", owner="worker", ttl=30)
     count_key = f"semaphores/{slot}/count"
-    sema.etcd.delete(count_key)
+    if counter_value is None:
+        sema.etcd.delete(count_key)
+    else:
+        sema.etcd.put(count_key, counter_value)
     monkeypatch.setattr(sema, "_reconcile_count", lambda *_args, **_kwargs: (1, False, 5))
 
-    assert not sema.release(slot, ticket)
-
+    result = sema.release_owned_result(slot, ticket, owner="worker")
+    assert not result.success and result.reason == "reconcile_contention"
+    assert result.retryable and result.attempts == 6
+    assert result.counter_reconciled is False and not result.holder_absent
     assert sema.get_holder(slot, ticket) is not None
-    assert sema.etcd.get(count_key) is None
+    assert sema.etcd.get(count_key) == counter_value
 
 
 def test_release_owned_with_missing_counter(sema: SemaphoreStore):
     """
-    Bug #2 fix: Test that release_owned() handles missing counter gracefully
+    Bug #2 fix: Test that release() handles missing counter gracefully
     while still enforcing ownership checks.
     """
     slot = _slot()
@@ -787,8 +976,8 @@ def test_release_owned_with_missing_counter(sema: SemaphoreStore):
     holders = sema.list_holders(slot)
     assert ticket in holders
 
-    # The fix: release_owned() should succeed with correct owner
-    ok_rel = sema.release_owned(slot, ticket, owner=owner)
+    # The fix: release() should succeed with correct owner
+    ok_rel = sema.release(slot, ticket, owner=owner)
     assert ok_rel is True
 
     # After release:
@@ -801,7 +990,7 @@ def test_release_owned_with_missing_counter(sema: SemaphoreStore):
 
 def test_release_owned_with_missing_counter_wrong_owner(sema: SemaphoreStore):
     """
-    Bug #2 fix: Test that release_owned() still enforces ownership checks
+    Bug #2 fix: Test that release() still enforces ownership checks
     even when counter is missing.
     """
     slot = _slot()
@@ -818,7 +1007,7 @@ def test_release_owned_with_missing_counter_wrong_owner(sema: SemaphoreStore):
     sema.etcd.delete(cnt_key)
 
     # Attempt to release with wrong owner should fail
-    ok_rel = sema.release_owned(slot, ticket, owner=wrong_owner)
+    ok_rel = sema.release(slot, ticket, owner=wrong_owner)
     assert ok_rel is False
 
     # Holder should still exist (not released)
@@ -826,7 +1015,7 @@ def test_release_owned_with_missing_counter_wrong_owner(sema: SemaphoreStore):
     assert ticket in holders
 
     # Now release with correct owner should succeed
-    ok_rel_correct = sema.release_owned(slot, ticket, owner=correct_owner)
+    ok_rel_correct = sema.release(slot, ticket, owner=correct_owner)
     assert ok_rel_correct is True
 
     # Holder should now be deleted
@@ -853,9 +1042,9 @@ def test_multiple_releases_with_missing_counter(sema: SemaphoreStore):
     sema.etcd.delete(cnt_key)
 
     # Release all three - each should succeed
-    assert sema.release(slot, t1) is True
-    assert sema.release(slot, t2) is True
-    assert sema.release(slot, t3) is True
+    assert sema.release(slot, t1, owner=f"n1:{t1}") is True
+    assert sema.release(slot, t2, owner=f"n2:{t2}") is True
+    assert sema.release(slot, t3, owner=f"n3:{t3}") is True
 
     # All holders should be gone
     holders_after = sema.list_holders(slot)
@@ -960,7 +1149,7 @@ def test_malformed_count_reserve_and_release_self_repair(sema, etcd_client):
     assert sema.read_count(slot) == 0          # already tolerant today
     assert sema.reserve(slot, "t1", node="n1") is True   # ValueError today
     assert sema.read_count(slot) == 1
-    assert sema.release(slot, "t1") is True
+    assert sema.release(slot, "t1", owner="n1:t1") is True
     assert sema.read_count(slot) == 0
 
 
@@ -1010,6 +1199,10 @@ def test_scan_raises_typed_error_when_channel_closed(sema):
             sema.available_count_all()
         with pytest.raises(EtcdStoreUnavailable):
             sema.list_slot_types()
+        with pytest.raises(EtcdStoreUnavailable):
+            sema.capacities_all()
+        with pytest.raises(EtcdStoreUnavailable):
+            sema.snapshot_all()
     finally:
         del sema.etcd.client.get_prefix
 

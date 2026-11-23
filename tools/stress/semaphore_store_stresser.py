@@ -132,12 +132,15 @@ class SemaphoreStoreStresser:
                 slot_type=self.slot_type,
                 ticket_id=ticket_id,
                 node=f"node-{idx % 32}",
+                owner=ticket_id,
                 ttl=None,
             )
             if not ok_r:
                 return False
-            ok_rel = self._sema.release(self.slot_type, ticket_id)
-            return bool(ok_rel)
+            result = self._sema.release_owned_result(
+                self.slot_type, ticket_id, owner=ticket_id
+            )
+            return result.reason == "released"
         except Exception as e:
             logger.error(f"release error: {e}", exc_info=False)
             return False
@@ -164,13 +167,16 @@ class SemaphoreStoreStresser:
                     slot_type=self.slot_type,
                     ticket_id=ticket_id,
                     node=f"node-{idx % 32}",
+                    owner=ticket_id,
                     ttl=None,
                 )
                 if ok_r:
                     # probabilistically release
                     if random.random() < 0.8:
-                        ok_rel = self._sema.release(self.slot_type, ticket_id)
-                        return bool(ok_rel)
+                        result = self._sema.release_owned_result(
+                            self.slot_type, ticket_id, owner=ticket_id
+                        )
+                        return result.reason == "released"
                     else:
                         return True
 
