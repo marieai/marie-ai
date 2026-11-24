@@ -85,7 +85,7 @@ class AdlibRenderer(ResultRenderer):
             root.set("NUMBER", str(pagenumber))
             root.set("OCREndTime", "0")
             root.set("OCRStartTime", "0")
-            root.set("Producer", "marie")
+            root.set("Producer", "MARIE-AI")
             root.set("XRESOLUTION", str(dpi_x))
             root.set("YRESOLUTION", str(dpi_y))
 

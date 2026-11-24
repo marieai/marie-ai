@@ -62,6 +62,7 @@ if __name__ == "__main__":
     img_path = "./assets/english/Lines/005.png"
     img_path = "~/tmp/analysis/marie-issues/107/195668453-0004.png"
     img_path = "~/tmp/analysis/marie-issues/106/195664193-0006.png"
+    img_path = "~/Desktop/11302023_28082_5_452_.tif"
     img_path = os.path.expanduser(img_path)
 
     if not os.path.exists(img_path):
@@ -104,13 +105,6 @@ if __name__ == "__main__":
                 indent=2,
                 cls=NumpyEncoder,
             )
-
-        # output_filename = "/tmp/fragments/result.pdf"
-        # print("Testing pdf render")
-        #
-        # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
-        # renderer.render(image, result, output_filename)
-
     if True:
         key = img_path.split("/")[-1]
         image = cv2.imread(img_path)
@@ -119,18 +113,21 @@ if __name__ == "__main__":
         print("Testing pdf render")
         results = from_json_file("/tmp/fragments/results.json")
 
-        # renderer = PdfRenderer(config={"preserve_interword_spaces": True})
-        # renderer.render(image, results, output_filename)
-
         renderer = PdfRenderer(config={"preserve_interword_spaces": True})
         renderer.render(
             frames=[image],
-            results=results,
-            output_filename=output_filename
+            results=[results],
+            output_filename=output_filename,
+            **{
+                "overlay": True,
+            }
         )
 
-        # print("Testing text render")
-        #
-        # output_filename = "/tmp/fragments/result.txt"
-        # renderer = TextRenderer(config={"preserve_interword_spaces": True})
-        # renderer.render(image, result, output_filename)
+        renderer.render(
+            frames=[image],
+            results=[results],
+            output_filename=output_filename.replace(".pdf", "_clean.pdf"),
+            **{
+                "overlay": False,
+            }
+        )
