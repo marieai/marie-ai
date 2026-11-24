@@ -1,4 +1,8 @@
-ALTER SYSTEM SET max_connections = 500;
+-- First boot persists these settings. Restart PostgreSQL to activate them.
+ALTER SYSTEM SET max_connections = 1000;
+ALTER SYSTEM SET pg_stat_statements.max = 10000;
+ALTER SYSTEM SET pg_stat_statements.track = 'all';
+ALTER SYSTEM SET pg_stat_statements.track_utility = off;
 
 -- =========================================================
 -- 0) Namespaces & safety

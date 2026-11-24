@@ -11,6 +11,7 @@ from marie.scheduler.llm_routing import (
     RoutingSubmissionError,
     TrustedRoutingContext,
     TrustedRoutingFacts,
+    TrustedRoutingOverride,
 )
 from marie.scheduler.models import ExistingWorkPolicy
 from marie.scheduler.services.dag_submission_service import DagSubmissionService
@@ -43,45 +44,8 @@ def work_item(job_id: str) -> SimpleNamespace:
     )
 
 
-@pytest.mark.asyncio
-async def test_llm_plan_passes_immutable_routes_to_submission_transaction() -> None:
-    service = build_service()
-    policy = AdmissionPolicy.from_rows(
-        'default',
-        1,
-        [
-            {
-                'pool_id': 'default',
-                'enabled': True,
-                'metadata': {
-                    'admission': {
-                        'schema_version': 1,
-                        'priority': 1_000_000,
-                        'accepting': True,
-                        'match': {},
-                    },
-                    'llm_dispatch': {
-                        'schema_version': 1,
-                        'endpoint_id': 'primary',
-                        'revision': 'r1',
-                    },
-                },
-            }
-        ],
-    )
-    root = work_item('018fa1f1-0000-7000-8000-000000000001')
-    root.routing_context = TrustedRoutingContext(
-        base_facts=TrustedRoutingFacts.from_values(
-            {
-                'workload.kind': 'text',
-                'workload.mode': 'batch',
-                'request.source': 'workflow',
-            }
-        ),
-        policy=policy,
-    )
-    node_id = '018fa1f1-0000-7000-8000-000000000002'
-    plan = QueryPlan(
+def llm_plan(node_id: str) -> QueryPlan:
+    return QueryPlan(
         nodes=[
             Query(
                 task_id=node_id,
@@ -96,6 +60,67 @@ async def test_llm_plan_passes_immutable_routes_to_submission_transaction() -> N
             )
         ]
     )
+
+
+def admission_policy() -> AdmissionPolicy:
+    def pool(pool_id: str, priority: int, match: dict) -> dict:
+        return {
+            'pool_id': pool_id,
+            'enabled': True,
+            'metadata': {
+                'admission': {
+                    'schema_version': 1,
+                    'priority': priority,
+                    'accepting': True,
+                    'match': match,
+                },
+                'llm_dispatch': {
+                    'schema_version': 1,
+                    'endpoint_id': 'primary',
+                    'revision': 'r1',
+                },
+            },
+        }
+
+    return AdmissionPolicy.from_rows(
+        'default',
+        1,
+        [
+            pool('default', 1_000_000, {}),
+            pool(
+                'document-medium',
+                20,
+                {'document.effective_page_count': {'gte': 5, 'lte': 16}},
+            ),
+            pool(
+                'document-small',
+                10,
+                {'document.effective_page_count': {'gte': 1, 'lte': 4}},
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_llm_plan_passes_immutable_routes_to_submission_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv('LLM_QUEUE_ENABLED', 'true')
+    service = build_service()
+    policy = admission_policy()
+    root = work_item('018fa1f1-0000-7000-8000-000000000001')
+    root.routing_context = TrustedRoutingContext(
+        base_facts=TrustedRoutingFacts.from_values(
+            {
+                'workload.kind': 'text',
+                'workload.mode': 'batch',
+                'request.source': 'workflow',
+            }
+        ),
+        policy=policy,
+    )
+    node_id = '018fa1f1-0000-7000-8000-000000000002'
+    plan = llm_plan(node_id)
 
     routes = await service._plan_llm_routes(
         root,
@@ -111,47 +136,50 @@ async def test_llm_plan_passes_immutable_routes_to_submission_transaction() -> N
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ('metadata', 'expect_missing'),
+    ('metadata', 'default_count', 'expected_pool', 'expected_count'),
     [
-        ({'uri': 's3://marie/stress/document.tif', 'page_count': 3.0}, False),
+        (
+            {'uri': 's3://marie/stress/document.tif', 'page_count': 3.0},
+            '8',
+            'document-small',
+            3,
+        ),
+        ({'uri': 's3://marie/stress/document.tif'}, None, 'document-small', 1),
+        ({'uri': 's3://marie/stress/document.tif'}, '8', 'document-medium', 8),
+        ({'uri': 's3://marie/stress/document.tif'}, 'invalid', 'document-small', 1),
+        (
+            {'uri': 's3://marie/stress/document.tif', 'pages': [2, 8, 2]},
+            '8',
+            'document-small',
+            2,
+        ),
         (
             {
                 'document_id': '018fa1f1-0000-7000-8000-000000000099',
                 'uri': 's3://marie/stress/document.tif',
                 'page_count': 3.0,
             },
-            True,
+            '8',
+            None,
+            None,
         ),
-        ({'document_id': '018fa1f1-0000-7000-8000-000000000099'}, True),
+        ({'document_id': '018fa1f1-0000-7000-8000-000000000099'}, '8', None, None),
     ],
 )
-async def test_active_admission_policy_requires_lookup_for_supplied_document_id(
-    metadata: dict[str, object], expect_missing: bool
+async def test_queued_document_routing(
+    metadata: dict[str, object],
+    default_count: str | None,
+    expected_pool: str | None,
+    expected_count: int | None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv('LLM_QUEUE_ENABLED', 'true')
+    if default_count is None:
+        monkeypatch.delenv('LLM_QUEUE_DEFAULT_PAGE_COUNT', raising=False)
+    else:
+        monkeypatch.setenv('LLM_QUEUE_DEFAULT_PAGE_COUNT', default_count)
     service = build_service()
-    policy = AdmissionPolicy.from_rows(
-        'default',
-        1,
-        [
-            {
-                'pool_id': 'document-small',
-                'enabled': True,
-                'metadata': {
-                    'admission': {
-                        'schema_version': 1,
-                        'priority': 1_000_000,
-                        'accepting': True,
-                        'match': {},
-                    },
-                    'llm_dispatch': {
-                        'schema_version': 1,
-                        'endpoint_id': 'primary',
-                        'revision': 'r1',
-                    },
-                },
-            }
-        ],
-    )
+    policy = admission_policy()
     service.repository.load_active_admission_policy = AsyncMock(return_value=policy)
     service.repository.get_submission_document_for_routing = AsyncMock(
         return_value=None
@@ -162,27 +190,13 @@ async def test_active_admission_policy_requires_lookup_for_supplied_document_id(
     root.routing_request_source = 'workflow'
     root.data['metadata'] = metadata
     node_id = '018fa1f1-0000-7000-8000-000000000012'
-    plan = QueryPlan(
-        nodes=[
-            Query(
-                task_id=node_id,
-                query_str='Extract',
-                dependencies=[],
-                node_type=QueryType.COMPUTE,
-                definition=LlmQueryDefinition(
-                    model_name='mock',
-                    endpoint='annotator_llm://extract',
-                    params={'layout': 'mock'},
-                ),
-            )
-        ]
-    )
+    plan = llm_plan(node_id)
 
-    if expect_missing:
+    if expected_pool is None:
         with pytest.raises(RoutingSubmissionError, match='^routing_facts_missing$'):
             await service._plan_llm_routes(root, plan, [SimpleNamespace(id=node_id)])
         service.repository.get_submission_document_for_routing.assert_awaited_once_with(
-            document_id=metadata['document_id'], storage_key=metadata.get('uri')
+            document_id=metadata.get('document_id'), storage_key=metadata.get('uri')
         )
         assert root.routing_context is None
         return
@@ -195,9 +209,78 @@ async def test_active_admission_policy_requires_lookup_for_supplied_document_id(
 
     assert len(routes) == 1
     assert routes[0].work_unit_id == node_id
-    assert routes[0].pool_id == 'document-small'
+    assert routes[0].pool_id == expected_pool
     assert routes[0].logical_endpoint_group_id == 'primary'
-    assert routes[0].effective_page_count == 3
+    assert routes[0].effective_page_count == expected_count
+    if 'page_count' not in metadata and 'pages' not in metadata:
+        assert 'document.total_page_count' not in root.routing_context.base_facts.values
+        service.logger.warning.assert_called_once()
+        warning = service.logger.warning.call_args.args[0]
+        assert root.id in warning
+        assert 'page count' in warning
+        assert str(expected_count) in warning
+        assert expected_pool in warning
+        assert metadata['uri'] not in warning
+        await service._plan_llm_routes(root, plan, [SimpleNamespace(id=node_id)])
+        assert service.logger.warning.call_count == 2
+    else:
+        service.logger.warning.assert_not_called()
+        service.logger.info.assert_called_once()
+        assert expected_pool in service.logger.info.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('enabled', [None, 'false'])
+async def test_direct_batch_persists_uri_only_llm_job_without_routing(
+    monkeypatch: pytest.MonkeyPatch, enabled: str | None
+) -> None:
+    if enabled is None:
+        monkeypatch.delenv('LLM_QUEUE_ENABLED', raising=False)
+    else:
+        monkeypatch.setenv('LLM_QUEUE_ENABLED', enabled)
+    service = build_service()
+    service.repository.load_active_admission_policy = AsyncMock()
+    service.repository.get_submission_document_for_routing = AsyncMock(
+        return_value=None
+    )
+    root = work_item('018fa1f1-0000-7000-8000-000000000011')
+    root.routing_context = None
+    root.routing_fabric_group_id = 'default'
+    root.data['metadata'] = {'uri': 's3://marie/stress/document.tif'}
+    node = work_item('018fa1f1-0000-7000-8000-000000000012')
+    plan = llm_plan(node.id)
+    monkeypatch.setattr(
+        submission_module, 'query_plan_work_items', lambda _: (plan, [node])
+    )
+
+    assert await service.submit(root) == root.id
+
+    service.logger.info.assert_any_call(
+        f'Job submission received job_id={root.id} queue=extract'
+    )
+    service.repository.load_active_admission_policy.assert_not_awaited()
+    service.repository.get_submission_document_for_routing.assert_not_awaited()
+    service.repository.create_dag_with_jobs.assert_awaited_once_with(
+        dag_id=root.id, plan=plan, dag_nodes=[node], work_info=root, llm_routes=()
+    )
+
+
+@pytest.mark.asyncio
+async def test_direct_batch_rejects_an_explicit_queue_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv('LLM_QUEUE_ENABLED', 'false')
+    service = build_service()
+    root = work_item('018fa1f1-0000-7000-8000-000000000011')
+    root.routing_context = None
+    root.routing_fabric_group_id = 'default'
+    root.routing_override = TrustedRoutingOverride(
+        pool_id='document-small', actor='operator', reason='routing test'
+    )
+    service.repository.load_active_admission_policy = AsyncMock(return_value=None)
+    node = work_item('018fa1f1-0000-7000-8000-000000000012')
+    with pytest.raises(RoutingSubmissionError, match='^routing_override_unavailable$'):
+        await service._plan_llm_routes(root, llm_plan(node.id), [node])
 
 
 @pytest.mark.asyncio
@@ -231,6 +314,9 @@ async def test_submit_rejects_when_scheduler_is_not_running() -> None:
     with pytest.raises(RuntimeError, match='not running'):
         await service.submit(work_item('job-1'))
 
+    service.logger.info.assert_any_call(
+        'Job submission received job_id=job-1 queue=extract'
+    )
     service.repository.create_dag_with_jobs.assert_not_awaited()
 
 

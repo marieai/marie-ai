@@ -175,6 +175,7 @@ def normalize_routing_facts(
     workload_mode: str,
     pipeline_stage: str | None,
     request_source: str,
+    default_page_count: int | None = None,
 ) -> TrustedRoutingFacts:
     if (
         workload_kind not in _WORKLOAD_KINDS
@@ -193,25 +194,32 @@ def normalize_routing_facts(
         values['pipeline.stage'] = pipeline_stage
 
     if workload_kind == 'document':
-        if document is None or document.page_count is None:
+        if document is None:
             raise RoutingSubmissionError('routing_facts_missing')
         total = document.page_count
-        if type(total) is not int or total < 1:
-            raise RoutingSubmissionError('routing_facts_invalid')
-        values['document.total_page_count'] = total
-        effective = total
+        if total is not None:
+            if type(total) is not int or total < 1:
+                raise RoutingSubmissionError('routing_facts_invalid')
+            values['document.total_page_count'] = total
+        effective = total if total is not None else default_page_count
         if requested_pages is not None:
             if not requested_pages:
                 raise RoutingSubmissionError('routing_facts_invalid')
             pages: set[int] = set()
             for page in requested_pages:
-                if type(page) is not int or page < 0 or page >= total:
+                if (
+                    type(page) is not int
+                    or page < 0
+                    or (total is not None and page >= total)
+                ):
                     raise RoutingSubmissionError('routing_facts_invalid')
                 pages.add(page)
             effective = len(pages)
-            if effective < 1:
-                raise RoutingSubmissionError('routing_facts_invalid')
             values['document.requested_page_count'] = effective
+        if effective is None:
+            raise RoutingSubmissionError('routing_facts_missing')
+        if type(effective) is not int or effective < 1:
+            raise RoutingSubmissionError('routing_facts_invalid')
         values['document.effective_page_count'] = effective
     elif requested_pages is not None:
         raise RoutingSubmissionError('routing_facts_invalid')
