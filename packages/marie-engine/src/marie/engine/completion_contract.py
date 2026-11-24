@@ -4,7 +4,7 @@ import json
 import math
 import re
 from dataclasses import asdict, dataclass, field, fields, replace
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 COMPLETION_QUEUE_SCHEMA_VERSION = 1
 
@@ -132,6 +132,21 @@ class CompletionCallParams:
         values = dict(data)
         values["context"] = RequestContext.from_dict(values.get("context"))
         return cls(**values)
+
+
+@dataclass(frozen=True)
+class PreparedCalls:
+    """Prepare one original item at a time after validating shared completion options."""
+
+    count: int
+    prepare: Callable[[int], CompletionCallParams]
+    validation_call: CompletionCallParams
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, index: int) -> CompletionCallParams:
+        return self.prepare(index)
 
 
 def build_completion_call(

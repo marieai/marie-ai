@@ -1,14 +1,15 @@
 import logging
-import os
+import threading
 import time
 import traceback
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import diskcache as dc
 from marie.engine.base import EngineLM
 from marie.engine.batch_processor import BatchProcessor
 from marie.engine.completion_contract import (
     CompletionCallParams,
+    PreparedCalls,
     RequestContext,
     build_completion_call,
 )
@@ -20,23 +21,19 @@ from marie.engine.engine_utils import (
     is_batched_request,
     open_ai_like_formatting,
 )
+from marie.engine.llm_queue.config import LlmQueueProducerConfig
 from marie.engine.openai_compat import build_async_openai_client
 from PIL import Image
 from pydantic import BaseModel
-
-MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
-E.g. to use openai Please set the OPENAI_API_KEY environment variable or \
-openai.api_key prior to initialization.
-API keys can be found or created at \
-https://platform.openai.com/account/api-keys
-"""
-INVALID_API_KEY_ERROR_MESSAGE = """Invalid LLM API key."""
 
 
 class OpenAIEngine(EngineLM):
     """
     OpenAIEngine is a wrapper around the OpenAI API.
     Supports both multimodal and text-based models.
+
+    api_key is supplied by the caller. Direct execution requires a nonempty key;
+    queued engines retain an optional key without creating a provider client.
     """
 
     DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
@@ -51,6 +48,9 @@ class OpenAIEngine(EngineLM):
         base_url: str = None,
         max_concurrency: Optional[int] = None,
         batch_timeout: Optional[float] = None,
+        *,
+        api_key: str | None = None,
+        queue_config: LlmQueueProducerConfig | None = None,
         **kwargs,
     ):
         if any(
@@ -66,7 +66,19 @@ class OpenAIEngine(EngineLM):
             )
         ):
             raise ValueError("caller_pool_forbidden")
-        self.validate()
+        queue_options = {
+            "enabled": kwargs.get("queue_enabled"),
+            "queue_url": kwargs.get("queue_url"),
+            "valkey_url": kwargs.get("queue_valkey_url"),
+            "fabric_group_id": kwargs.get("queue_fabric_group_id"),
+        }
+        if queue_config is None:
+            queue_config = LlmQueueProducerConfig.from_env(**queue_options)
+        elif any(value is not None for value in queue_options.values()):
+            raise ValueError("queue_configuration_conflict")
+        self.api_key = api_key
+        if not queue_config.enabled:
+            self.validate()
         super().__init__(
             model_string=model_name,
             system_prompt=system_prompt,
@@ -75,9 +87,11 @@ class OpenAIEngine(EngineLM):
         )
         self.logger = logging.getLogger(self.__class__.__name__)
         processor_kwargs = processor_kwargs or {}
-        api_key = os.getenv("OPENAI_API_KEY")
-
-        self.client = build_async_openai_client(api_key=api_key, base_url=base_url)
+        self.client = None
+        if not queue_config.enabled:
+            self.client = build_async_openai_client(
+                api_key=self.api_key, base_url=base_url
+            )
 
         # Derive backend address for the circuit breaker key
         backend_address = base_url or "https://api.openai.com"
@@ -91,17 +105,12 @@ class OpenAIEngine(EngineLM):
             max_concurrency=max_concurrency,
             batch_timeout=batch_timeout,
             backend_address=backend_address,
-            queue_enabled=kwargs.get("queue_enabled"),
-            queue_url=kwargs.get("queue_url"),
-            queue_valkey_url=kwargs.get("queue_valkey_url"),
-            queue_fabric_group_id=kwargs.get("queue_fabric_group_id"),
+            queue_config=queue_config,
         )
 
     def validate(self) -> None:
-        if os.getenv("OPENAI_API_KEY") is None:
-            raise ValueError(
-                "Please set the OPENAI_API_KEY environment variable if you'd like to use OpenAI models."
-            )
+        if not self.api_key:
+            raise ValueError("api_key is required for direct execution")
 
     def build_queue_dispatcher(self):
         raise RuntimeError("LLM queue dispatchers are gateway-owned")
@@ -110,6 +119,21 @@ class OpenAIEngine(EngineLM):
         if self.batch_processor is not None:
             self.batch_processor.close()
         self.client = None
+
+    @property
+    def uses_queued_dispatch(self) -> bool:
+        """Whether submissions use Gateway dispatch."""
+        return self.batch_processor.uses_queued_dispatch
+
+    @property
+    def batch_timeout(self) -> float:
+        """The existing batch execution budget in seconds."""
+        return self.batch_processor.batch_timeout
+
+    @property
+    def max_concurrency(self) -> int:
+        """The existing per-engine request limit."""
+        return self.batch_processor.max_concurrency
 
     def __del__(self):
         try:
@@ -131,38 +155,7 @@ class OpenAIEngine(EngineLM):
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         **kwargs,
     ):
-        return self.openai_generate(
-            content,
-            system_prompt,
-            guided_json=guided_json,
-            guided_regex=guided_regex,
-            guided_choice=guided_choice,
-            guided_grammar=guided_grammar,
-            guided_json_object=guided_json_object,
-            guided_backend=guided_backend,
-            guided_whitespace_pattern=guided_whitespace_pattern,
-            on_result=on_result,
-            **kwargs,
-        )
-
-    def _generate_from_multiple_input(
-        self,
-        content: Union[
-            List[List[Union[str, bytes, Image.Image]]],
-            List[Union[str, bytes, Image.Image]],
-        ],
-        system_prompt=None,
-        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
-        guided_regex: Optional[str] = None,
-        guided_choice: Optional[List[str]] = None,
-        guided_grammar: Optional[str] = None,
-        guided_json_object: Optional[bool] = None,
-        guided_backend: Optional[str] = None,
-        guided_whitespace_pattern: Optional[str] = None,
-        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
-        **kwargs,
-    ):
-        return self.openai_generate(
+        return self._generate_from_multiple_input(
             content,
             system_prompt,
             guided_json=guided_json,
@@ -235,9 +228,59 @@ class OpenAIEngine(EngineLM):
             conversation=messages, tokenize=False, add_generation_prompt=True
         )
 
-    def batch_generate(
+    def complete_many(
         self,
-        batch_content: Union[List[str], List[List[Union[Image.Image, bytes, str]]]],
+        calls: list[CompletionCallParams] | PreparedCalls,
+        *,
+        request_id: str | None = None,
+        on_result: Callable[[str, str | None], None] | None = None,
+        metadata: dict[str, Any] | None = None,
+        queue_deadline: float | None = None,
+        cancellation: threading.Event | None = None,
+        attempt_observer: CompletionAttemptObserver | None = None,
+    ) -> list[str | None]:
+        """Submit canonical calls through the owned processor and return ordered text.
+
+        Args:
+            calls: Canonical calls, or lazy calls for queued dispatch only.
+            request_id: Batch correlation ID; generated by the processor if absent.
+            on_result: Incremental callback with task ID and response text.
+            metadata: Metadata passed to the processor for tracing and execution.
+            queue_deadline: Absolute monotonic deadline for queued execution.
+            cancellation: Caller-owned cancellation event for queued execution.
+            attempt_observer: Observer using the existing mode's attempt delivery.
+
+        Returns:
+            Text slots in input order, retaining existing nullable results.
+
+        Raises:
+            ValueError: Lazy calls were supplied in direct mode.
+            BatchExecutionError: Tasks failed; the exception retains successful
+                and failed result records.
+        """
+        if (
+            isinstance(calls, PreparedCalls)
+            and not self.batch_processor.uses_queued_dispatch
+        ):
+            raise ValueError("Lazy image preparation requires queued dispatch")
+        return self.batch_processor.batch_generate_calls(
+            calls=calls,
+            request_id=request_id,
+            on_result=on_result,
+            metadata=metadata,
+            queue_deadline=queue_deadline,
+            cancellation=cancellation,
+            attempt_observer=attempt_observer,
+        )
+
+    def _generate_from_multiple_input(
+        self,
+        content: Union[
+            str,
+            List[str],
+            List[Union[Image.Image, bytes, str]],
+            List[List[Union[Image.Image, bytes, str]]],
+        ],
         system_prompt=None,
         guided_json: Optional[Union[Dict, BaseModel, str]] = None,
         guided_regex: Optional[str] = None,
@@ -249,30 +292,13 @@ class OpenAIEngine(EngineLM):
         on_result: Optional[Callable[[str, Optional[str]], None]] = None,
         attempt_observer: Optional[CompletionAttemptObserver] = None,
         **kwargs,
-    ) -> List[str]:
-        """
-        Performs batch inference for multiple inputs, supporting both text-only and multimodal content.
-
-        This function processes input data, constructs formatted prompts, and executes batched inference
-        with optimized error handling and logging.
-
-        :param batch_content: A list of text prompts or multimodal inputs (image, text pairs).
-        :param system_prompt: Optional system-level instructions for the model.
-        :param on_result: Optional callback invoked when each task completes.
-                         Signature: (task_id: str, response: Optional[str]) -> None
-                         This enables incremental result processing (e.g., writing to disk as each completes).
-        :param kwargs: Additional inference parameters. Recognized keys include
-            reasoning_model (bool), mm_processor_kwargs (dict), completion_params
-            (dict), metadata (dict), and request_contexts (list[RequestContext | None])
-            aligned with batch_content.
-
-        :return: A list of generated outputs corresponding to each input in batch_content.
-        """
+    ) -> str | None | list[str | None]:
+        """Prepare prompt/image inputs and submit one canonical batch."""
+        batched = is_batched_request(content)
+        batch_content = content if batched else [content]
         queue_deadline = kwargs.pop("queue_deadline", None)
         cancellation = kwargs.pop("cancellation", None)
         if self.batch_processor.uses_queued_dispatch:
-            from marie.engine.llm_queue.producer import PreparedCalls
-
             queue_deadline = (
                 queue_deadline or time.monotonic() + self.batch_processor.batch_timeout
             )
@@ -284,13 +310,13 @@ class OpenAIEngine(EngineLM):
             }
 
             if self.is_multimodal:
-                for content in batch_content:
+                for item_content in batch_content:
                     check_image_preparation_budget(
-                        [item for item in content if isinstance(item, Image.Image)]
+                        [item for item in item_content if isinstance(item, Image.Image)]
                     )
 
             def prepare(index: int) -> CompletionCallParams:
-                return self._build_completion_calls(
+                return self.build_completion_calls(
                     batch_content=[batch_content[index]],
                     system_prompt=system_prompt,
                     guided_json=guided_json,
@@ -313,7 +339,7 @@ class OpenAIEngine(EngineLM):
                 ),
             )
         else:
-            calls = self._build_completion_calls(
+            calls = self.build_completion_calls(
                 batch_content=batch_content,
                 system_prompt=system_prompt,
                 guided_json=guided_json,
@@ -331,7 +357,7 @@ class OpenAIEngine(EngineLM):
             if "metadata" in kwargs:
                 bp_kwargs["metadata"] = kwargs["metadata"]
 
-            ordered_outputs = self.batch_processor.batch_generate_calls(
+            ordered_outputs = self.complete_many(
                 calls=calls,
                 on_result=on_result,
                 attempt_observer=attempt_observer,
@@ -344,16 +370,27 @@ class OpenAIEngine(EngineLM):
         elapsed_time = time.time() - start_time
         self.logger.info(f"Batch inference completed in {elapsed_time:.2f} sec")
 
-        return ordered_outputs
+        return ordered_outputs if batched else ordered_outputs[0]
 
-    def _build_completion_calls(
+    def build_completion_calls(
         self,
         *,
         batch_content: Union[List[str], List[List[Union[Image.Image, bytes, str]]]],
-        system_prompt=None,
+        system_prompt: str | None = None,
         guided_json: Optional[Union[Dict, BaseModel, str]] = None,
-        **kwargs,
-    ) -> List[CompletionCallParams]:
+        **kwargs: Any,
+    ) -> list[CompletionCallParams]:
+        """Build canonical calls from prompt/image inputs and per-item context.
+
+        Args:
+            batch_content: Text prompts or multimodal input batches.
+            system_prompt: Optional system instruction override.
+            guided_json: Optional guided generation schema.
+            **kwargs: Existing completion, image-formatting and context options.
+
+        Returns:
+            One canonical completion call per input item.
+        """
         effective_system_prompt = system_prompt or self.system_prompt
 
         if self.is_multimodal:
@@ -418,56 +455,3 @@ class OpenAIEngine(EngineLM):
             )
             for index, messages in enumerate(messages_list)
         ]
-
-    def openai_generate(
-        self,
-        content,
-        system_prompt=None,
-        guided_json: Optional[Union[Dict, BaseModel, str]] = None,
-        guided_regex: Optional[str] = None,
-        guided_choice: Optional[List[str]] = None,
-        guided_grammar: Optional[str] = None,
-        guided_json_object: Optional[bool] = None,
-        guided_backend: Optional[str] = None,
-        guided_whitespace_pattern: Optional[str] = None,
-        on_result: Optional[Callable[[str, Optional[str]], None]] = None,
-        **kwargs,
-    ) -> Union[str, List[str]]:
-        """Generate text using the model.
-
-        Args:
-            content: Input content (single or batch)
-            system_prompt: Optional system prompt
-            guided_json: Optional JSON schema for guided generation
-            guided_regex: Optional regex for guided generation
-            guided_choice: Optional choices for guided generation
-            guided_grammar: Optional grammar for guided generation
-            guided_json_object: Optional JSON object flag
-            guided_backend: Optional guided backend
-            guided_whitespace_pattern: Optional whitespace pattern
-            on_result: Optional callback invoked when each task completes.
-                      Signature: (task_id: str, response: Optional[str]) -> None
-            **kwargs: Additional arguments
-
-        Returns:
-            Generated text (single string or list of strings)
-        """
-        batched = is_batched_request(content)
-        if not batched:
-            content = [content]
-        results = self.batch_generate(
-            content,
-            system_prompt,
-            guided_json=guided_json,
-            guided_regex=guided_regex,
-            guided_choice=guided_choice,
-            guided_grammar=guided_grammar,
-            guided_json_object=guided_json_object,
-            guided_backend=guided_backend,
-            guided_whitespace_pattern=guided_whitespace_pattern,
-            on_result=on_result,
-            **kwargs,
-        )
-        if not batched:
-            return results[0]
-        return results

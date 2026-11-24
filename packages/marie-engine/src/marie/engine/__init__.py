@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from marie.registry.model_catalog import load_model_catalog
@@ -60,6 +61,7 @@ def get_engine(engine_name: str, provider: str = "vllm", **kwargs) -> EngineLM:
         **kwargs: Additional arguments passed to the engine constructor.
             For 'openai' provider, pass base_url to use LiteLLM proxy for
             other providers (Claude, Gemini, etc.)
+            When api_key is omitted, the OpenAI factory resolves OPENAI_API_KEY.
 
     Returns:
         The engine to use for the LLM call.
@@ -94,6 +96,8 @@ def get_engine(engine_name: str, provider: str = "vllm", **kwargs) -> EngineLM:
     elif provider == "openai":
         from .openai_engine import OpenAIEngine
 
+        if "api_key" not in kwargs:
+            kwargs["api_key"] = os.getenv("OPENAI_API_KEY")
         return OpenAIEngine(
             model_name=engine_name,
             is_multimodal=True,

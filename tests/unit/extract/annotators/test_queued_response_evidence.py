@@ -67,10 +67,10 @@ async def test_lazy_handler_binds_units_and_images_before_out_of_order_delivery(
         return {"source": kw["unit"].data["source"]}
 
     engine = SimpleNamespace(
-        batch_processor=SimpleNamespace(
-            uses_queued_dispatch=True, batch_timeout=5, batch_generate_calls=execute
-        ),
-        _build_completion_calls=lambda **kwargs: [
+        uses_queued_dispatch=True,
+        batch_timeout=5,
+        complete_many=execute,
+        build_completion_calls=lambda **kwargs: [
             CompletionCallParams(model="model", messages=[])
         ],
     )

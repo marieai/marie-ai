@@ -14,6 +14,7 @@ from marie.engine.circuit_breaker import (
 )
 from marie.engine.completion_contract import (
     CompletionCallParams,
+    PreparedCalls,
     RequestContext,
     apply_repetition_recovery,
     build_completion_call,
@@ -53,7 +54,6 @@ from openai import (
     APIError,
     APITimeoutError,
     AsyncOpenAI,
-    AuthenticationError,
     RateLimitError,
 )
 from openai.types.chat import ChatCompletion
@@ -74,14 +74,6 @@ from tenacity import (
 logger = logging.getLogger(__name__)
 _tracer = get_tracer("marie.engine.batch_processor")
 _ATTEMPT_OBSERVER_FAILURE = "_marie_attempt_observer_failure"
-
-MISSING_API_KEY_ERROR_MESSAGE = """No API key found for LLM.
-E.g. to use openai Please set the OPENAI_API_KEY environment variable or \
-openai.api_key prior to initialization.
-API keys can be found or created at \
-https://platform.openai.com/account/api-keys
-"""
-INVALID_API_KEY_ERROR_MESSAGE = """Invalid LLM API key."""
 
 
 def _is_pool_timeout(exc: BaseException) -> bool:
@@ -176,7 +168,27 @@ class BatchProcessor:
         queue_url: Optional[str] = None,
         queue_valkey_url: Optional[str] = None,
         queue_fabric_group_id: Optional[str] = None,
+        *,
+        queue_config: LlmQueueProducerConfig | None = None,
     ):
+        if queue_config is None:
+            queue_config = LlmQueueProducerConfig.from_env(
+                enabled=queue_enabled,
+                queue_url=queue_url,
+                valkey_url=queue_valkey_url,
+                fabric_group_id=queue_fabric_group_id,
+            )
+        elif any(
+            value is not None
+            for value in (
+                queue_enabled,
+                queue_url,
+                queue_valkey_url,
+                queue_fabric_group_id,
+            )
+        ):
+            raise ValueError("queue_configuration_conflict")
+        self._queue_config = queue_config
         self.client = client
         self.model_string = model_string
         self.logger = logger
@@ -189,7 +201,10 @@ class BatchProcessor:
             raise ValueError("batch timeout must be greater than 0")
         self.batch_timeout = batch_timeout
         self.backend_address = backend_address or "unknown"
-        if not isinstance(self.client, AsyncOpenAI):
+        if not (
+            isinstance(self.client, AsyncOpenAI)
+            or (self.client is None and queue_config.enabled)
+        ):
             raise ValueError(
                 "Client must be an instance of OpenAI API client for async operations."
             )
@@ -219,12 +234,6 @@ class BatchProcessor:
         self._queued_executor = None
         self._queued_executor_lock = threading.Lock()
         self._queue_pid = os.getpid()
-        self._queue_config = LlmQueueProducerConfig.from_env(
-            enabled=queue_enabled,
-            queue_url=queue_url,
-            valkey_url=queue_valkey_url,
-            fabric_group_id=queue_fabric_group_id,
-        )
         self._queue_mode_logged = False
 
     @property
@@ -366,9 +375,6 @@ class BatchProcessor:
                     except Exception as e:
                         self.logger.error(f"Could not save messages: {e}")
 
-                # Handle authentication errors before making API call
-                if not os.getenv("OPENAI_API_KEY"):
-                    raise AuthenticationError(MISSING_API_KEY_ERROR_MESSAGE)
                 completion = await execute_completion_call(self.client, call)
                 raw_response = _raw_completion_text(completion)
                 finish_reason = completion_finish_reason(completion)
@@ -757,8 +763,6 @@ class BatchProcessor:
             )
 
         if self.uses_queued_dispatch:
-            from marie.engine.llm_queue.producer import PreparedCalls
-
             calls = PreparedCalls(
                 len(messages_list),
                 prepare,
@@ -788,7 +792,7 @@ class BatchProcessor:
     def batch_generate_calls(
         self,
         *,
-        calls: List[CompletionCallParams],
+        calls: list[CompletionCallParams] | PreparedCalls,
         request_id: Optional[str] = None,
         start_time: Optional[float] = None,
         batch_span=None,
@@ -797,7 +801,7 @@ class BatchProcessor:
         queue_deadline: float | None = None,
         cancellation: threading.Event | None = None,
         attempt_observer: Optional[CompletionAttemptObserver] = None,
-    ) -> List[str]:
+    ) -> list[str | None]:
         if self.uses_queued_dispatch and not calls:
             if batch_span is not None:
                 batch_span.end()

@@ -130,11 +130,10 @@ class LLMCall(Function):
         :return: response sampled from the LLM
         """
         cancellation = threading.Event()
-        processor = getattr(self.engine, 'batch_processor', None)
-        if processor is not None and processor.uses_queued_dispatch:
+        if getattr(self.engine, 'uses_queued_dispatch', False):
             kwargs['cancellation'] = cancellation
             kwargs.setdefault(
-                'queue_deadline', time.monotonic() + processor.batch_timeout
+                'queue_deadline', time.monotonic() + self.engine.batch_timeout
             )
 
         system_prompt_value = self.system_prompt

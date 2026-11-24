@@ -18,6 +18,9 @@ from marie.engine.completion_contract import (
     extract_completion_text,
     require_terminal_completion,
 )
+from marie.engine.completion_contract import (
+    PreparedCalls as _PreparedCalls,
+)
 from marie.engine.completion_observer import (
     CompletionAttempt,
     CompletionAttemptObserver,
@@ -82,21 +85,6 @@ class _Pending:
     category: str = "deadline_exceeded"
     admission_confirmed: bool = False
     capture_attempts: bool = False
-
-
-@dataclass(frozen=True)
-class PreparedCalls:
-    """Prepare one original item at a time after validating shared completion options."""
-
-    count: int
-    prepare: Callable[[int], CompletionCallParams]
-    validation_call: CompletionCallParams
-
-    def __len__(self) -> int:
-        return self.count
-
-    def __getitem__(self, index: int) -> CompletionCallParams:
-        return self.prepare(index)
 
 
 class QueuedDispatchProducer:
@@ -327,7 +315,7 @@ class QueuedDispatchProducer:
     def execute(
         self,
         *,
-        calls: Sequence[CompletionCallParams] | PreparedCalls,
+        calls: Sequence[CompletionCallParams] | _PreparedCalls,
         batch_request_id: str,
         batch_timeout: float,
         on_result: Callable | None = None,
@@ -341,7 +329,7 @@ class QueuedDispatchProducer:
             if queue_deadline is not None
             else time.monotonic() + batch_timeout
         )
-        if isinstance(calls, PreparedCalls):
+        if isinstance(calls, _PreparedCalls):
             require_terminal_completion(calls.validation_call)
         else:
             for call in calls:
@@ -483,7 +471,7 @@ class QueuedDispatchProducer:
                             attempt = uuid4().hex
                             task_id = f"{batch_request_id}_task_{next_index}"
                             prepared = calls[next_index]
-                            if not isinstance(calls, PreparedCalls):
+                            if not isinstance(calls, _PreparedCalls):
                                 prepared = copy.deepcopy(prepared)
                             require_terminal_completion(prepared)
                             context = prepared.context

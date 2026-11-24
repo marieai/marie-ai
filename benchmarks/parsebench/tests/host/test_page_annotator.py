@@ -30,9 +30,8 @@ class _FakeEngine:
 
     def __init__(self, response: str) -> None:
         self.response = response
-        self.batch_processor = SimpleNamespace(
-            max_concurrency=1, uses_queued_dispatch=False
-        )
+        self.max_concurrency = 1
+        self.uses_queued_dispatch = False
 
     def __call__(self, content, **kwargs):
         task_id = 'request_task_0'

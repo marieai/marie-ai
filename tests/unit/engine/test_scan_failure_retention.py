@@ -65,9 +65,7 @@ def test_failed_scan_releases_job_state_without_cyclic_gc(
                 output_dir=str(tmp_path),
                 prompt=SimpleNamespace(),
                 document=document,
-                engine=SimpleNamespace(
-                    batch_processor=SimpleNamespace(max_concurrency=2)
-                ),
+                engine=SimpleNamespace(max_concurrency=2),
                 expect_output="json",
                 mini_batch_size=1,
             )
@@ -150,6 +148,8 @@ def test_real_batch_releases_images_after_output_or_call_failure(
         if failure == "json_then_call":
             raise RuntimeError("model call failed")
         return responses
+
+    engine.max_concurrency = 3
 
     async def annotate(document: Document, frames: list[Image.Image]) -> None:
         await util.ascan_and_process_images(

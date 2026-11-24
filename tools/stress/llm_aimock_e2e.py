@@ -103,6 +103,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
         )
         engine = OpenAIEngine(
             model_name="gpt-4o",
+            api_key=api_key,
             base_url=args.base_url,
             is_multimodal=False,
             max_concurrency=2,

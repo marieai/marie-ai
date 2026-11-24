@@ -4,12 +4,12 @@ import asyncio
 import logging
 import threading
 import time
+from typing import Any
 from uuid import uuid4
 
 import pytest
 from marie.engine.batch_processor import BatchProcessor
 from marie.engine.completion_contract import CompletionCallParams, RequestContext
-from openai import AsyncOpenAI
 from test_request_dispatcher import dispatcher_for, eventually, http_endpoint, store
 
 
@@ -34,7 +34,7 @@ def registered_context(store, *, job_id='synthetic-job', work_unit_id='synthetic
 def processor_for(store, **kwargs):
     registered_context(store)
     return BatchProcessor(
-        client=AsyncOpenAI(api_key='test', base_url='http://127.0.0.1:1/v1'),
+        client=None,
         model_string='model',
         logger=logging.getLogger('producer-test'),
         queue_enabled=True,
@@ -290,18 +290,50 @@ def test_producer_rejects_missing_or_malformed_policy_without_writes(store, poli
 def engine_for(store, monkeypatch, *, multimodal=False, timeout=5):
     from marie.engine.openai_engine import OpenAIEngine
 
-    monkeypatch.setenv('OPENAI_API_KEY', 'test')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_BASE', raising=False)
     registered_context(store)
     registered_context(store, job_id='same-dag', work_unit_id='same-node')
     return OpenAIEngine(
         model_name='model',
         is_multimodal=multimodal,
-        base_url='http://127.0.0.1:1/v1',
         queue_enabled=True,
         queue_url=store.test_url,
         queue_fabric_group_id=store.keys.fabric_id,
         batch_timeout=timeout,
     )
+
+
+async def test_queued_key_is_retained_without_entering_provider_payload(
+    store: Any, http_endpoint: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from marie.engine.openai_engine import OpenAIEngine
+
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_BASE', raising=False)
+    url, received, _, _ = http_endpoint
+    runtime = dispatcher_for(store, url)
+    engine = OpenAIEngine(
+        'model',
+        api_key='executor-test-key',
+        queue_enabled=True,
+        queue_url=store.test_url,
+        queue_fabric_group_id=store.keys.fabric_id,
+    )
+    await runtime.start()
+    try:
+        await eventually(lambda: store.resolve_route('pool'))
+        inputs = calls(1, store)
+        assert await asyncio.to_thread(engine.complete_many, inputs) == ['item-0']
+        assert engine.api_key == 'executor-test-key'
+        assert engine.client is None
+        assert len(received) == 1
+        assert 'executor-test-key' not in json.dumps(received)
+    finally:
+        await asyncio.to_thread(engine.close)
+        await runtime.stop()
 
 
 @pytest.mark.parametrize('multimodal', [False, True])
@@ -351,7 +383,7 @@ async def test_async_cancellation_stops_future_admission_without_cancelling_sibl
         await eventually(entered.is_set)
         sibling = asyncio.create_task(
             asyncio.to_thread(
-                engine.batch_generate,
+                engine,
                 ['sibling'],
                 request_contexts=[registered_context(store)],
             )
@@ -381,19 +413,19 @@ async def test_deadline_includes_preparation_and_admits_nothing_after_budget(
     url, received, _, _ = http_endpoint
     runtime = dispatcher_for(store, url)
     engine = engine_for(store, monkeypatch, timeout=0.1)
-    build = engine._build_completion_calls
+    build = engine.build_completion_calls
 
     def slow_build(**kwargs):
         time.sleep(0.15)
         return build(**kwargs)
 
-    monkeypatch.setattr(engine, '_build_completion_calls', slow_build)
+    monkeypatch.setattr(engine, 'build_completion_calls', slow_build)
     await runtime.start()
     try:
         await eventually(lambda: store.resolve_route('pool'))
         with pytest.raises(BatchExecutionError) as raised:
             await asyncio.to_thread(
-                engine.batch_generate,
+                engine,
                 ['slow'],
                 request_contexts=[registered_context(store)],
             )
@@ -465,7 +497,7 @@ async def test_prepared_calls_released_after_admission_while_results_wait(
     url, received, releases, _ = http_endpoint
     runtime = dispatcher_for(store, url)
     engine = engine_for(store, monkeypatch)
-    build = engine._build_completion_calls
+    build = engine.build_completion_calls
     references = []
 
     def track_calls(**kwargs):
@@ -473,14 +505,14 @@ async def test_prepared_calls_released_after_admission_while_results_wait(
         references.extend(weakref.ref(call) for call in built)
         return built
 
-    monkeypatch.setattr(engine, '_build_completion_calls', track_calls)
+    monkeypatch.setattr(engine, 'build_completion_calls', track_calls)
     await runtime.start()
     try:
         await eventually(lambda: store.resolve_route('pool'))
         releases['model'] = asyncio.Event()
         task = asyncio.create_task(
             asyncio.to_thread(
-                engine.batch_generate,
+                engine,
                 ['one', 'two', 'three'],
                 request_contexts=[registered_context(store)] * 3,
             )
@@ -879,9 +911,8 @@ async def test_cancelled_parallel_batches_release_next_admission_wave(
 ):
     from concurrent.futures import ThreadPoolExecutor
 
-    from marie.engine.completion_contract import RequestContext
+    from marie.engine.completion_contract import PreparedCalls, RequestContext
     from marie.engine.exceptions import BatchExecutionError
-    from marie.engine.llm_queue.producer import PreparedCalls
     from marie.engine.llm_queue.store import RoutingManifestProjection
 
     url, _, _, _ = http_endpoint

@@ -42,9 +42,8 @@ class _FakeEngine:
 
     def __init__(self, response="not generic json"):
         self.response = response
-        self.batch_processor = SimpleNamespace(
-            max_concurrency=1, uses_queued_dispatch=False
-        )
+        self.max_concurrency = 1
+        self.uses_queued_dispatch = False
 
     def __call__(self, content, **kwargs):
         from marie.engine.completion_observer import CompletionAttempt
@@ -296,6 +295,7 @@ async def test_response_handler_receives_raw_response_from_real_engine_lifecycle
     ):
         engine = OpenAIEngine(
             model_name="test-model",
+            api_key="test-key",
             is_multimodal=True,
             base_url="http://test-backend:8000",
             queue_enabled=False,

@@ -230,7 +230,7 @@ def executor_request(tmp_path, monkeypatch, engine, count=9, dimensions=(2525, 3
         docs_module, 'fetch_asset_to_temp', lambda _: (str(document_path), 'tiff')
     )
     original_load = module.docs_from_asset
-    prompt_dir = tmp_path / 'extract' / 'TID-test' / 'annotator'
+    prompt_dir = tmp_path / 'TID-test' / 'annotator'
     prompt_dir.mkdir(parents=True)
     prompt = prompt_dir / 'prompt.txt'
     prompt.write_text('{{ INJECTED_TEXT }}')
@@ -343,7 +343,7 @@ async def test_generic_queued_group_rejects_total_preparation_before_formatting(
             await eventually(lambda: store.resolve_route('pool'))
             with pytest.raises((ValueError, BatchExecutionError), match='preparation'):
                 await asyncio.to_thread(
-                    engine.batch_generate,
+                    engine,
                     inputs,
                     request_contexts=[registered_context(store)],
                 )
@@ -538,7 +538,7 @@ async def test_actual_two_image_group_preserves_wire_and_caller_images(
         try:
             await eventually(lambda: store.resolve_route('pool'))
             result = await asyncio.to_thread(
-                engine.batch_generate,
+                engine,
                 inputs,
                 request_contexts=[
                     RequestContext(

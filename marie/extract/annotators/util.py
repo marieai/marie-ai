@@ -25,7 +25,11 @@ from typing import (
 )
 
 from marie.engine import EngineLM
-from marie.engine.completion_contract import CompletionCallParams, RequestContext
+from marie.engine.completion_contract import (
+    CompletionCallParams,
+    PreparedCalls,
+    RequestContext,
+)
 from marie.engine.completion_observer import CompletionAttempt
 from marie.engine.engine_utils import (
     as_bytes,
@@ -36,7 +40,6 @@ from marie.engine.exceptions import BatchExecutionError
 from marie.engine.llm_ops import LLMCall
 from marie.engine.llm_queue.config import (
     LlmQueueProducerConfig,
-    llm_queue_enabled,
     resolve_fabric_id,
 )
 from marie.engine.multimodal_ops import MultimodalLLMCall
@@ -174,10 +177,8 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
         _engine_cache_pid = os.getpid()
         _engine_cache = {}
         _engine_lock = Lock()
-    queue_enabled = llm_queue_enabled()
-    queue_config = LlmQueueProducerConfig.from_env(
-        enabled=queue_enabled,
-    )
+    queue_config = LlmQueueProducerConfig.from_env()
+    queue_enabled = queue_config.enabled
     queue_url = queue_config.queue_url
     recovery_identity = ()
     fabric = queue_config.fabric_group_id
@@ -190,12 +191,21 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
             queue_config.max_buffered_requests,
             float(os.getenv('LLM_BATCH_TIMEOUT_S', '900')),
         )
+    api_key = os.environ.get("OPENAI_API_KEY")
+    api_base = os.environ.get("OPENAI_API_BASE") if not queue_enabled else None
+    api_key_fingerprint = (
+        hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        if api_key is not None
+        else None
+    )
     cache_key = (
         model_name,
         is_multimodal,
         queue_enabled,
         queue_url,
         recovery_identity,
+        api_key_fingerprint,
+        api_base,
     )
 
     with _engine_lock:
@@ -210,10 +220,7 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
             )
             return _engine_cache[cache_key]
 
-        api_key = os.environ.get("OPENAI_API_KEY")
-        api_base = os.environ.get("OPENAI_API_BASE")
-
-        if not api_key or not api_base:
+        if not queue_enabled and (not api_key or not api_base):
             raise ValueError("OPENAI_API_KEY and OPENAI_API_BASE must be set")
 
         engine = OpenAIEngine(
@@ -222,9 +229,7 @@ def route_llm_engine(model_name: str, is_multimodal: bool) -> EngineLM:
             model_name=model_name,
             is_multimodal=is_multimodal,
             cache=False,
-            queue_enabled=queue_enabled,
-            queue_url=queue_url,
-            queue_fabric_group_id=fabric,
+            queue_config=queue_config,
         )
 
         _engine_cache[cache_key] = engine
@@ -771,12 +776,8 @@ async def process_batch(
 
     try:
         if prepare_item is not None:
-            from marie.engine.llm_queue.producer import PreparedCalls
-
-            if not engine.batch_processor.uses_queued_dispatch:
-                raise ValueError("Lazy image preparation requires queued dispatch")
             cancellation = cancellation or threading.Event()
-            deadline = time.monotonic() + engine.batch_processor.batch_timeout
+            deadline = time.monotonic() + engine.batch_timeout
             build_kwargs = {"completion_params": completion_params}
             if mm_processor_kwargs is not None:
                 build_kwargs["mm_processor_kwargs"] = mm_processor_kwargs
@@ -793,7 +794,7 @@ async def process_batch(
                         if response_handler is None:
                             image.save(os.path.join(output_path, f"{stem}.png"))
                         batch_mapping[index] = (None, prompt_text, image_path, suffix)
-                        return engine._build_completion_calls(
+                        return engine.build_completion_calls(
                             batch_content=[
                                 [image, prompt_text] if is_multimodal else prompt_text
                             ],
@@ -807,7 +808,7 @@ async def process_batch(
                         image.close()
                         item.clear()
 
-            validation_call = engine._build_completion_calls(
+            validation_call = engine.build_completion_calls(
                 batch_content=[[] if is_multimodal else ""],
                 system_prompt=system_prompt,
                 **build_kwargs,
@@ -815,7 +816,7 @@ async def process_batch(
             calls = PreparedCalls(len(batch), prepare, validation_call)
             try:
                 responses = await asyncio.to_thread(
-                    engine.batch_processor.batch_generate_calls,
+                    engine.complete_many,
                     calls=calls,
                     on_result=on_result,
                     metadata=metadata,
@@ -1441,8 +1442,7 @@ async def ascan_and_process_images(
         return
     processing_items = pending_items
 
-    batch_processor = getattr(engine, "batch_processor", None)
-    uses_queued_dispatch = getattr(batch_processor, "uses_queued_dispatch", False)
+    uses_queued_dispatch = getattr(engine, "uses_queued_dispatch", False)
     scan_cancellation = threading.Event() if uses_queued_dispatch else None
     preparation_lock = threading.Lock()
     if uses_queued_dispatch:
@@ -1450,7 +1450,7 @@ async def ascan_and_process_images(
         for item in processing_items:
             with Image.open(os.path.join(source_dir, item.file_name)) as image:
                 check_image_preparation_budget([image])
-        request_limit = batch_processor.max_concurrency
+        request_limit = engine.max_concurrency
         mini_batch_size = min(mini_batch_size, request_limit)
 
     batched_items = list(batchify(processing_items, mini_batch_size))
@@ -1547,8 +1547,7 @@ async def ascan_and_process_images(
                 prompt_template=prompt.source if response_handler is not None else None,
             )
 
-    batch_processor = getattr(engine, "batch_processor", None)
-    request_limit = getattr(batch_processor, "max_concurrency", mini_batch_size)
+    request_limit = engine.max_concurrency
     if not isinstance(request_limit, int) or request_limit < 1:
         request_limit = mini_batch_size
     worker_count = min(

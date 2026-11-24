@@ -193,6 +193,7 @@ def test_openai_sdk_retries_disabled():
 
             OpenAIEngine(
                 model_name="test-model",
+                api_key="test-key",
                 base_url="http://localhost:8000",
                 is_multimodal=False,
             )
@@ -227,6 +228,7 @@ def test_openai_engine_normalizes_calls_before_strategy_split():
 
             engine = OpenAIEngine(
                 model_name="test-model",
+                api_key="test-key",
                 base_url="http://localhost:8000",
                 is_multimodal=False,
             )
@@ -247,7 +249,7 @@ def test_openai_engine_normalizes_calls_before_strategy_split():
                 page_number=1,
             )
 
-            responses = engine.batch_generate(
+            responses = engine(
                 ["hello"],
                 system_prompt="Return only the requested data.",
                 guided_json={"type": "object"},
@@ -409,7 +411,7 @@ def test_openai_engine_request_context_length_mismatch_warns_and_falls_back():
         {"default_completion_params": {}},
     )()
 
-    calls = engine._build_completion_calls(
+    calls = engine.build_completion_calls(
         batch_content=["a", "b"],
         request_contexts=[RequestContext(page_number=1)],
     )
@@ -1208,9 +1210,7 @@ def test_scan_stops_new_work_and_finishes_active_batches(tmp_path):
                     output_dir=str(tmp_path),
                     prompt=mock.MagicMock(),
                     document=mock.MagicMock(),
-                    engine=SimpleNamespace(
-                        batch_processor=SimpleNamespace(max_concurrency=2)
-                    ),
+                    engine=SimpleNamespace(max_concurrency=2),
                     expect_output="json",
                     mini_batch_size=1,
                 )
@@ -1263,10 +1263,8 @@ def test_queued_dispatch_scan_failure_cancels_active_batches(tmp_path):
                     prompt=mock.MagicMock(),
                     document=mock.MagicMock(),
                     engine=SimpleNamespace(
-                        batch_processor=SimpleNamespace(
-                            max_concurrency=2,
-                            uses_queued_dispatch=True,
-                        )
+                        max_concurrency=2,
+                        uses_queued_dispatch=True,
                     ),
                     expect_output="json",
                     mini_batch_size=1,
@@ -1329,9 +1327,7 @@ def test_scan_resumes_missing_and_invalid_outputs(tmp_path):
                 output_dir=str(output_dir),
                 prompt=mock.MagicMock(),
                 document=mock.MagicMock(),
-                engine=SimpleNamespace(
-                    batch_processor=SimpleNamespace(max_concurrency=1)
-                ),
+                engine=SimpleNamespace(max_concurrency=1),
                 expect_output="json",
                 mini_batch_size=1,
             )

@@ -39,11 +39,15 @@ def test_route_llm_engine_cache_includes_queue_configuration():
     assert direct_engine is engines[0]
     assert queued_engine is engines[1]
     assert engine_cls.call_count == 2
-    assert engine_cls.call_args_list[0].kwargs["queue_enabled"] is False
-    assert engine_cls.call_args_list[1].kwargs["queue_enabled"] is True
+    assert engine_cls.call_args_list[0].kwargs["queue_config"].enabled is False
+    assert engine_cls.call_args_list[0].kwargs["base_url"] == "http://llm-backend/v1"
+    assert engine_cls.call_args_list[1].kwargs["queue_config"].enabled is True
     assert (
-        engine_cls.call_args_list[1].kwargs["queue_url"] == "redis://localhost:6379/0"
+        engine_cls.call_args_list[1].kwargs["queue_config"].queue_url
+        == "redis://localhost:6379/0"
     )
+    assert engine_cls.call_args_list[1].kwargs["api_key"] == "EMPTY"
+    assert engine_cls.call_args_list[1].kwargs["base_url"] is None
     assert "queue_pool_id" not in engine_cls.call_args_list[1].kwargs
     assert "queue_contract_version" not in engine_cls.call_args_list[1].kwargs
 
@@ -111,6 +115,8 @@ def test_route_llm_engine_reuses_cache_for_equivalent_queue_url_aliases():
     assert canonical_engine is engine
     assert legacy_engine is engine
     assert engine_cls.call_count == 1
-    assert engine_cls.call_args.kwargs["queue_url"] == "redis://queue:6379/0"
+    assert (
+        engine_cls.call_args.kwargs["queue_config"].queue_url == "redis://queue:6379/0"
+    )
 
     annotator_util.clear_engine_cache()

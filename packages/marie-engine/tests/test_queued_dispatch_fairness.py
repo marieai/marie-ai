@@ -390,9 +390,13 @@ def test_binding_is_immutable_across_owner_and_capacity_edits(store):
 async def test_producer_window_bounds_preparation_and_effective_image_cost(store):
     import threading
 
-    from marie.engine.completion_contract import CompletionCallParams, RequestContext
+    from marie.engine.completion_contract import (
+        CompletionCallParams,
+        PreparedCalls,
+        RequestContext,
+    )
     from marie.engine.llm_queue.config import LlmQueueRuntimeConfig
-    from marie.engine.llm_queue.producer import PreparedCalls, QueuedDispatchProducer
+    from marie.engine.llm_queue.producer import QueuedDispatchProducer
     from marie.engine.llm_queue.store import RoutingManifestProjection
     from test_request_dispatcher import eventually
 

@@ -104,7 +104,7 @@ for symbol in (BatchProcessor, OpenAIEngine, LLMAnnotator, process_batch):
 required_parameters = {
     process_batch: {'response_handler', 'prompt_template'},
     BatchProcessor.batch_generate: {'attempt_observer'},
-    OpenAIEngine.batch_generate: {'attempt_observer'},
+    OpenAIEngine.complete_many: {'attempt_observer'},
     handle_page_response: {'prompt_template', 'attempts'},
 }
 for callable_, required in required_parameters.items():
