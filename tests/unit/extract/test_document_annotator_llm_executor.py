@@ -2,10 +2,12 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from docarray import DocList
 from marie.engine.exceptions import BatchExecutionError
 from marie.engine.llm_queue.result_types import BatchResult
 from omegaconf import OmegaConf
 
+from marie.api.docs import AssetKeyDoc
 from marie.executor.extract import document_annotator_executor as annotator_module
 from marie.executor.extract import (
     document_annotator_llm_executor as llm_executor_module,
@@ -22,6 +24,27 @@ from marie.executor.extract.document_annotator_llm_executor import (
 from marie.executor.extract.document_annotator_table_llm_executor import (
     DocumentAnnotatorTableLLMExecutor,
 )
+from marie.serve.runtimes.worker.request_handling import WorkerRequestHandler
+from marie.types_core.request.data import DataRequest
+
+
+@pytest.mark.parametrize('endpoint', ['/annotator/llm', '/annotator/schema'])
+@pytest.mark.parametrize('pages', [None, [0, 3]])
+def test_worker_decodes_annotation_asset(
+    endpoint: str, pages: list[int] | None
+) -> None:
+    asset = AssetKeyDoc(asset_key='s3://example/document.tif', pages=pages)
+    outgoing = DataRequest()
+    outgoing.data.docs = DocList[AssetKeyDoc]([asset])
+    incoming = DataRequest(outgoing.proto.SerializeToString())
+    worker = object.__new__(WorkerRequestHandler)
+    worker._executor = object.__new__(DocumentAnnotatorLLMExecutor)
+
+    worker._setup_req_doc_array_cls([incoming], endpoint)
+
+    decoded = incoming.docs[0]
+    assert decoded.asset_key == asset.asset_key
+    assert decoded.pages == pages
 
 
 @pytest.mark.parametrize(

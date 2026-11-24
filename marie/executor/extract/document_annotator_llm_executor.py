@@ -196,7 +196,7 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
             }
         }
 
-    @requests(on='/annotator/schema')
+    @requests(on='/annotator/schema', request_schema=DocList[AssetKeyDoc])
     async def annotator_schema(
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
     ) -> dict[str, Any]:
@@ -339,7 +339,7 @@ class DocumentAnnotatorLLMExecutor(DocumentAnnotatorExecutor):
             torch_gc()
             MDC.remove('request_id')
 
-    @requests(on="/annotator/llm")
+    @requests(on="/annotator/llm", request_schema=DocList[AssetKeyDoc])
     async def annotator_llm(
         self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
     ):
