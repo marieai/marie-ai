@@ -32,8 +32,17 @@ routing and DRR settings used by the previous installation:
 
 The fabric permits four concurrent dispatch items in total, shared by all pools.
 Each pool can use the available shared capacity up to its own maximum. Routing
-uses `document.effective_page_count`; requests without matching page-count facts
-use the catch-all pool. The DRR quantum controls each pool's scheduling weight.
+uses `document.effective_page_count`. A page selection uses the number of distinct
+requested pages. For a whole document, the scheduler uses the registered or
+submitted page count. When both are missing, it logs a warning and routes using
+the gateway's `LLM_QUEUE_DEFAULT_PAGE_COUNT`. The default is `1`, which selects
+`document-small` in this example. The estimate applies only to routing. Requests
+that match no size rule use the catch-all pool. The DRR quantum controls each
+pool's scheduling weight.
+
+At `INFO`, the scheduler logs each incoming job ID and submission queue.
+Queued LLM routing also logs the selected pools and effective page count.
+Each submission that uses the default page count emits its routing line at `WARNING`.
 
 This example uses the local AIMock provider at `http://127.0.0.1:4010/v1`, with
 loopback access enabled. It omits `credential_env` because this local provider
@@ -85,7 +94,7 @@ DECLARE
         "limits": {
           "max_execution_items": 4,
           "max_execution_bytes": 67108864
-        }[marie-extract-4.0.0.yml](../../../../../../../../mnt/data/marie-ai/config/service/extract/marie-extract-4.0.0.yml)
+        }
       }
     }
     $policy$::JSONB;

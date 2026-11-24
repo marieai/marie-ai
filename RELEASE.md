@@ -183,8 +183,16 @@ git tag -n99 v5.1.0
 `--publish` pushes the release commit first, then the versioned container
 images and Git tag. It creates the GitHub Release last with the annotated tag
 notes, then reuses or creates a pull request to `main`. It never merges the pull
-request. Without `--publish`, all artifacts remain local and the script prints
-the corresponding push commands.
+request. Without `--publish`, the script prints the commands to push the
+artifacts and create the GitHub Release later.
+
+If the images and annotated tag are already published, run only the printed
+`gh release create` command. For example, to publish the 5.2.0 entry from
+its existing tag and notes:
+
+```bash
+gh release create v5.2.0 --verify-tag --title "Marie AI 5.2.0" --notes-from-tag
+```
 
 Publishing requires an authenticated GitHub CLI. The script checks this before
 creating release artifacts and prints a platform-specific installation command

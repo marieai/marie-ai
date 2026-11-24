@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Awaitable, Callable
+
+from marie.engine.llm_queue.config import llm_queue_enabled
 
 from marie.logging_core.logger import MarieLogger
 from marie.messaging import mark_as_failed as mark_as_failed_toast
@@ -22,6 +25,14 @@ from marie.scheduler.repository import JobRepository
 from marie.storage.submission.types import SubmissionDocument
 from marie.utils.scheduler_trace import scheduler_trace
 from marie.utils.utils import current_milli_time
+
+
+def _default_routing_page_count() -> int:
+    try:
+        count = int(os.getenv('LLM_QUEUE_DEFAULT_PAGE_COUNT', '1'))
+    except ValueError:
+        return 1
+    return count if 1 <= count <= 2**31 - 1 else 1
 
 
 class DagSubmissionService:
@@ -49,7 +60,9 @@ class DagSubmissionService:
         self.submission_count = initial_submission_count
 
     async def submit(self, work_info: WorkInfo, overwrite: bool = True) -> str:
-        self.logger.debug(f'Submitting job : {work_info.id}')
+        self.logger.info(
+            f'Job submission received job_id={work_info.id} queue={work_info.name}'
+        )
         try:
             if not self._is_running():
                 raise RuntimeError('Job scheduler is not running')
@@ -174,6 +187,10 @@ class DagSubmissionService:
         if not any(str(node.definition.method).upper() == 'LLM' for node in plan.nodes):
             return ()
         reject_external_routing_selectors(work_info.data)
+        if not llm_queue_enabled():
+            if work_info.routing_override is not None:
+                raise RoutingSubmissionError('routing_override_unavailable')
+            return ()
 
         context = work_info.routing_context
         if context is None:
@@ -217,8 +234,6 @@ class DagSubmissionService:
                 if not resolved_uri:
                     raise RoutingSubmissionError('routing_facts_missing')
                 if document is None:
-                    if page_count is None:
-                        raise RoutingSubmissionError('routing_facts_missing')
                     document = SubmissionDocument(
                         id='',
                         submission_id='',
@@ -229,8 +244,6 @@ class DagSubmissionService:
                         page_count=page_count,
                     )
                 elif document.page_count is None:
-                    if page_count is None:
-                        raise RoutingSubmissionError('routing_facts_missing')
                     document.page_count = page_count
                 elif page_count is not None and page_count != document.page_count:
                     raise RoutingSubmissionError('routing_facts_invalid')
@@ -246,6 +259,7 @@ class DagSubmissionService:
                 workload_mode='batch',
                 pipeline_stage=None,
                 request_source=work_info.routing_request_source or 'workflow',
+                default_page_count=_default_routing_page_count(),
             )
             context = TrustedRoutingContext(base_facts=facts, policy=policy)
             work_info.routing_context = context
@@ -258,6 +272,21 @@ class DagSubmissionService:
             base_facts=context.base_facts,
             override=work_info.routing_override,
         )
+        values = context.base_facts.values
+        page_count = values.get('document.effective_page_count')
+        pools = ','.join(sorted({route.pool_id for route in routes}))
+        message = (
+            f'LLM queue routing job_id={work_info.id} pools={pools} '
+            f'effective_page_count={page_count}'
+        )
+        if (
+            page_count is not None
+            and 'document.total_page_count' not in values
+            and 'document.requested_page_count' not in values
+        ):
+            self.logger.warning(f'{message} (using default page count)')
+        else:
+            self.logger.info(message)
         return routes
 
     async def is_valid_submission(

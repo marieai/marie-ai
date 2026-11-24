@@ -426,7 +426,7 @@ class GrpcEventBroker:
                 f"Event not dispatched to any of {len(sub_ids)} potential subscribers"
             )
         elif dispatched_count > 0:
-            logger.info(f"Event dispatched to {dispatched_count} subscriber(s)")
+            logger.debug(f"Event dispatched to {dispatched_count} subscriber(s)")
 
     def _matches_filter(self, msg: EventMessage, filter_config: Dict[str, Any]) -> bool:
         """Check if event matches subscription filter."""

@@ -9,6 +9,7 @@ import pytest
 
 from marie.serve.discovery.etcd_client import EtcdClient
 from marie.state.semaphore_store import SemaphoreHolder, SemaphoreStore
+from marie.state.slot_capacity_manager import SlotCapacityManager
 
 
 class _TransactionProxy:
@@ -69,6 +70,121 @@ def test_capacity_set_get(sema: SemaphoreStore):
     # update capacity
     sema.set_capacity(slot, 5)
     assert sema.get_capacity(slot) == 5
+
+
+@pytest.mark.parametrize("keep_empty_executor", [False, True])
+def test_removed_executor_stays_unavailable_after_holder_release(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch, keep_empty_executor: bool
+) -> None:
+    monkeypatch.setenv("MARIE_CAPACITY_ZERO_ON_ABSENT", "true")
+    monkeypatch.setenv("MARIE_SLOTS_PER_NODE", "1")
+    slot = _slot()
+    manager = SlotCapacityManager(sema)
+    nodes = {slot: [{"address": "grpc://worker:1234"}]}
+    manager.refresh_from_nodes(nodes)
+    assert sema.reserve(slot, "old-job", node="worker", owner="old-job")
+
+    rows, _, _ = manager.refresh_from_nodes({slot: []} if keep_empty_executor else {})
+    assert rows == [(slot, 1, 0, 1, 0, 1, "CLAMPED")]
+    assert manager.compute_summary_rows_and_totals()[0] == rows
+    assert sema.renew(slot, "old-job", owner="old-job")
+    assert sema.release_owned(slot, "old-job", owner="old-job")
+
+    # A new store instance must enforce the discovered limit without a refresh.
+    restarted_store = SemaphoreStore(sema.etcd)
+    assert restarted_store.available_slot_count(slot) == 0
+    assert restarted_store.available_count_all()[slot] == 0
+    assert restarted_store.snapshot_all()[slot]["available"] == 0
+    assert not restarted_store.reserve(slot, "new-job", node="worker")
+    assert restarted_store.reserve_many(slot, ["new-job"], node="worker") == set()
+
+    manager.refresh_from_nodes(nodes)
+    assert restarted_store.available_slot_count(slot) == 1
+    assert restarted_store.reserve(slot, "new-job", node="worker")
+
+
+def test_capacity_downscale_does_not_reopen_released_slots(
+    sema: SemaphoreStore,
+) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 3)
+    assert sema.reserve_many(slot, ["a", "b", "c"], node="worker") == {"a", "b", "c"}
+    assert sema.set_capacity_safe(slot, 1) == 3
+    assert sema.release(slot, "a")
+    assert sema.available_slot_count(slot) == 0
+    assert not sema.reserve(slot, "new-job", node="worker")
+    assert sema.reserve_many(slot, ["new-job"], node="worker") == set()
+    assert sema.release(slot, "b")
+    assert sema.available_count_all()[slot] == 0
+    assert sema.release(slot, "c")
+    assert sema.available_slot_count(slot) == 1
+    assert sema.reserve_many(slot, ["d", "e"], node="worker") == {"d"}
+
+
+def test_capacity_target_changes_when_clamped_limit_is_unchanged(
+    sema: SemaphoreStore,
+) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 2)
+    assert sema.reserve_many(slot, ["a", "b"], node="worker") == {"a", "b"}
+    assert sema.set_capacity_safe(slot, 0) == 2
+    assert sema.set_capacity_safe(slot, 1) == 2
+    assert sema.release(slot, "a")
+    assert sema.available_slot_count(slot) == 0
+    assert sema.release(slot, "b")
+    assert sema.available_slot_count(slot) == 1
+
+
+def test_failed_capacity_refresh_preserves_previous_admission_target(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    slot = _slot()
+    sema.set_capacity(slot, 1)
+    assert sema.reserve(slot, "a", node="worker")
+    sema.set_capacity_safe(slot, 0)
+
+    def fail_update(*args: Any, **kwargs: Any) -> int:
+        raise RuntimeError("capacity update failed")
+
+    monkeypatch.setattr(sema, "set_capacity_safe", fail_update)
+    manager = SlotCapacityManager(sema)
+    with pytest.raises(RuntimeError, match="capacity update failed"):
+        manager.refresh_from_nodes({slot: []})
+    assert sema.release(slot, "a")
+    assert sema.available_slot_count(slot) == 0
+
+
+@pytest.mark.parametrize("raw_capacity", ["null", "[]", '{"limit":1e999}'])
+def test_malformed_capacity_document_blocks_admission(
+    sema: SemaphoreStore, raw_capacity: str
+) -> None:
+    slot = _slot()
+    sema.etcd.put(f"capacity/{slot}", raw_capacity)
+    assert sema.available_slot_count(slot) == 0
+    assert sema.capacities_all()[slot] == 0
+    assert sema.available_count_all()[slot] == 0
+    assert sema.snapshot_all()[slot]["available"] == 0
+    assert not sema.reserve(slot, "a", node="worker")
+    assert sema.reserve_many(slot, ["a"], node="worker") == set()
+
+
+def test_failed_capacity_refresh_still_blocks_other_absent_executors(
+    sema: SemaphoreStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MARIE_CAPACITY_ZERO_ON_ABSENT", "true")
+    removed_slot = _slot()
+    broken_slot = _slot()
+    sema.set_capacity_safe(removed_slot, 1)
+    assert sema.reserve(removed_slot, "a", node="worker")
+    sema.etcd.put(f"semaphores/{broken_slot}/count", "invalid")
+
+    manager = SlotCapacityManager(sema)
+    with pytest.raises(RuntimeError, match="malformed count"):
+        manager.refresh_from_nodes({broken_slot: [{"address": "grpc://worker:1234"}]})
+
+    assert sema.release(removed_slot, "a")
+    assert sema.available_slot_count(removed_slot) == 0
+    assert not sema.reserve(removed_slot, "b", node="worker")
 
 
 def test_available_count_and_read_count(sema: SemaphoreStore):
