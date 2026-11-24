@@ -152,6 +152,21 @@ def test_document_workload_requires_authoritative_page_count() -> None:
         )
 
 
+def test_routing_estimate_does_not_create_a_document_total() -> None:
+    facts = normalize_routing_facts(
+        document=_document(page_count=None),
+        requested_pages=None,
+        workload_kind='document',
+        workload_mode='batch',
+        pipeline_stage=None,
+        request_source='gateway-job-api',
+        default_page_count=8,
+    )
+    assert facts.values['document.effective_page_count'] == 8
+    assert 'document.total_page_count' not in facts.values
+    assert 'document.requested_page_count' not in facts.values
+
+
 @pytest.mark.parametrize(
     'key',
     [

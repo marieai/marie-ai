@@ -561,13 +561,12 @@ commit_version() {
     git commit -m "chore(release): release ${target}"
 }
 
-publish_release() {
+push_release_artifacts() {
     local branch=$1
     local tag=$2
     local remote
     local merge_ref
     local remote_branch
-    local -a gh_args
 
     remote=$(git config --get "branch.${branch}.remote")
     merge_ref=$(git config --get "branch.${branch}.merge")
@@ -587,19 +586,6 @@ publish_release() {
 
     log "Publishing release tag ${tag}"
     git push "$remote" "refs/tags/${tag}"
-
-    gh_args=(
-        release create "$tag"
-        --verify-tag
-        --title "Marie AI ${TARGET_VERSION}"
-        --notes-from-tag
-    )
-    if [[ "$TARGET_VERSION" =~ (a|b|rc)[0-9]+$ ]]; then
-        gh_args+=(--prerelease)
-    fi
-    log "Creating GitHub Release for ${tag}"
-    gh "${gh_args[@]}"
-    ensure_release_pr "$branch" "$tag"
 }
 
 main() {
@@ -607,6 +593,8 @@ main() {
     local branch
     local upstream
     local tag
+    local -a release_command
+    local manual_command
 
     parse_arguments "$@"
     cd "$REPO_ROOT"
@@ -687,8 +675,18 @@ main() {
     git tag -a "$tag" -F "$NOTES_FILE"
     log "Created ${tag} at $(git rev-parse --short HEAD)"
 
+    release_command=(
+        gh release create "$tag" --verify-tag
+        --title "Marie AI ${TARGET_VERSION}" --notes-from-tag
+    )
+    if [[ "$TARGET_VERSION" =~ (a|b|rc)[0-9]+$ ]]; then
+        release_command+=(--prerelease)
+    fi
     if [[ "$PUBLISH" == true ]]; then
-        publish_release "$branch" "$tag"
+        push_release_artifacts "$branch" "$tag"
+        log "Creating GitHub Release for ${tag}"
+        "${release_command[@]}"
+        ensure_release_pr "$branch" "$tag"
         log "Published ${tag}"
     else
         log "Release is local. Publish when ready with:"
@@ -699,6 +697,8 @@ main() {
             done < <(image_names "$TARGET_VERSION" "$PROFILE")
         fi
         log "  git push $(git config --get "branch.${branch}.remote") ${tag}"
+        printf -v manual_command ' %q' "${release_command[@]}"
+        log " ${manual_command}"
     fi
 }
 
