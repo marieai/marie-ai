@@ -28,3 +28,23 @@ def test_mock_annotator_llm_targets_production_shaped_endpoint() -> None:
     assert executor_nodes[0].definition.model_name == "gpt-5.2-mock"
     assert executor_nodes[0].definition.params["layout"] == "mock-llm"
     assert executor_nodes[0].definition.params["key"] == "mock-llm"
+
+
+def test_mock_llm_handoff_orders_prepare_annotate_and_read() -> None:
+    planner = QueryPlanRegistry.get("mock_llm_handoff")
+    assert planner is not None
+    plan = planner(PlannerInfo(name="mock_llm_handoff", base_id=generate_job_id()))
+    prepare, annotate, read = [
+        node
+        for node in plan.nodes
+        if getattr(node.definition, "endpoint", "").startswith(
+            ("mock_llm_", "annotator_llm:")
+        )
+    ]
+    assert prepare.definition.endpoint == "mock_llm_prepare://mock/llm/prepare"
+    assert annotate.definition.endpoint == "annotator_llm://annotator/llm"
+    assert isinstance(annotate.definition, LlmQueryDefinition)
+    assert annotate.dependencies == [prepare.task_id]
+    assert read.definition.endpoint == "mock_llm_reader://mock/llm/read"
+    assert read.dependencies == [annotate.task_id]
+    assert plan.nodes[-1].dependencies == [read.task_id]

@@ -1,0 +1,24 @@
+{
+  "invoke_action": {
+    "action_type": "command",
+    "command": "job",
+    "action": "submit",
+    "name": "gen5_extract",
+    "api_key": "{{api_key}}",
+    "metadata": {
+      "planner": "mock_llm_handoff",
+      "project_id": "mock-llm-handoff",
+      "ref_type": "mock_llm_handoff",
+      "ref_id": "handoff-{{request_id}}",
+      "policy": "allow_all",
+      "uri": "{{s3_uri}}",
+      "features": [
+        {
+          "type": "pipeline",
+          "name": "handoff-purge",
+          "purge_annotators": ["mock-llm"]
+        }
+      ]
+    }
+  }
+}
