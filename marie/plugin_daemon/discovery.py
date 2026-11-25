@@ -1,7 +1,7 @@
 """Resolve how the current process reaches a marie-plugin-daemon.
 
 Precedence: explicit URL (``MARIE_PLUGIN_DAEMON_URL``) → explicit binary
-(``MARIE_PLUGIN_DAEMON_BIN``) → image binary → local dist build → ``PATH``.
+(``MARIE_PLUGIN_DAEMON_BIN``) → deployment mount → image binary → local dist build → ``PATH``.
 """
 
 from __future__ import annotations
@@ -50,6 +50,11 @@ def discover_daemon(
             source="explicit_binary",
             message=f"Configured marie-plugin-daemon binary is not executable: {path}",
         )
+
+    mount = Path(values.get("MARIE_DEFAULT_MOUNT") or "/mnt/data/marie-ai")
+    installed_binary = mount / "bin" / "marie-plugin-daemon"
+    if executable(installed_binary):
+        return child_discovery(installed_binary, daemon_addr, "installed_binary")
 
     if executable(DEFAULT_DAEMON_BIN):
         return child_discovery(DEFAULT_DAEMON_BIN, daemon_addr, "image_binary")

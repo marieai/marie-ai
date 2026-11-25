@@ -531,6 +531,16 @@ minio:
 clickhouse:
   enabled: false
 
+  schema:
+    enabled: true
+
+  # Install the shared SQL explorer views and reader during the schema Job.
+  queryExplorer:
+    enabled: false
+    readerSecret:
+      name: ""
+      key: password
+
   image:
     repository: clickhouse/clickhouse-server
     tag: "25.12.1.649"

@@ -14,7 +14,7 @@
 #   - Network: docker network create --driver=bridge marie_default
 #   - ClickHouse: docker-compose.clickhouse.yml must be running
 #   - Storage: docker-compose.storage.yml must be running (marie-psql-server provides the native DocumentDB gateway for HyperDX state)
-#   - Schema: Apply schema/observability.sql to marie-clickhouse
+#   - Schema: Bootstrap the ClickHouse telemetry schema before starting ClickStack
 #
 # Usage:
 #   # Core stack (collector only)
@@ -150,10 +150,10 @@ networks:
 # ############### Setup Instructions ###############
 #
 # 1. Start ClickHouse first:
-#    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickhouse.yml up -d
+#    docker compose --project-directory . --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickhouse.yml up -d --wait clickhouse
 #
 # 2. Apply the OTel schema:
-#    docker exec -i marie-clickhouse clickhouse-client < config/clickstack/schema/observability.sql
+#    docker compose --project-directory . --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickhouse.yml --profile schema run --rm --no-deps clickhouse-query-schema
 #
 # 3. Start ClickStack (core):
 #    docker compose --env-file ./config/.env.dev -f ./Dockerfiles/docker-compose.clickstack.yml up -d

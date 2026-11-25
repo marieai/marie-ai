@@ -6,12 +6,28 @@ directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # password file; local Compose generates it in the existing ClickHouse volume.
 if [ -z "${QUERY_READER_PASSWORD_FILE:-}" ]; then
   QUERY_READER_PASSWORD_FILE=/var/lib/clickhouse/query-explorer/reader-password
-  if [ ! -s "$QUERY_READER_PASSWORD_FILE" ]; then
+  if [ -n "${CLICKHOUSE_QUERY_READER_PASSWORD:-}" ] && [ "$(printf '%s' "$CLICKHOUSE_QUERY_READER_PASSWORD" | tr -d '\r\n')" != "$CLICKHOUSE_QUERY_READER_PASSWORD" ]; then
+    echo 'CLICKHOUSE_QUERY_READER_PASSWORD must be a single-line secret.' >&2
+    exit 1
+  fi
+  if [ ! -e "$QUERY_READER_PASSWORD_FILE" ]; then
     (
       umask 077
       mkdir -p "$(dirname -- "$QUERY_READER_PASSWORD_FILE")"
-      head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1 > "$QUERY_READER_PASSWORD_FILE"
+      pending=$(mktemp "${QUERY_READER_PASSWORD_FILE}.XXXXXX")
+      trap 'rm -f "$pending"' EXIT
+      if [ -n "${CLICKHOUSE_QUERY_READER_PASSWORD:-}" ]; then
+        printf '%s' "$CLICKHOUSE_QUERY_READER_PASSWORD" > "$pending"
+      else
+        head -c 64 /dev/urandom | sha256sum | cut -d ' ' -f 1 > "$pending"
+      fi
+      # A simultaneous bootstrap may have already published the volume credential.
+      ln "$pending" "$QUERY_READER_PASSWORD_FILE" || test -s "$QUERY_READER_PASSWORD_FILE"
     )
+  fi
+  if [ -n "${CLICKHOUSE_QUERY_READER_PASSWORD:-}" ] && [ "$(cat "$QUERY_READER_PASSWORD_FILE")" != "$CLICKHOUSE_QUERY_READER_PASSWORD" ]; then
+    echo 'CLICKHOUSE_QUERY_READER_PASSWORD differs from the retained reader password in the ClickHouse volume.' >&2
+    exit 1
   fi
 fi
 if [ ! -s "$QUERY_READER_PASSWORD_FILE" ]; then
@@ -76,5 +92,9 @@ GRANT SELECT ON workspace_query.shared_model_prices TO studio_query;
 GRANT SELECT ON workspace_query.shared_schema_version TO studio_query;
 GRANT SELECT(quota_name, duration, max_queries, max_execution_time) ON system.quota_usage TO studio_query;
 SQL
+
+CLICKHOUSE_PASSWORD="$(tr -d '\r\n' < "$QUERY_READER_PASSWORD_FILE")" \
+  clickhouse-client --host "${CLICKHOUSE_HOST:-localhost}" --port "${CLICKHOUSE_PORT:-9000}" \
+    --user studio_query --query 'SELECT version, pricing_probe FROM workspace_query.shared_schema_version' >/dev/null
 
 printf 'SQL explorer schema ready. Reader password file: %s\n' "$QUERY_READER_PASSWORD_FILE"
