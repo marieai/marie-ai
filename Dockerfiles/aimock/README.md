@@ -409,6 +409,69 @@ direct and queued benchmarks used the same provider capacity.
 The admin response includes `requestCount` and `requestsByProfile`. Stress tests
 use these counters to detect unintended retries and duplicate inference calls.
 
+### Watch queued requests in m3top
+
+Use the programmatic AIMock server with the
+[queued LLM handoff walkthrough](../../tools/stress/mock-llm-handoff.md) to run
+`mock_llm_prepare -> annotator_llm -> mock_llm_reader` through the real dispatcher.
+In m3top, open **LLM Dispatcher**, then **Requests**. This view samples live
+requests; completed requests disappear. Fast mock responses can finish between
+snapshots and never appear in the table.
+
+Add a five-second delay before submitting work:
+
+```bash
+curl --fail -X POST http://127.0.0.1:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"profile":"normal","processingDelayMs":5000}'
+```
+
+Submit another handoff test while watching Requests. This setting takes effect
+without restarting AIMock and affects every provider call. After the test,
+restore normal speed:
+
+```bash
+curl --fail -X POST http://127.0.0.1:4011/fault-profile \
+  -H 'Content-Type: application/json' \
+  -d '{"processingDelayMs":0}'
+```
+
+### Test concurrent queued requests
+
+Concurrency depends on several independent limits:
+
+| Layer | What limits concurrency |
+| --- | --- |
+| Scheduler / annotator | Available `annotator_llm` slots determine how many document jobs can enter the annotator together. |
+| LLM dispatcher | The active routing policy's pool and global limits bound concurrent provider requests. |
+| AIMock | `maxConcurrentCalls` limits provider calls; `0` means unlimited. |
+
+The mock service config starts with one `annotator_llm` replica. With one-page
+documents, each job produces one LLM request, so only one request runs at a time
+even when `document-small` allows four. Other documents wait for the annotator
+slot before reaching the LLM queue. Capacity belonging to other executor names
+does not increase annotator capacity. Likewise, `dispatchers 1/1` counts live
+dispatcher instances; it does not mean only one request can run.
+
+To exercise four concurrent one-page requests:
+
+1. Change the existing `annotator_llm` deployment's `replicas: 1` to `replicas: 4`
+   in the mock server's loaded config, normally
+   `/mnt/data/marie-ai/config/service/mock/marie-mock-scheduler-test.yml`, and
+   restart the mock server. Confirm its gateway slot summary reports capacity 4.
+2. Confirm the active dispatcher policy permits at least four requests globally
+   and in `document-small`. Check `GET http://127.0.0.1:4011/fault-profile` and
+   ensure AIMock's `maxConcurrentCalls` is `0` or at least `4`.
+3. Enable the five-second delay above. Run the submission command in the handoff
+   walkthrough with `--job-count 20 --submit-concurrency 4`. Ensure scheduler
+   limits allow multiple active DAGs.
+4. Watch the pool's in-flight count in m3top and AIMock's `activeCalls` and
+   `peakConcurrentCalls` in the admin response. Restore the delay afterward.
+
+A single annotator can also submit concurrent page requests for a multipage
+document, subject to its batch concurrency and dispatcher limits.
+`mini_batch_size: 1` alone does not force those page requests to run serially.
+
 ## Advanced Features
 
 ### Record & Replay

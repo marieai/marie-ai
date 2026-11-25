@@ -128,6 +128,7 @@ from marie.query_planner.mock_plans.plugin import (
 from marie.query_planner.mock_plans.traditional import (
     query_planner_mock_annotator_llm,
     query_planner_mock_complex,
+    query_planner_mock_llm_handoff,
     query_planner_mock_medium,
     query_planner_mock_parallel_subgraphs,
     query_planner_mock_simple,
@@ -153,6 +154,7 @@ __all__ = [
     "register_query_plan",
     # Traditional plans
     "query_planner_mock_annotator_llm",
+    "query_planner_mock_llm_handoff",
     "query_planner_mock_simple",
     "query_planner_mock_medium",
     "query_planner_mock_complex",

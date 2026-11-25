@@ -6,11 +6,12 @@ shared_config:
   storage: &storage
     psql: &psql_conf_shared
       provider: postgresql
-      hostname: 127.0.0.1
+      hostname: ${{ ENV.POSTGRES_HOSTNAME }}
       port: 5432
-      username: postgres
-      password: 123456
+      username: ${{ ENV.POSTGRES_USER }}
+      password: ${{ ENV.POSTGRES_PASSWORD }}
       database: postgres
+      schema: marie_scheduler
       default_table: shared_docs
 
   message: &message
@@ -89,6 +90,21 @@ scheduler:
     default_table: job_queue
     enabled : True
 
+# LLM Tracking configuration
+llm_tracking:
+  enabled: true
+  exporter: otel
+  project_id: marie-extract
+  worker:
+    enabled: true
+  postgres:
+    <<: *psql_conf_shared
+    schema: marie_scheduler
+
+  clickhouse:
+    host: localhost
+    port: 9000
+    database: marie
 # FLOW / GATEWAY configuration
 
 with:
@@ -108,6 +124,7 @@ with:
     username: postgres
     password: '123456'
     database: postgres
+    schema: marie_scheduler
     default_table: kv_store_worker
     max_pool_size: 5
     max_connections: 5

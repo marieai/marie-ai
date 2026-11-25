@@ -5,9 +5,7 @@ import yaml
 from marie.executor.extract.util import layout_config
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MOCK_SCHEDULER_CONFIG = (
-    REPO_ROOT / "config/service/mock/marie-mock-scheduler-test.yml"
-)
+MOCK_SCHEDULER_CONFIG = REPO_ROOT / "config/service/mock/marie-mock-scheduler-test.yml"
 MOCK_EXTRACT_CONFIG = REPO_ROOT / "config/extract"
 GATEWAY_CONFIG = REPO_ROOT / "config/service/marie-gateway-4.0.0.yml"
 
@@ -37,6 +35,16 @@ def test_mock_scheduler_config_has_annotator_llm_executor() -> None:
     assert "LLM_QUEUE_POOL_ID" not in annotator["env"]
     assert "LLM_QUEUE_CONTRACT_VERSION" not in annotator["env"]
     assert "LLM_QUEUE_VALKEY_URL" not in annotator["env"]
+
+
+def test_mock_handoff_has_separate_workers_and_registered_queue() -> None:
+    config = yaml.safe_load(MOCK_SCHEDULER_CONFIG.read_text())
+    assert "mock_llm_handoff" in config["with"]["job_scheduler_kwargs"]["queue_names"]
+    executors = {item["name"]: item for item in config["executors"]}
+    for name in ("mock_llm_prepare", "mock_llm_reader"):
+        worker = executors[name]
+        assert worker["uses"]["jtype"] == "LlmHandoffExecutorMock"
+        assert worker["uses"]["with"]["storage"]["s3"]["enabled"] is True
 
 
 def test_mock_scheduler_config_uses_database_llm_dispatch_policy() -> None:
@@ -118,6 +126,7 @@ def test_mock_extract_layout_resolves_real_llm_annotator_config() -> None:
         "presence_penalty": 1.5,
         "extra_body": {"top_k": 20},
     }
-    assert "extract" in (
-        MOCK_EXTRACT_CONFIG / "TID-mock-llm/annotator/mock-llm.j2"
-    ).read_text()
+    assert (
+        "extract"
+        in (MOCK_EXTRACT_CONFIG / "TID-mock-llm/annotator/mock-llm.j2").read_text()
+    )
