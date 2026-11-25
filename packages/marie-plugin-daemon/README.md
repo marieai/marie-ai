@@ -13,8 +13,10 @@ this package at runtime; individual plugins do not package it as a dependency.
 
 ```bash
 go test ./...
-go build -o dist/marie-plugin-daemon ./cmd/server
+make install
 ```
+
+The host executable is `/mnt/data/marie-ai/bin/marie-plugin-daemon`. Set `MARIE_DEFAULT_MOUNT` to install under a different mount.
 
 ## Container image
 

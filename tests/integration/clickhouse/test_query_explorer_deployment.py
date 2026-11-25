@@ -105,6 +105,14 @@ def test_local_bootstrap_generates_and_reuses_private_reader_password(clickhouse
             text=True, capture_output=True, check=True,
         ).stdout.strip()
         assert mode == '600'
+        conflict = subprocess.run(
+            ['docker', 'exec', '--user', '101:101', '-e', f'CLICKHOUSE_QUERY_READER_PASSWORD={uuid.uuid4().hex}',
+             clickhouse.name, '/bin/sh', '/query-explorer/bootstrap.sh'],
+            text=True, capture_output=True,
+        )
+        assert conflict.returncode != 0
+        assert 'differs from the retained reader password' in conflict.stderr
+        assert clickhouse.query('SELECT currentUser()', reader=True).stdout.strip() == 'studio_query'
     finally:
         clickhouse.password = previous
         clickhouse.apply()

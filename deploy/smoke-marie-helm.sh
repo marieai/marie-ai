@@ -35,6 +35,7 @@ Environment:
   GATEWAY_IMAGE      Gateway/server image (default: marieai/marie-gateway:5.2.2-cpu)
   LOAD_LOCAL_IMAGES  Load local Docker images into the cluster if present (default: true)
   SKIP_OPTIONAL      Disable ClickHouse for smoke speed (default: false)
+  HELM_VALUES_FILE   Additional deployment values (e.g. ClickHouse reader Secret reference)
   WAIT_TIMEOUT       Helm/kubectl wait timeout (default: 20m)
   K3D_IMAGE_IMPORT_MODE k3d image import mode (default: direct)
   K3D_AGENTS         k3d agent count for new smoke clusters (default: 2)
@@ -165,6 +166,10 @@ helm_args=(
     --set gitea.enabled=false
     --wait --timeout "${WAIT_TIMEOUT}"
 )
+
+if [[ -n "${HELM_VALUES_FILE:-}" ]]; then
+    helm_args+=(-f "${HELM_VALUES_FILE}")
+fi
 
 if [[ "${SKIP_OPTIONAL}" == "true" ]]; then
     helm_args+=(--set clickhouse.enabled=false)

@@ -1122,6 +1122,9 @@ show_kubernetes_deployment_config() {
     echo -e "  Helm Chart:"
     echo -e "    ├── Chart: deploy/helm/charts/marie"
     echo -e "    ├── Values: deploy/helm/charts/marie/values-local.yaml"
+    if [ -n "${HELM_VALUES_FILE:-}" ]; then
+        echo -e "    ├── Deployment values: ${HELM_VALUES_FILE}"
+    fi
     echo -e "    ├── Marie image: ${marie_image}"
     echo -e "    ├── Gateway image: ${gateway_image}"
     echo -e "    └── Gitea: false (Studio-only dependency disabled for Marie-AI smoke)"
@@ -1162,7 +1165,8 @@ kubernetes_bootstrap() {
     echo ""
     show_kubernetes_deployment_config
 
-    INSTALL_ARGOCD="$INSTALL_ARGOCD" \
+    HELM_VALUES_FILE="${HELM_VALUES_FILE:-}" \
+        INSTALL_ARGOCD="$INSTALL_ARGOCD" \
         ARGOCD_NAMESPACE="$ARGOCD_NAMESPACE" \
         ARGOCD_VERSION="$ARGOCD_VERSION" \
         "$bootstrap_script" "$K8S_PROVIDER"
@@ -1510,7 +1514,7 @@ verify_stack() {
             verify_container_running "ClickHouse" "marie-clickhouse" || failed=1
             verify_http_basic "ClickHouse login + query" \
                 "http://localhost:${CLICKHOUSE_HTTP_PORT:-8123}/?query=SELECT%201" \
-                "${CLICKHOUSE_USER:-default}" "${CLICKHOUSE_PASSWORD:-}" || failed=1
+                "${CLICKHOUSE_USER:-marie}" "${CLICKHOUSE_PASSWORD:-}" || failed=1
         fi
 
         if [ "$DEPLOY_GITEA" = "true" ]; then
@@ -1808,45 +1812,6 @@ initialize_databases() {
         "CREATE EXTENSION IF NOT EXISTS vector" >/dev/null 2>&1
     echo -e "${GREEN}  ✅ Database '$mem0_db' ready with pgvector${NC}"
 
-    # Initialize ClickHouse databases
-    if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
-        echo "  Initializing ClickHouse databases..."
-
-        # Wait for ClickHouse to be ready
-        local ch_attempts=20
-        local ch_attempt=1
-        while [ $ch_attempt -le $ch_attempts ]; do
-            if docker exec marie-clickhouse clickhouse-client --query "SELECT 1" >/dev/null 2>&1; then
-                break
-            fi
-            echo "  Waiting for ClickHouse to be ready (attempt $ch_attempt/$ch_attempts)..."
-            sleep 2
-            ((ch_attempt++))
-        done
-
-        if [ $ch_attempt -gt $ch_attempts ]; then
-            echo -e "${YELLOW}⚠️  ClickHouse not ready, skipping database creation${NC}"
-        else
-            # Apply OpenInference materialized columns on otel.otel_traces
-            local oi_schema="./config/clickhouse/schema/openinference_columns.sql"
-            if [ -f "$oi_schema" ]; then
-                echo "  Applying OpenInference columns..."
-                docker exec -i marie-clickhouse clickhouse-client \
-                    < "$oi_schema" >/dev/null 2>&1
-                echo -e "${GREEN}  ✅ OpenInference columns applied${NC}"
-            fi
-
-            # Create span_annotations table in otel database
-            local annotations_schema="./config/clickhouse/schema/span_annotations.sql"
-            if [ -f "$annotations_schema" ]; then
-                echo "  Creating span_annotations table..."
-                docker exec -i marie-clickhouse clickhouse-client \
-                    < "$annotations_schema" >/dev/null 2>&1
-                echo -e "${GREEN}  ✅ Span annotations table created${NC}"
-            fi
-        fi
-    fi
-
     echo -e "${GREEN}✅ Database initialization complete${NC}"
 }
 
@@ -1905,57 +1870,30 @@ bootstrap_system() {
     if [ "$DEPLOY_INFRASTRUCTURE" = "true" ]; then
         echo -e "${BLUE}🔧 Stage 1: Starting infrastructure services...${NC}"
 
-        local infra_compose_cmd="docker compose --env-file $ENV_FILE"
-        infra_compose_cmd="$infra_compose_cmd --project-name marie-infrastructure"
-        infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
-        infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
-        infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
-        infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
-        infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
-
-        # Note: LiteLLM is NOT included here - it will be started after database initialization
-        # because it requires the 'litellm' database to exist before starting
-
-        if [ "$DEPLOY_CLICKHOUSE" = "true" ] && [ -f "./Dockerfiles/docker-compose.clickhouse.yml" ]; then
-            infra_compose_cmd="$infra_compose_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
+        local infra_compose=(
+            docker compose --env-file "$ENV_FILE" --project-name marie-infrastructure --project-directory .
+            -f ./Dockerfiles/docker-compose.storage.yml
+            -f ./Dockerfiles/docker-compose.s3.yml
+            -f ./Dockerfiles/docker-compose.rabbitmq.yml
+            -f ./Dockerfiles/docker-compose.valkey.yml
+            -f ./Dockerfiles/docker-compose.etcd.yml
+        )
+        local core_services_to_wait=(s3server psql rabbitmq valkey etcd-single)
+        if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
+            infra_compose+=(-f ./Dockerfiles/docker-compose.clickhouse.yml)
+            core_services_to_wait+=(clickhouse)
         fi
-
-        # Note: Gitea is NOT included here - it will be started after database initialization
-        # because it requires the 'gitea' database to exist before starting
-
-        infra_compose_cmd="$infra_compose_cmd --project-directory ."
 
         echo "Starting infrastructure services with host networking..."
-        # Use host networking for all services
-        COMPOSE_NETWORK_MODE=host eval "$infra_compose_cmd up -d --build $orphan_flag"
+        COMPOSE_NETWORK_MODE=host "${infra_compose[@]}" up -d --build ${orphan_flag:+"$orphan_flag"}
 
         echo -e "${YELLOW}⏳ Waiting for core infrastructure services to be healthy...${NC}"
-
-        # First wait for core services (PostgreSQL must be ready before we can create databases)
-        # Note: LiteLLM and Gitea are NOT included - they need their databases created first
-        local core_services_to_wait=("s3server" "psql" "rabbitmq" "valkey" "etcd-single")
+        COMPOSE_NETWORK_MODE=host "${infra_compose[@]}" up --wait "${core_services_to_wait[@]}"
 
         if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
-            core_services_to_wait+=("clickhouse")
+            echo "Applying ClickHouse telemetry and SQL explorer schemas..."
+            COMPOSE_NETWORK_MODE=host "${infra_compose[@]}" --profile schema run --rm -T --no-deps clickhouse-query-schema
         fi
-
-        # Wait for core services first (excluding LiteLLM and Gitea which need DB setup)
-        local wait_compose_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
-        wait_compose_cmd="$wait_compose_cmd --project-name marie-infrastructure"
-        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.storage.yml"
-        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.s3.yml"
-        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.rabbitmq.yml"
-        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.valkey.yml"
-        wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.etcd.yml"
-
-        if [ "$DEPLOY_CLICKHOUSE" = "true" ]; then
-            wait_compose_cmd="$wait_compose_cmd -f ./Dockerfiles/docker-compose.clickhouse.yml"
-        fi
-
-        # Note: LiteLLM and Gitea are not included in wait - they haven't been started yet
-
-        wait_compose_cmd="$wait_compose_cmd --project-directory . up --wait ${core_services_to_wait[*]}"
-        eval "$wait_compose_cmd"
 
         # Initialize databases after PostgreSQL is ready
         initialize_databases
@@ -2029,15 +1967,6 @@ bootstrap_system() {
         # Start ClickStack (requires ClickHouse to be ready)
         if [ "$DEPLOY_CLICKSTACK" = "true" ] && [ "$DEPLOY_CLICKHOUSE" = "true" ] && [ -f "./Dockerfiles/docker-compose.clickstack.yml" ]; then
             echo -e "${YELLOW}⏳ Starting ClickStack (observability stack)...${NC}"
-
-            # Initialize observability schema in ClickHouse
-            local otel_schema_file="./config/clickstack/schema/observability.sql"
-            if [ -f "$otel_schema_file" ]; then
-                echo "  Initializing ClickHouse observability schema..."
-                docker exec -i marie-clickhouse clickhouse-client \
-                    < "$otel_schema_file" >/dev/null 2>&1 || true
-                echo -e "${GREEN}  ✅ Observability schema initialized (otel_logs, otel_traces, otel_metrics)${NC}"
-            fi
 
             # Start ClickStack services as part of infrastructure
             local clickstack_cmd="COMPOSE_NETWORK_MODE=host docker compose --env-file $ENV_FILE"
@@ -2291,6 +2220,15 @@ parse_args() {
                 K8S_MODE=true
                 shift
                 ;;
+            --helm-values)
+                if [[ -z "${2:-}" || ! -f "$2" ]]; then
+                    echo "--helm-values requires an existing values file" >&2
+                    exit 1
+                fi
+                K8S_MODE=true
+                HELM_VALUES_FILE="$2"
+                shift 2
+                ;;
             --k8s-provider|--provider)
                 K8S_PROVIDER="$2"
                 shift 2
@@ -2446,6 +2384,7 @@ show_help() {
     echo "  --env-file PATH       Path to .env file (default: ./config/.env.dev)"
     echo "  --additional-files    FILE1.yml[,FILE2.yml]  Extra docker-compose files to include"
     echo "  --k8s, --helm         Bootstrap Marie-AI on local Kubernetes via deploy/bootstrap.sh"
+    echo "  --helm-values FILE    Bootstrap with Helm and apply deployment values over the local defaults"
     echo "  --k8s-provider NAME   Kubernetes provider for --k8s: k3d or kind (default: k3d)"
     echo "  --with-argocd         Bootstrap Kubernetes and install Argo CD for sandboxes"
     echo "  --no-argocd           Disable Argo CD install when INSTALL_ARGOCD=true is set"
