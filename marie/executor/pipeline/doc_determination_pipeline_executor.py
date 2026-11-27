@@ -60,6 +60,8 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
 
         try:
+            if len(docs) == 1 and docs[0].pages:
+                raise ValueError("Collation requires the whole document")
             stored_assets = []
             frames = get_frames_from_docs(docs)
             root_asset_dir = create_working_dir(
@@ -147,7 +149,14 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
 
         pages = get_pipeline_pages(ref_id, ref_type, runtime_conf, pipeline_conf)
 
+        source_pages = docs[0].pages if len(docs) == 1 else None
         for index, page_set in pages.items():
+            if source_pages:
+                page_set = (
+                    source_pages
+                    if page_set is None
+                    else [page for page in page_set if page in source_pages]
+                )
             if page_set == []:
                 continue
             if page_set:
@@ -309,7 +318,7 @@ def filter_pages_by_classifier_results(
             matched_pages = [
                 page_results["best"]["page"]
                 for page_results in classification_pages.values()
-                if page_results.get("best", {}).get("classification")
+                if str(page_results.get("best", {}).get("classification"))
                 in filtered_classifications
                 and page_results.get("best", {}).get("score", 0) >= min_conf
             ]
@@ -341,7 +350,7 @@ def filter_pages_by_classifier_results(
                         j += 1
                         chunk = []
 
-                result_pages = out
+                result_pages = out or {0: []}
                 i = j
         return result_pages or {0: None}
     except Exception as e:

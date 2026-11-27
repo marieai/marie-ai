@@ -1,6 +1,7 @@
 import os
-from datetime import datetime
+from tempfile import TemporaryDirectory
 from typing import Any, Optional
+from uuid import uuid4
 
 import torch
 from docarray import DocList
@@ -140,12 +141,33 @@ class RotationExecutor(MarieExecutor):
                 img_name = f"{prefix}.tif"
                 local_img_path = os.path.join(root_asset_dir, img_name)
 
-                # back up original
-                if os.path.exists(local_img_path):
-                    StorageManager.write(
-                        local_img_path,
-                        f"{s3_asset_path(ref_id, ref_type)}/{prefix}_prerotation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.tif",
-                    )
+                asset_root = s3_asset_path(ref_id, ref_type)
+                remote_img_path = f"{asset_root}/{img_name}"
+                incoming_img_path = docs[0].asset_key
+                source_is_tiff = incoming_img_path.lower().endswith((".tif", ".tiff"))
+                backup_path = f"{asset_root}/{prefix}_prerotation_{uuid4().hex}.tif"
+                if source_is_tiff:
+                    with TemporaryDirectory() as backup_dir:
+                        original = os.path.join(backup_dir, "original.tif")
+                        read_ok = StorageManager.read_to_file(
+                            incoming_img_path, original
+                        )
+                        if (
+                            read_ok is False
+                            or not os.path.isfile(original)
+                            or not os.path.getsize(original)
+                        ):
+                            raise OSError(
+                                f"Could not read original TIFF for backup: {incoming_img_path}"
+                            )
+                        if not StorageManager.write(original, backup_path):
+                            raise OSError(
+                                f"Could not back up original TIFF to {backup_path}"
+                            )
+                elif os.path.isfile(local_img_path) and not StorageManager.write(
+                    local_img_path, backup_path
+                ):
+                    raise OSError(f"Could not back up existing TIFF to {backup_path}")
 
                 merge_tiff_frames_ifd(
                     os.path.join(root_asset_dir, "burst"),
@@ -155,18 +177,17 @@ class RotationExecutor(MarieExecutor):
                     ),
                 )
 
-                store_assets(ref_id, ref_type, root_asset_dir, match_wildcard=img_name)
-
-                # If job is submitted with image not in ref_id directory, need to update it so downstream jobs access rotated tiff
-                remote_img_path = f"{s3_asset_path(ref_id, ref_type)}/{img_name}"
-                incoming_img_path = docs[0].asset_key
-                if (
-                    incoming_img_path.lower().endswith((".tif", ".tiff"))
-                    and incoming_img_path != remote_img_path
+                if not store_assets(
+                    ref_id, ref_type, root_asset_dir, match_wildcard=img_name
                 ):
-                    StorageManager.write(
+                    raise OSError(f"Could not store rotated TIFF at {remote_img_path}")
+                if source_is_tiff and incoming_img_path != remote_img_path:
+                    if not StorageManager.write(
                         local_img_path, incoming_img_path, overwrite=True
-                    )
+                    ):
+                        raise OSError(
+                            f"Could not update rotated TIFF at {incoming_img_path}"
+                        )
 
             metadata["ocr"] = ocr_frames(
                 self.ocr_engines,

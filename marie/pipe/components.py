@@ -358,6 +358,7 @@ def ocr_frames(
     runtime_conf: Optional[dict[str, Any]] = None,
     engine_name: str = "default",
     save: bool = True,
+    source_pages: list[int] | None = None,
 ) -> dict:
     """
     Perform OCR on the frames and return the results
@@ -428,21 +429,17 @@ def ocr_frames(
     else:
         json_path = os.path.join(output_dir, f"{prefix}.json")
 
-    if force or not os.path.exists(json_path):
-        logger.info(f"Performing OCR : {json_path}")
-        results = engine.extract(
-            frames,
-            ps_mode,
-            coord_format,
-            regions,
-            queue_id=queue_id,
-        )
-        if save:
-            store_json_object(results, json_path)
-    else:
-        logger.debug(f"Skipping OCR : {json_path}")
-        results = load_json_file(json_path)
+    if not force and os.path.exists(json_path):
+        cached = load_json_file(json_path)
+        if source_pages is None:
+            return cached
+        if all(0 <= page < len(cached) for page in source_pages):
+            return [cached[page] for page in source_pages]
 
+    logger.info(f"Performing OCR : {json_path}")
+    results = engine.extract(frames, ps_mode, coord_format, regions, queue_id=queue_id)
+    if save and source_pages is None:
+        store_json_object(results, json_path)
     return results
 
 
@@ -585,7 +582,7 @@ def setup_llm_tasks(pipeline_config, document_indexers):
 
     tasks = pipeline_config["llm_tasks"]
 
-    document_llm_tasks = defaultdict(list)
+    document_llm_tasks = defaultdict(dict)
     for task in tasks:
         if "name" not in task:
             raise BadConfigSource(f"Missing name in llm_tasks config : {task}")
@@ -607,7 +604,7 @@ def setup_llm_tasks(pipeline_config, document_indexers):
                     f"Model path: {indexer.model_path}"
                 )
 
-        document_llm_tasks[group].append(name)
+        document_llm_tasks[group][name] = task.get("enabled", True)
 
     return document_llm_tasks
 

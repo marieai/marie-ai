@@ -26,6 +26,7 @@ from marie.utils.asset_util import (
     split_filename,
     store_assets,
 )
+from marie.utils.image_utils import rotate_image_frames
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
 
@@ -124,6 +125,7 @@ class LLMPipeline(BasePipeline):
         self.logger.info(f"Executing pipeline runtime_conf : {runtime_conf}")
 
         # check if the current pipeline name is the default pipeline name
+        runtime_conf = runtime_conf or {}
         if "name" in runtime_conf:
             expected_pipeline_name = runtime_conf["name"]
             if expected_pipeline_name != self.pipeline_name:
@@ -157,16 +159,17 @@ class LLMPipeline(BasePipeline):
         rotation_enabled = runtime_conf.get("rotation", {"enabled": False}).get(
             "enabled", True
         )
-        if rotation_enabled:
-            metadata["rotation"], any_rotated = rotate_frames(
-                ref_id, frames, root_asset_dir, force=True
-            )
-        else:
-            any_rotated = False
+        any_rotated = False
+        if pages is None:
+            if rotation_enabled:
+                metadata["rotation"], any_rotated = rotate_frames(
+                    ref_id, frames, root_asset_dir, force=True
+                )
+            burst_frames(ref_id, frames, root_asset_dir, force=any_rotated)
+        elif rotation_enabled:
+            # Selected frames can be rotated for inference without replacing whole-document assets.
+            _, any_rotated = rotate_image_frames(frames)
 
-        burst_frames(ref_id, frames, root_asset_dir, force=any_rotated)
-
-        # Load Available OCR data if possible
         ocr_results = ocr_frames(
             self.ocr_engines,
             ref_id,
@@ -174,12 +177,8 @@ class LLMPipeline(BasePipeline):
             root_asset_dir,
             queue_id=queue_id,
             force=any_rotated,
+            source_pages=pages,
         )
-        if pages is not None and not any_rotated and len(ocr_results) != len(pages):
-            # If we did not do new OCR and are filtering by pages, we need to filter results
-            ocr_results[:] = [
-                result for i, result in enumerate(ocr_results) if i in pages
-            ]
         metadata["ocr"] = ocr_results
 
         # Track pipline execution time for metrics
@@ -194,7 +193,13 @@ class LLMPipeline(BasePipeline):
 
         # OCR only stored in results directory until merger node, Preserves S3 and local disk space
         del metadata["ocr"]
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
+        self.store_metadata(
+            ref_id,
+            ref_type,
+            root_asset_dir,
+            metadata,
+            merge_page_sets=pages is not None,
+        )
         store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
 
         return metadata
@@ -245,10 +250,8 @@ class LLMPipeline(BasePipeline):
                     root_asset_path=root_asset_path,
                     llm_tasks=[
                         task
-                        for task in indexer_group.get("llm_tasks", [])
-                        if llm_task_config.get(task, {"enabled": True}).get(
-                            "enabled", True
-                        )
+                        for task, enabled in indexer_group.get("llm_tasks", {}).items()
+                        if llm_task_config.get(task, {}).get("enabled", enabled)
                     ],
                 )
             )
@@ -324,6 +327,7 @@ class LLMPipeline(BasePipeline):
         metadata: dict[str, Any],
         infix: str = "meta",
         save: bool = True,
+        merge_page_sets: bool = False,
     ) -> dict[str, Any]:
         """
         Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
@@ -340,7 +344,13 @@ class LLMPipeline(BasePipeline):
             # Save pipeline checkpoint
             pipeline_meta_path = os.path.join(root_asset_dir, self.pipeline_name)
             ensure_exists(pipeline_meta_path)
-            store_json_object(metadata, os.path.join(pipeline_meta_path, meta_filename))
+            checkpoint_path = os.path.join(pipeline_meta_path, meta_filename)
+            checkpoint = metadata
+            if merge_page_sets and os.path.isfile(checkpoint_path):
+                previous = load_json_file(checkpoint_path, True)
+                if previous.get("job_id") == metadata["job_id"]:
+                    checkpoint = update_existing_meta(previous, metadata)
+            store_json_object(checkpoint, checkpoint_path)
 
         # Main save to meta file
         meta_path = os.path.join(root_asset_dir, meta_filename)
