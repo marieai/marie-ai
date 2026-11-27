@@ -33,24 +33,29 @@ def test_merge_tiff_paths_preserves_ifds(tmp_path: Path) -> None:
     assert len(read_tiff(str(output))['ifds']) == 2
 
 
-def test_merge_tiff_frames_with_splits(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ('starts', 'sizes'), [([2], [2, 2]), ([0, 2], [2, 2]), ([0], [4])]
+)
+def test_merge_tiff_frames_with_splits(
+    tmp_path: Path, starts: list[int], sizes: list[int]
+) -> None:
     source_dir = tmp_path / 'source'
     output_dir = tmp_path / 'output'
     _source_tiffs(source_dir)
 
     outputs = merge_tiff_frames_with_splits_ifd(
         source_dir,
-        [2],
+        starts,
         output_dir,
         sort_key=lambda path: int(Path(path).stem.rsplit('_', 1)[-1]),
     )
 
-    assert len(outputs) == 2
-    assert len(read_tiff(str(output_dir / outputs[0]))['ifds']) == 2
-    assert len(read_tiff(str(output_dir / outputs[1]))['ifds']) == 2
+    assert [
+        len(read_tiff(str(output_dir / output))['ifds']) for output in outputs
+    ] == sizes
 
 
-@pytest.mark.parametrize('split_indices', [[0], [2, 2], [-1], [4]])
+@pytest.mark.parametrize('split_indices', [[0, 0], [2, 2], [-1], [4]])
 def test_merge_tiff_frames_rejects_invalid_boundaries(
     tmp_path: Path, split_indices: list[int]
 ) -> None:

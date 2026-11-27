@@ -534,10 +534,14 @@ def update_existing_meta(existing_meta: dict, metadata: dict):
 
     def _merge_key(
         unit: dict[str, Any], identifier_key: str
-    ) -> tuple[Any | None, tuple[int, ...]]:
-        pages: List[int] = unit.get("classification", {}).get("page_numbers", [])
-        identification = unit.get(identifier_key)
-        return identification, tuple(sorted(pages))
+    ) -> tuple[Any, Any, tuple[int, ...]]:
+        result = unit.get("classification") or unit.get("index") or {}
+        pages = result.get("page_numbers", [])
+        return (
+            unit.get(identifier_key),
+            unit.get("task"),
+            tuple(sorted(map(int, pages))),
+        )
 
     # List elements are overridden on dict.update, so they need to be merged independently
     # New metadata lists take priority when handling duplicate elements with the same identifier value
@@ -552,17 +556,11 @@ def update_existing_meta(existing_meta: dict, metadata: dict):
         existing_list = existing_meta.get(category, [])
         new_list = metadata.get(category, [])
 
-        # Determine if existing keys are stale
-        existing_keys = {_merge_key(unit, identifier): False for unit in existing_list}
-        for unit in new_list:
-            key = _merge_key(unit, identifier)
-            existing_keys[key] = key in existing_keys
-
-        # Filter out stale categories
+        new_keys = {_merge_key(unit, identifier) for unit in new_list}
         merged_list = [
             unit
             for unit in existing_list
-            if not existing_keys[_merge_key(unit, identifier)]
+            if _merge_key(unit, identifier) not in new_keys
         ]
         merged_list.extend(new_list)
 

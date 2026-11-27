@@ -101,7 +101,10 @@ class RotationExecutor(MarieExecutor):
         """
         job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
 
+        frames = None
         try:
+            if len(docs) == 1 and docs[0].pages:
+                raise ValueError("Rotation requires the whole document")
             frames = get_frames_from_docs(docs)
             root_asset_dir = create_working_dir(
                 frames, ref_id=ref_id, ref_type=ref_type, job_id=job_id
@@ -157,7 +160,10 @@ class RotationExecutor(MarieExecutor):
                 # If job is submitted with image not in ref_id directory, need to update it so downstream jobs access rotated tiff
                 remote_img_path = f"{s3_asset_path(ref_id, ref_type)}/{img_name}"
                 incoming_img_path = docs[0].asset_key
-                if incoming_img_path != remote_img_path:
+                if (
+                    incoming_img_path.lower().endswith((".tif", ".tiff"))
+                    and incoming_img_path != remote_img_path
+                ):
                     StorageManager.write(
                         local_img_path, incoming_img_path, overwrite=True
                     )

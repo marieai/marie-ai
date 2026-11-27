@@ -185,7 +185,7 @@ class LLMPipeline(BasePipeline):
         # Track pipline execution time for metrics
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
             self.execute_llm_pipeline(
-                frames, metadata, ocr_results, runtime_conf, pages
+                frames, metadata, ocr_results, runtime_conf, pages, root_asset_dir
             )
 
             metadata[
@@ -206,12 +206,13 @@ class LLMPipeline(BasePipeline):
         ocr_results,
         runtime_conf: dict,
         pages: Optional[List[int]] = None,
+        root_asset_path: str | None = None,
     ):
         if self.classifier_groups:
             if "classifications" not in metadata:
                 metadata["classifications"] = []
         if self.indexer_groups:
-            if "indexers" not in metadata:
+            if "indexes" not in metadata:
                 metadata["indexes"] = []
 
         processing_group_pipeline = defaultdict(list)
@@ -241,6 +242,7 @@ class LLMPipeline(BasePipeline):
                 LLMIndexerPipelineComponent(
                     name="mmllm_pipeline_component",
                     document_indexers=indexer_group["indexers"],
+                    root_asset_path=root_asset_path,
                     llm_tasks=[
                         task
                         for task in indexer_group.get("llm_tasks", [])
@@ -262,24 +264,17 @@ class LLMPipeline(BasePipeline):
                 include_ocr_lines=True,
             )
             if "indexes" in results:
-                # Re-assign original page numbers
-                if pages:
-                    zero_index_pages = results["indexes"]["pages"]
-                    assert len(zero_index_pages) == len(pages)
-                    results["indexes"]["page_numbers"] = pages
-                    reconciled_pages = {}
-                    for page, index in zip(pages, zero_index_pages.values()):
-                        best = index["best"]
-                        if hasattr(best, "page"):
-                            best.page = page
-                        else:
-                            best["page"] = page
-                        for detail in index["details"]:
-                            detail["page"] = page
-                        reconciled_pages[page] = index
-                    results["indexes"]["pages"] = reconciled_pages
-
                 for task_name, index in results["indexes"].items():
+                    if pages is not None:
+                        remapped = {}
+                        for local_page, item in index["pages"].items():
+                            source_page = pages[int(local_page)]
+                            item["best"]["page"] = source_page
+                            for detail in item["details"]:
+                                detail["page"] = source_page
+                            remapped[source_page] = item
+                        index["pages"] = remapped
+                        index["page_numbers"] = list(remapped)
                     metadata["indexes"].append(
                         {
                             "group": group,
@@ -295,7 +290,8 @@ class LLMPipeline(BasePipeline):
                     assert len(zero_index_pages) == len(pages)
                     results["classifiers"]["page_numbers"] = pages
                     reconciled_pages = {}
-                    for page, classification in zip(pages, zero_index_pages.values()):
+                    for local_page, classification in zero_index_pages.items():
+                        page = pages[int(local_page)]
                         best = classification["best"]
                         if hasattr(best, "page"):
                             best.page = page

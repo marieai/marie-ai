@@ -292,11 +292,9 @@ def merge_tiff_frames_with_splits_ifd(
             raise ValueError(f"split index {idx} out of range for {frame_count} frames")
         if idx in normalized_splits:
             raise ValueError(f"duplicate split index: {idx}")
-        if idx == 0:
-            continue
         normalized_splits.add(idx)
 
-    ordered_splits = sorted(normalized_splits)
+    ordered_splits = sorted(normalized_splits - {0})
     chunk_starts = [0] + ordered_splits
     chunk_ends = ordered_splits + [frame_count]
 

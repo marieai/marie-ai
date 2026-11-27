@@ -38,12 +38,13 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         device: Optional[str] = None,
         num_worker_preprocess: int = 4,
         storage: dict[str, Any] = None,
-        pipelines: List[dict[str, Any]] = [],
+        pipelines: Optional[List[dict[str, Any]]] = None,
         *args,
         **kwargs,
     ):
         super().__init__(name, device, num_worker_preprocess, storage, **kwargs)
         logger.info("Starting Doc Determination Executor Setup")
+        self.pipeline = None
         if pipelines:
             logger.info(f"Pipelines config: {pipelines}")
             self.pipeline = LLMPipeline(pipelines_config=pipelines, device=self.device)
@@ -107,14 +108,16 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
                 "assets": stored_assets,
             }
         finally:
-            del frames
             MDC.remove("request_id")
 
     @requests(on=["/document/classify"])
     def handle(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
         if not self.pipeline:
             raise ValueError("pipeline not initialized.")
-        return self.run_llm_pipeline(docs, parameters)
+        try:
+            return self.run_llm_pipeline(docs, parameters)
+        finally:
+            MDC.remove("request_id")
 
     def run_llm_pipeline(self, docs: DocList[AssetKeyDoc], parameters: dict):
         job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
@@ -145,6 +148,8 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
         pages = get_pipeline_pages(ref_id, ref_type, runtime_conf, pipeline_conf)
 
         for index, page_set in pages.items():
+            if page_set == []:
+                continue
             if page_set:
                 self.logger.info(
                     f"Processing page set {index} with {len(page_set)} pages"
@@ -185,7 +190,6 @@ class DocDeterminationPipelineExecutor(PipelineExecutor):
             "runtime_info": self.runtime_info,
         }
         converted = safely_encoded(lambda x: x)(response)
-        MDC.remove("request_id")
         return converted
 
     def resolve_runtime_and_pipeline_configs(
@@ -238,7 +242,7 @@ def get_pipeline_pages(
                     temp_asset_dir,
                     s3_file_path=f"{ref_id}.meta.json",
                 )
-                if os.path.exists(temp_meta_path):
+                if temp_meta_path and os.path.exists(temp_meta_path):
                     existing_meta = load_json_file(temp_meta_path, True)
 
             if existing_meta:
@@ -312,37 +316,34 @@ def filter_pages_by_classifier_results(
 
             if not result_pages:
                 # NOTE: Pages which were skipped by the classification we are filtering on will be filtered out in the result pages
-                result_pages = {i: list(int(k) for k in classification_pages.keys())}
+                result_pages = {i: sorted(int(k) for k in classification_pages)}
 
-            if matched_pages:
-                if method == "include":
-                    for k, v in result_pages.items():
-                        result_pages[k] = [page for page in v if page in matched_pages]
-                elif method == "exclude":
-                    for k, v in result_pages.items():
-                        result_pages[k] = [
-                            page for page in v if page not in matched_pages
-                        ]
-                elif method == "split":
-                    split_after = set(matched_pages)
-                    out = {}
-                    chunk: List[int] = []
-                    j = 0
-                    for _, group in sorted(result_pages.items()):
-                        for x in group:
-                            chunk.append(x)
-                            if x in split_after:
-                                out[j] = chunk
-                                j += 1
-                                chunk = []
-                        if chunk:
+            if method == "include":
+                for k, v in result_pages.items():
+                    result_pages[k] = [page for page in v if page in matched_pages]
+            elif method == "exclude":
+                for k, v in result_pages.items():
+                    result_pages[k] = [page for page in v if page not in matched_pages]
+            elif method == "split":
+                split_after = set(matched_pages)
+                out = {}
+                chunk: List[int] = []
+                j = 0
+                for _, group in sorted(result_pages.items()):
+                    for x in group:
+                        chunk.append(x)
+                        if x in split_after:
                             out[j] = chunk
                             j += 1
                             chunk = []
+                    if chunk:
+                        out[j] = chunk
+                        j += 1
+                        chunk = []
 
-                    result_pages = out
-                    i = j
-        return result_pages
+                result_pages = out
+                i = j
+        return result_pages or {0: None}
     except Exception as e:
         logger.error(
             f"Error while filtering pages with config: {pages_config} Error: {e}"
@@ -353,87 +354,100 @@ def filter_pages_by_classifier_results(
 
 def doc_determination_collation(meta: Dict[str, Any]) -> Dict[str, Any]:
     documents: List[Dict[str, Any]] = []
-    try:
-        rotation_threshold = meta.get("rotation", {}).get("threshold", 0)
-        rotation_pages = meta.get("rotation", {}).get("pages", {})
+    rotation_threshold = meta.get("rotation", {}).get("threshold", 0)
+    rotation_pages = meta.get("rotation", {}).get("pages", {})
 
-        _all_pages = [int(x) for x in rotation_pages.keys()]
+    if meta.get("pages") is not None:
+        source_pages = range(int(meta["pages"]))
+    else:
+        source_pages = [int(page) for page in rotation_pages]
+    if not source_pages:
+        raise ValueError("Missing source page count for collation")
 
-        classifications_by_group = defaultdict(list)
-        for item in meta.get("classifications", []):
-            classifications_by_group[item.get("group")].append(
-                item.get("classification") or {}
-            )
-
-        # page_number -> medical page classification string (e.g., "EOB")
-        medical_by_page: Dict[int, Optional[str]] = {}
-        for item in classifications_by_group["medical-page-classifier"]:
-            pages = item.get("pages") or {}
-            for p, pnode in pages.items():
-                best = (pnode or {}).get("best") or {}
-                medical_by_page[int(p)] = best.get("classification")
-
-        doc_determinations = classifications_by_group["doc-determination-classifier"]
-        doc_determinations.sort(
-            key=lambda x: min({int(p) for p in x.get("pages", {}).keys()} or {0})
+    classifications_by_group = defaultdict(list)
+    for item in meta.get("classifications", []):
+        classifications_by_group[item.get("group")].append(
+            item.get("classification") or {}
         )
-        start_doc_page, last_page = min(_all_pages), max(_all_pages)
-        for idx, item in enumerate(doc_determinations):
-            pages_map = item.get("pages", {}) or {}
-            page_numbers = sorted({int(p) for p in pages_map.keys()})
-            if not page_numbers:
-                continue
 
-            # All pages in group should share one doc-determination value.
-            labels = {
-                (node.get("best") or {}).get("classification")
-                for node in pages_map.values()
-            }
-            labels.discard(None)
+    # page_number -> medical page classification string (e.g., "EOB")
+    medical_by_page: Dict[int, Optional[str]] = {}
+    for item in classifications_by_group["medical-page-classifier"]:
+        pages = item.get("pages") or {}
+        for p, pnode in pages.items():
+            best = (pnode or {}).get("best") or {}
+            medical_by_page[int(p)] = best.get("classification")
 
-            if len(labels) > 1:
-                raise ValueError(
-                    f"Inconsistent classifications in doc-determination-classifier group: {labels}"
-                )
-            doc_label = next(iter(labels), None)
-
-            # Fill missing pages in range (e.g., [2,3,5] -> [2,3,4,5])
-            # Make sure first and last pages are accounted for (e.g., if FIRST classification is [2,3,5] -> [1,2,3,4,5])
-            end_doc_page = (
-                last_page if idx == len(doc_determinations) - 1 else page_numbers[-1]
+    doc_determinations = [
+        item
+        for item in classifications_by_group["doc-determination-classifier"]
+        if item.get("pages")
+    ]
+    if not doc_determinations:
+        raise ValueError("Missing doc-determination-classifier results for collation")
+    doc_determinations.sort(
+        key=lambda x: min({int(p) for p in x.get("pages", {}).keys()} or {0})
+    )
+    start_doc_page, last_page = min(source_pages), max(source_pages)
+    for idx, item in enumerate(doc_determinations):
+        pages_map = item.get("pages", {}) or {}
+        page_numbers = sorted({int(p) for p in pages_map.keys()})
+        if page_numbers[0] < start_doc_page or page_numbers[-1] > last_page:
+            raise ValueError(
+                "Document classification pages overlap or fall outside the source"
             )
 
-            collated_pages = []
-            for new_page, page_num in enumerate(
-                range(start_doc_page, end_doc_page + 1)
-            ):
-                rot = (
-                    rotation_pages.get(str(page_num), rotation_pages.get(page_num, {}))
-                    or {}
-                ).get("rotate", 0)
-                collated_pages.append(
-                    {
-                        "page": page_num,
-                        "new_page": new_page,
-                        "rotation": rot if rot >= rotation_threshold else 0,
-                        "medical-page-classification": medical_by_page.get(page_num),
-                    }
-                )
+        # All pages in group should share one doc-determination value.
+        labels = {
+            (node.get("best") or {}).get("classification")
+            for node in pages_map.values()
+        }
+        labels.discard(None)
 
-            documents.append(
+        if len(labels) > 1:
+            raise ValueError(
+                f"Inconsistent classifications in doc-determination-classifier group: {labels}"
+            )
+        doc_label = next(iter(labels), None)
+
+        # Fill missing pages in range (e.g., [2,3,5] -> [2,3,4,5])
+        # Make sure first and last pages are accounted for (e.g., if FIRST classification is [2,3,5] -> [1,2,3,4,5])
+        end_doc_page = (
+            last_page if idx == len(doc_determinations) - 1 else page_numbers[-1]
+        )
+
+        collated_pages = []
+        for new_page, page_num in enumerate(range(start_doc_page, end_doc_page + 1)):
+            rotation = (
+                rotation_pages.get(str(page_num), rotation_pages.get(page_num, {}))
+                or {}
+            )
+            rot = rotation.get("rotate", 0)
+            if (
+                "orientation_conf" in rotation
+                and rotation["orientation_conf"] <= rotation_threshold
+            ):
+                rot = 0
+            collated_pages.append(
                 {
-                    "doc-classification": doc_label,
-                    "page-count": len(collated_pages),
-                    "pages": collated_pages,
+                    "page": page_num,
+                    "new_page": new_page,
+                    "rotation": rot,
+                    "medical-page-classification": medical_by_page.get(page_num),
                 }
             )
 
-            start_doc_page = end_doc_page + 1
+        documents.append(
+            {
+                "doc-classification": doc_label,
+                "page-count": len(collated_pages),
+                "pages": collated_pages,
+            }
+        )
 
-        logger.info(f"Final document count: {len(documents)}")
-    except Exception as e:
-        logger.error(f"Error during document collation: {e}")
-        return {"error": str(e)}
+        start_doc_page = end_doc_page + 1
+
+    logger.info(f"Final document count: {len(documents)}")
 
     return {"doc_count": len(documents), "docs": documents}
 
@@ -480,47 +494,34 @@ def split_meta_json(
             "pages": pages_,
         }
 
-    def split_classifications(
-        classifications,
-        new_pages: dict[int, int],
-    ):
-        _classifications = []
-        old_pages = set(new_pages.keys())
-        for item in classifications:
-            cls = item.get("classification") or {}
-            classification_pages = cls.get("pages") or {}
-            classification_page_numbers = cls.get("page_numbers") or []
-            if {int(x) for x in classification_pages.keys()} & old_pages:
-                _classifications.append(
-                    {
-                        **item,
-                        "classification": {
-                            **cls,
-                            "page_numbers": [
-                                n
-                                for x in classification_page_numbers
-                                if (n := new_pages.get(int(x))) is not None
-                            ],
-                            "pages": {
-                                str(n): {
-                                    "details": [{**d, "page": n} for d in v["details"]],
-                                    "best": {**v["best"], "page": n},
-                                }
-                                for (k, v) in classification_pages.items()
-                                if (n := new_pages.get(int(k))) is not None
-                            },
-                        },
-                    }
-                )
-
-        return _classifications
-
-    def split_indexes(
-        indexes,
-        new_pages: dict[int, int],
-    ):
-        # todo implement
-        return indexes
+    def split_results(
+        items: list[dict], key: str, new_pages: dict[int, int]
+    ) -> list[dict]:
+        output = []
+        for item in items:
+            result = item[key]
+            child_pages = {}
+            for source, entry in result.get("pages", {}).items():
+                child = new_pages.get(int(source))
+                if child is None:
+                    continue
+                child_pages[str(child)] = {
+                    **entry,
+                    "details": [
+                        {**detail, "page": child} for detail in entry.get("details", [])
+                    ],
+                    "best": {**entry["best"], "page": child},
+                }
+            if child_pages:
+                child_result = {**result, "pages": child_pages}
+                if "page_numbers" in result:
+                    child_result["page_numbers"] = [
+                        new_pages[int(page)]
+                        for page in result["page_numbers"]
+                        if int(page) in new_pages
+                    ]
+                output.append({**item, key: child_result})
+        return output
 
     try:
         new_pages = {p: i for i, p in enumerate(pages)}
@@ -529,7 +530,7 @@ def split_meta_json(
             # OCR JSON
             return split_ocr(meta, new_pages)
         elif isinstance(meta, dict):
-            if meta.get("any_rotated"):
+            if "any_rotated" in meta:
                 # ROTATION JSON
                 return split_rotation(meta, new_pages)
 
@@ -544,19 +545,20 @@ def split_meta_json(
             # rotation
             rotation = meta.get("rotation", {})
             if rotation:
-                split_rotation(rotation, new_pages)
+                _meta["rotation"] = split_rotation(rotation, new_pages)
 
             # classifications
             classifications = meta.get("classifications", [])
             if classifications:
-                _meta["classifications"] = split_classifications(
-                    classifications, new_pages
+                _meta["classifications"] = split_results(
+                    classifications, "classification", new_pages
                 )
 
             # indexes
-            indexes = meta.get("indexers", [])
-            if indexes:
-                _meta["indexers"] = split_indexes(indexes, new_pages)
+            if "indexes" in meta:
+                _meta["indexes"] = split_results(meta["indexes"], "index", new_pages)
+            if "indexers" in meta:
+                _meta["indexers"] = meta["indexers"]
 
             # ocr
             ocr = meta.get("ocr", [])
