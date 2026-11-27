@@ -35,74 +35,63 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
         has_cuda = True if self.device.type.startswith("cuda") else False
         self.pipeline = LLMPipeline(pipelines_config=pipelines, cuda=has_cuda)
 
-    @requests(on="/document/classify")
-    def handle_classify(
-        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ):
-        return self.run_llm_pipeline(docs, parameters)
-
-    @requests(on="/document/index")
-    def handle_index(
-        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ):
+    @requests(on=["/document/index", "/document/classify"])
+    def handle(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
         return self.run_llm_pipeline(docs, parameters)
 
     def run_llm_pipeline(self, docs: DocList[AssetKeyDoc], parameters: dict):
-        frames = None
+        job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
+
+        # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
+        pms_mode = PSMode.from_value(
+            value_from_payload_or_args(payload, "mode", default=str(PSMode.SPARSE))
+        )
+        coordinate_format = CoordinateFormat.from_value(
+            value_from_payload_or_args(
+                payload, "format", default=str(CoordinateFormat.XYWH)
+            )
+        )
+
+        if payload.get("regions", []):
+            raise NotImplementedError("Regions is not implemented yet")
+        if pms_mode is not PSMode.SPARSE:
+            raise NotImplementedError(f"PMS mode `{pms_mode}` is not implemented yet")
+        if coordinate_format is not CoordinateFormat.XYWH:
+            raise NotImplementedError(
+                f"Coordinate format `{coordinate_format}` is not implemented yet"
+            )
+
+        self.logger.info("Extracting Runtime Config from features list")
+        runtime_conf = {}
+        pipeline_names = [
+            conf["pipeline"]["name"] for conf in self.pipeline.pipelines_config
+        ]
+        for feature in payload.get("features", []):
+            if feature.get("type") != "pipeline":
+                continue
+            name = feature.get("name")
+            if name and any(name == p_name for p_name in pipeline_names):
+                runtime_conf = feature
+        self.logger.debug(f"Resolved Runtime Config: {runtime_conf}")
+
+        pages = runtime_conf.get("pages", None)
+        if isinstance(pages, str):
+            pages = sorted({int(n) for n in pages.split(",")})
+        elif isinstance(pages, list):
+            pages = sorted({int(n) for n in pages})
+        elif pages is not None:
+            self.logger.warning(f"Unexpected pages attr {pages}, ignoring")
+            pages = None
+
+        frames = get_frames_from_docs(docs, pages)
+        root_asset_dir = create_working_dir(
+            frames,
+            ref_id=ref_id,
+            ref_type=ref_type,
+            queue_id=queue_id,
+            job_id=job_id,
+        )
         try:
-            job_id, ref_id, ref_type, queue_id, payload = parse_parameters(parameters)
-
-            # due to compatibility issues with other frameworks we allow passing same arguments in the 'args' object
-            pms_mode = PSMode.from_value(
-                value_from_payload_or_args(payload, "mode", default=str(PSMode.SPARSE))
-            )
-            coordinate_format = CoordinateFormat.from_value(
-                value_from_payload_or_args(
-                    payload, "format", default=str(CoordinateFormat.XYWH)
-                )
-            )
-
-            if payload.get("regions", []):
-                raise NotImplementedError("Regions is not implemented yet")
-            if pms_mode is not PSMode.SPARSE:
-                raise NotImplementedError(
-                    f"PMS mode `{pms_mode}` is not implemented yet"
-                )
-            if coordinate_format is not CoordinateFormat.XYWH:
-                raise NotImplementedError(
-                    f"Coordinate format `{coordinate_format}` is not implemented yet"
-                )
-
-            self.logger.info("Extracting Runtime Config from features list")
-            runtime_conf = {}
-            pipeline_names = [
-                conf["pipeline"]["name"] for conf in self.pipeline.pipelines_config
-            ]
-            for feature in payload.get("features", []):
-                if feature.get("type") != "pipeline":
-                    continue
-                name = feature.get("name")
-                if name and any(name == p_name for p_name in pipeline_names):
-                    runtime_conf = feature
-            self.logger.debug(f"Resolved Runtime Config: {runtime_conf}")
-
-            pages = runtime_conf.get("pages", None)
-            if isinstance(pages, str):
-                pages = sorted({int(n) for n in pages.split(",")})
-            elif isinstance(pages, list):
-                pages = sorted({int(n) for n in pages})
-            elif pages is not None:
-                self.logger.warning(f"Unexpected pages attr {pages}, ignoring")
-                pages = None
-
-            frames = get_frames_from_docs(docs, pages)
-            root_asset_dir = create_working_dir(
-                frames,
-                ref_id=ref_id,
-                ref_type=ref_type,
-                queue_id=queue_id,
-                job_id=job_id,
-            )
             metadata = self.pipeline.execute_frames_pipeline(
                 ref_id=ref_id,
                 ref_type=ref_type,
@@ -133,10 +122,9 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
 
         except BaseException as error:
             self.logger.error(f"Pipeline error : {error}", exc_info=True)
-            raise
+            raise error
 
         finally:
-            if frames is not None:
-                del frames
+            del frames
             torch_gc()
             MDC.remove("request_id")

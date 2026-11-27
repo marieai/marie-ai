@@ -15,7 +15,11 @@ from marie.models.utils import initialize_device_settings, setup_torch_optimizat
 from marie.pipe.components import update_existing_meta
 from marie.runtime import requests
 from marie.storage import StorageManager
-from marie.utils.asset_util import create_working_dir, s3_asset_path, store_assets
+from marie.utils.asset_util import (
+    create_working_dir,
+    restore_assets,
+    store_assets,
+)
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.network import get_ip_address
 
@@ -41,7 +45,7 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
         :param storage: Storage configuration dictionary (e.g., Postgres settings).
         :param kwargs: Additional keyword arguments passed to MarieExecutor.
         """
-        kwargs['storage'] = storage
+        kwargs["storage"] = storage
         super().__init__(**kwargs)
         self.logger = MarieLogger(
             getattr(self.metas, "name", self.__class__.__name__)
@@ -102,11 +106,6 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
             "use_cuda": True if self.device.type.startswith("cuda") else False,
         }
 
-        self.storage_enabled = False
-        if storage is not None and "psql" in storage:
-            sconf = storage["psql"]
-            self.setup_storage(sconf.get("enabled", False), sconf)
-
         connected = StorageManager.ensure_connection("s3://", silence_exceptions=False)
         logger.warning(f"S3 connection status : {connected}")
 
@@ -143,7 +142,13 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
             }
 
         self.logger.info(f"Collecting meta data from pipelines: {meta_folders}")
-        s3_root_path = fetch_assets(ref_id, ref_type, root_asset_dir, meta_folders)
+        s3_root_path = restore_assets(
+            ref_id,
+            ref_type,
+            root_asset_dir,
+            overwrite=True,
+            dirs_to_restore=meta_folders,
+        )
         if s3_root_path is None:
             raise ConnectionError("Unable to collect meta data from")
 
@@ -161,8 +166,7 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
             pipeline_meta = load_json_file(pipeline_meta_path, True)
             metadata = update_existing_meta(metadata, pipeline_meta)
         metadata["pipeline"] = ",".join(meta_folders)
-        metadata["features"] = features
-        metadata["planner"] = payload.get("planner", None)
+
         self.logger.info(f"Storing merged metadata : {meta_path}")
         store_json_object(metadata, meta_path)
         stored_assets = store_assets(
@@ -174,55 +178,3 @@ class PipelineExecutor(MarieExecutor, StorageMixin):
             "runtime_info": self.runtime_info,
             "assets": stored_assets,
         }
-
-
-# TODO: refactor marie.pipe.components.restore_assets to do this job
-def fetch_assets(
-    ref_id: str,
-    ref_type: str,
-    root_asset_dir: str,
-    dirs_to_fetch: list,
-    full_restore=False,
-) -> str or None:
-    """
-    Fetch assets from primary storage (S3) into root asset directory. This pulls the
-    assets from the last run of the pipeline.
-
-    :param ref_id: document reference id (e.g. filename)
-    :param ref_type: document reference type(e.g. document, page, process)
-    :param root_asset_dir: root asset directory
-    :param dirs_to_fetch: a subset of dirs to restore
-    :param full_restore: if True, restore all assets, otherwise only restore the dirs_to_fetch
-    that are required for the extract pipeline.
-    :return:
-    """
-    s3_root_path = s3_asset_path(ref_id, ref_type)
-    connected = StorageManager.ensure_connection("s3://", silence_exceptions=True)
-    if not connected:
-        logger.error(f"Error fetching assets : Could not connect to S3")
-        return None
-
-    logger.info(f"Restoring assets from {s3_root_path} to {root_asset_dir}")
-
-    if full_restore:
-        try:
-            StorageManager.copy_remote(
-                s3_root_path,
-                root_asset_dir,
-                match_wildcard="*",
-                overwrite=True,
-            )
-        except Exception as e:
-            logger.error(f"Error fetching all assets : {e}")
-    else:
-        for dir_to_fetch in dirs_to_fetch:
-            try:
-                StorageManager.copy_remote(
-                    s3_root_path,
-                    root_asset_dir,
-                    match_wildcard=f"*/{dir_to_fetch}/*",
-                    overwrite=True,
-                )
-            except Exception as e:
-                logger.error(f"Error fetching assets from {dir_to_fetch} : {e}")
-    return s3_root_path

@@ -90,7 +90,6 @@ def prepare_asset_directory(
                 shutil.copy2(src, dst)
             existing_files = sorted(os.listdir(frames_dir))
 
-    valid_frames = False
     if existing_files:
         existing_frames = [
             os.path.join(frames_dir, file)
@@ -104,32 +103,31 @@ def prepare_asset_directory(
 
         if valid_frames:
             logger.info(
-                f"Frames already exist in '{frames_dir}' and match the expected format. Skipping frame processing."
+                f"Frames already exist in '{frames_dir}' and match the expected format. Skipping further processing."
             )
+            metadata_file = os.path.join(root_asset_dir, f"{ref_id}.meta.json")
+            return root_asset_dir, frames_dir, metadata_file
 
-    if not valid_frames:
-        # Copy local file to the target path in the asset directory
-        target_path = os.path.join(root_asset_dir, ref_id)
-        if not os.path.exists(target_path):
-            shutil.copy2(local_path, target_path)
-            with open(target_path, 'a') as f:
-                f.flush()
-                os.fsync(f.fileno())
-            logger.info(f"Copied file from '{local_path}' to '{target_path}'.")
+    # Copy local file to the target path in the asset directory
+    target_path = os.path.join(root_asset_dir, ref_id)
+    if not os.path.exists(target_path):
+        shutil.copy2(local_path, target_path)
+        with open(target_path, 'a') as f:
+            f.flush()
+            os.fsync(f.fileno())
+        logger.info(f"Copied file from '{local_path}' to '{target_path}'.")
 
-        logger.info(f"Root asset directory created: '{root_asset_dir}'")
+    logger.info(f"Root asset directory created: '{root_asset_dir}'")
 
-        for idx, frame in enumerate(frames):
-            frame_path = os.path.join(frames_dir, f"{idx + 1:05}.png")
-            try:
-                Image.fromarray(frame).save(frame_path)
-                logger.debug(f"Frame {idx + 1} saved at '{frame_path}'.")
-
-                img = Image.open(frame_path)
-                logger.debug(f"Image dimensions: {img.size}")
-            except Exception as e:
-                logger.error(f"Error while processing frame {idx + 1} - {e}")
-                raise
+    for idx, frame in enumerate(frames):
+        frame_path = os.path.join(frames_dir, f"{idx + 1:05}.png")
+        try:
+            Image.fromarray(frame).save(frame_path)
+            logger.debug(f"Frame {idx + 1} saved at '{frame_path}'.")
+            logger.debug(f"Image dimensions: {(frame.shape[1], frame.shape[0])}")
+        except Exception as e:
+            logger.error(f"Error while processing frame {idx + 1} - {e}")
+            raise
 
     # Download additional metadata for the asset
     metadata_file = download_asset(
@@ -326,6 +324,7 @@ def restore_assets(
     root_asset_dir: str,
     full_restore=False,
     overwrite=False,
+    dirs_to_restore: Optional[List[str]] = None,
 ) -> Optional[str]:
     """
     Restore assets from primary storage (S3) into root asset directory. This restores
@@ -336,6 +335,7 @@ def restore_assets(
     :param root_asset_dir: root asset directory
     :param full_restore: if True, restore all assets, otherwise only restore subset of assets (clean, results, pdf)
     that are required for the extract pipeline.
+    :param dirs_to_restore: Subset of assets to restore if full_restore = false. Default: ["clean", "results", "pdf"]
     :param overwrite: if True, overwrite existing assets in root asset directory
     :return:
     """
@@ -360,7 +360,9 @@ def restore_assets(
         except Exception as e:
             logger.error(f"Error restoring assets : {e}")
     else:
-        dirs_to_restore = ["clean", "results", "pdf"]
+        if dirs_to_restore is None:
+            dirs_to_restore = ["clean", "results", "pdf"]
+
         for dir_to_restore in dirs_to_restore:
             try:
                 StorageManager.copy_remote(
