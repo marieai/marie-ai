@@ -1,3 +1,4 @@
+import json
 import os
 import traceback
 from collections.abc import Iterable
@@ -65,11 +66,17 @@ def load_layoutlmv3_processor(
     return LayoutLMv3Processor(image_processor, tokenizer=tokenizer)
 
 
-def resolve_architecture(name: str):
-    try:
-        return ARCHITECTURE_REGISTRY[name]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported architecture: {name}")
+def load_classifier_model(model_path: str) -> tuple[dict, nn.Module]:
+    with open(os.path.join(model_path, "config.json"), encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    if os.path.isfile(os.path.join(model_path, "marie.json")):
+        config.update(ModelRegistry.config(model_path))
+    architectures = config.get("architectures") or []
+    architecture = config.get("architecture") or next(iter(architectures), None)
+    model_class = ARCHITECTURE_REGISTRY.get(
+        architecture, AutoModelForSequenceClassification
+    )
+    return config, model_class.from_pretrained(model_path)
 
 
 def optimize_model(model: nn.Module, logger) -> Callable | Module:
@@ -290,22 +297,7 @@ class TransformersPageLevelClassifier(BaseDocumentClassifier):
                 # use_auth_token=use_auth_token,
             )
         elif task == "text-classification-multimodal":
-            self.model_config = ModelRegistry.config(model_name_or_path)
-
-            architecture = self.model_config.get("architecture") or (
-                self.model_config.get("architectures")[0]
-                if isinstance(self.model_config.get("architectures"), list)
-                and self.model_config.get("architectures")
-                else None
-            )
-
-            model_class = (
-                resolve_architecture(architecture)
-                if architecture
-                else AutoModelForSequenceClassification
-            )
-
-            self.model = model_class.from_pretrained(model_name_or_path)
+            self.model_config, self.model = load_classifier_model(model_name_or_path)
             self.model = optimize_model(self.model, self.logger)
             self.model = self.model.eval().to(self.device)
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
@@ -610,22 +602,12 @@ class TransformersDocumentLevelClassifier(BaseDocumentClassifier):
         if tokenizer is None:
             tokenizer = model_name_or_path
 
-        self.model_config = ModelRegistry.config(model_name_or_path)
-
-        architecture = self.model_config.get("architecture") or (
-            self.model_config.get("architectures")[0]
-            if isinstance(self.model_config.get("architectures"), list)
-            and self.model_config.get("architectures")
-            else None
-        )
-
-        model_class = (
-            resolve_architecture(architecture)
-            if architecture
-            else AutoModelForSequenceClassification
-        )
-
-        self.model = model_class.from_pretrained(model_name_or_path)
+        self.model_config, self.model = load_classifier_model(model_name_or_path)
+        if self.id2label is None:
+            self.id2label = {
+                int(key): value
+                for key, value in self.model_config.get("id2label", {}).items()
+            }
         self.model = optimize_model(self.model, self.logger)
         self.model = self.model.eval().to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
@@ -826,22 +808,12 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
         if tokenizer is None:
             tokenizer = model_name_or_path
 
-        self.model_config = ModelRegistry.config(model_name_or_path)
-
-        architecture = self.model_config.get("architecture") or (
-            self.model_config.get("architectures")[0]
-            if isinstance(self.model_config.get("architectures"), list)
-            and self.model_config.get("architectures")
-            else None
-        )
-
-        model_class = (
-            resolve_architecture(architecture)
-            if architecture
-            else AutoModelForSequenceClassification
-        )
-
-        self.model = model_class.from_pretrained(model_name_or_path)
+        self.model_config, self.model = load_classifier_model(model_name_or_path)
+        if self.id2label is None:
+            self.id2label = {
+                int(key): value
+                for key, value in self.model_config.get("id2label", {}).items()
+            }
         self.model = optimize_model(self.model, self.logger)
         self.model = self.model.eval().to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer)
