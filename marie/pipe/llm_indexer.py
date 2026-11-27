@@ -105,14 +105,22 @@ class LLMIndexerPipelineComponent(PipelineComponent):
                     for task_name, indexed_result in indexing_by_task.items():
                         if task_name not in self.llm_tasks:
                             continue
-                        page_task_meta = {
-                            "indexer": key,
-                            "page": indexed_result.page,
-                        }
-                        if indexed_result.error:
-                            page_task_meta["error"] = indexed_result.value
+                        if isinstance(indexed_result, (tuple, list)):
+                            value, error = indexed_result
+                            page_task_meta = {
+                                "indexer": key,
+                                "page": idx,
+                                "indexing": value,
+                            }
+                            if error:
+                                page_task_meta["error"] = error
                         else:
-                            page_task_meta["indexing"] = indexed_result.value
+                            page_task_meta = {
+                                "indexer": key,
+                                "page": indexed_result.page,
+                            }
+                            field = "error" if indexed_result.error else "indexing"
+                            page_task_meta[field] = indexed_result.value
                         task_meta[task_name].append(page_task_meta)
 
                 for task_name, meta in task_meta.items():

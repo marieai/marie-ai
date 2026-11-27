@@ -66,6 +66,52 @@ def query_planner_mock_annotator_llm(planner_info: PlannerInfo, **kwargs) -> Que
     return QueryPlan(nodes=[root, annotate, end])
 
 
+@register_query_plan("mock_llm_handoff")
+def query_planner_mock_llm_handoff(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
+    """Run mock preparation, queued annotation, and a separate storage reader."""
+    definitions = [
+        ("START", NoopQueryDefinition()),
+        (
+            "Prepare mock OCR",
+            ExecutorEndpointQueryDefinition(
+                endpoint="mock_llm_prepare://mock/llm/prepare",
+                params={},
+            ),
+        ),
+        (
+            "Annotator LLM",
+            LlmQueryDefinition(
+                model_name="gpt-5.2-mock",
+                endpoint="annotator_llm://annotator/llm",
+                params={"layout": "mock-llm", "key": "mock-llm"},
+            ),
+        ),
+        (
+            "Read LLM output",
+            ExecutorEndpointQueryDefinition(
+                endpoint="mock_llm_reader://mock/llm/read",
+                params={},
+            ),
+        ),
+        ("END", NoopQueryDefinition()),
+    ]
+    nodes = []
+    for label, definition in definitions:
+        nodes.append(
+            Query(
+                task_id=increment_uuid7str(
+                    planner_info.base_id, planner_info.current_id
+                ),
+                query_str=f"{planner_info.current_id}: {label}",
+                dependencies=[nodes[-1].task_id] if nodes else [],
+                node_type=QueryType.COMPUTE,
+                definition=definition,
+            )
+        )
+        planner_info.current_id += 1
+    return QueryPlan(nodes=nodes)
+
+
 @register_query_plan("mock_simple")
 def query_planner_mock_simple(planner_info: PlannerInfo, **kwargs) -> QueryPlan:
     """

@@ -10,8 +10,8 @@ PROVIDER="${1:-${PROVIDER:-k3d}}"
 CLUSTER_NAME="${CLUSTER_NAME:-marie-helm-smoke}"
 NAMESPACE="${NAMESPACE:-marie}"
 RELEASE="${RELEASE:-marie}"
-MARIE_IMAGE="${MARIE_IMAGE:-marieai/marie:5.2.1-cuda}"
-GATEWAY_IMAGE="${GATEWAY_IMAGE:-marieai/marie-gateway:5.2.1-cpu}"
+MARIE_IMAGE="${MARIE_IMAGE:-marieai/marie:5.2.2-cuda}"
+GATEWAY_IMAGE="${GATEWAY_IMAGE:-marieai/marie-gateway:5.2.2-cpu}"
 LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-true}"
 SKIP_OPTIONAL="${SKIP_OPTIONAL:-false}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-20m}"
@@ -31,10 +31,11 @@ Environment:
   CLUSTER_NAME       Local cluster name (default: marie-helm-smoke)
   NAMESPACE          Kubernetes namespace (default: marie)
   RELEASE            Helm release name (default: marie)
-  MARIE_IMAGE        Executor image (default: marieai/marie:5.2.1-cuda)
-  GATEWAY_IMAGE      Gateway/server image (default: marieai/marie-gateway:5.2.1-cpu)
+  MARIE_IMAGE        Executor image (default: marieai/marie:5.2.2-cuda)
+  GATEWAY_IMAGE      Gateway/server image (default: marieai/marie-gateway:5.2.2-cpu)
   LOAD_LOCAL_IMAGES  Load local Docker images into the cluster if present (default: true)
   SKIP_OPTIONAL      Disable ClickHouse for smoke speed (default: false)
+  HELM_VALUES_FILE   Additional deployment values (e.g. ClickHouse reader Secret reference)
   WAIT_TIMEOUT       Helm/kubectl wait timeout (default: 20m)
   K3D_IMAGE_IMPORT_MODE k3d image import mode (default: direct)
   K3D_AGENTS         k3d agent count for new smoke clusters (default: 2)
@@ -165,6 +166,10 @@ helm_args=(
     --set gitea.enabled=false
     --wait --timeout "${WAIT_TIMEOUT}"
 )
+
+if [[ -n "${HELM_VALUES_FILE:-}" ]]; then
+    helm_args+=(-f "${HELM_VALUES_FILE}")
+fi
 
 if [[ "${SKIP_OPTIONAL}" == "true" ]]; then
     helm_args+=(--set clickhouse.enabled=false)

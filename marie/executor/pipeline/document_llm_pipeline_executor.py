@@ -32,19 +32,10 @@ class DocumentLLMPipelineExecutor(PipelineExecutor):
         super().__init__(name, device, num_worker_preprocess, storage, **kwargs)
         logger.info(f"Starting Pipeline Setup")
         logger.info(f"Pipelines config: {pipelines}")
-        has_cuda = True if self.device.type.startswith("cuda") else False
-        self.pipeline = LLMPipeline(pipelines_config=pipelines, cuda=has_cuda)
+        self.pipeline = LLMPipeline(pipelines_config=pipelines, device=self.device)
 
-    @requests(on="/document/classify")
-    def handle_classify(
-        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ):
-        return self.run_llm_pipeline(docs, parameters)
-
-    @requests(on="/document/index")
-    def handle_index(
-        self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs
-    ):
+    @requests(on=["/document/index", "/document/classify"])
+    def handle(self, docs: DocList[AssetKeyDoc], parameters: dict, *args, **kwargs):
         return self.run_llm_pipeline(docs, parameters)
 
     def run_llm_pipeline(self, docs: DocList[AssetKeyDoc], parameters: dict):

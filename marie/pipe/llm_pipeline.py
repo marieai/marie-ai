@@ -14,9 +14,9 @@ from marie.ocr.util import get_known_ocr_engines
 from marie.pipe.base_pipeline import BasePipeline
 from marie.pipe.components import (
     burst_frames,
-    is_component_enabled,
     load_pipeline,
     ocr_frames,
+    rotate_frames,
     update_existing_meta,
 )
 from marie.pipe.llm_indexer import LLMIndexerPipelineComponent
@@ -26,6 +26,7 @@ from marie.utils.asset_util import (
     split_filename,
     store_assets,
 )
+from marie.utils.image_utils import rotate_image_frames
 from marie.utils.json import load_json_file, store_json_object
 from marie.utils.utils import ensure_exists
 
@@ -69,9 +70,11 @@ class LLMPipeline(BasePipeline):
         super().__init__(silence_exceptions, **kwargs)
         self.pipelines_config = pipelines_config
         self.default_pipeline_config = None
+        self.pipeline_configs_dict = dict()
 
         for conf in pipelines_config:
             conf = conf["pipeline"]
+            self.pipeline_configs_dict[conf["name"]] = conf
             if conf.get("default", False):
                 if self.default_pipeline_config is not None:
                     raise BadConfigSource(
@@ -84,7 +87,7 @@ class LLMPipeline(BasePipeline):
 
         # sometimes we have CUDA/GPU support but want to only use CPU
         resolved_devices, _ = initialize_device_settings(
-            devices=[device], use_cuda=True, multi_gpu=False
+            devices=[device], multi_gpu=False
         )
         if len(resolved_devices) > 1:
             self.logger.warning(
@@ -93,10 +96,8 @@ class LLMPipeline(BasePipeline):
                 resolved_devices[0],
             )
         self.device = resolved_devices[0]
-        # self.has_cuda = True if self.device.type.startswith("cuda") else False
 
         self.ocr_engines = get_known_ocr_engines(self.device.type, "default")
-        # self.ocr_engines = {"default": None}
 
         (
             self.pipeline_name,
@@ -113,6 +114,7 @@ class LLMPipeline(BasePipeline):
         job_id: str,
         runtime_conf: Optional[dict[str, Any]] = None,
         queue_id: str = None,
+        pages: Optional[List[int]] = None,
     ) -> dict[str, Any]:
         if ref_type is None or ref_id is None:
             raise ValueError("Invalid reference type or id")
@@ -123,6 +125,7 @@ class LLMPipeline(BasePipeline):
         self.logger.info(f"Executing pipeline runtime_conf : {runtime_conf}")
 
         # check if the current pipeline name is the default pipeline name
+        runtime_conf = runtime_conf or {}
         if "name" in runtime_conf:
             expected_pipeline_name = runtime_conf["name"]
             if expected_pipeline_name != self.pipeline_name:
@@ -140,7 +143,7 @@ class LLMPipeline(BasePipeline):
 
         # TODO: use runtime config to modify pipline features at runtime
 
-        metadata = {
+        metadata: dict[str, Any] = {
             "ref_id": ref_id,
             "ref_type": ref_type,
             "job_id": job_id,
@@ -151,29 +154,65 @@ class LLMPipeline(BasePipeline):
         restore_assets(
             ref_id, ref_type, root_asset_dir, full_restore=True, overwrite=True
         )
-        burst_frames(ref_id, frames, root_asset_dir)
 
-        # Load Available OCR data if possible
+        # Rotate pages
+        rotation_enabled = runtime_conf.get("rotation", {"enabled": False}).get(
+            "enabled", True
+        )
+        any_rotated = False
+        if pages is None:
+            if rotation_enabled:
+                metadata["rotation"], any_rotated = rotate_frames(
+                    ref_id, frames, root_asset_dir, force=True
+                )
+            burst_frames(ref_id, frames, root_asset_dir, force=any_rotated)
+        elif rotation_enabled:
+            # Selected frames can be rotated for inference without replacing whole-document assets.
+            _, any_rotated = rotate_image_frames(frames)
+
         ocr_results = ocr_frames(
             self.ocr_engines,
             ref_id,
             frames,
             root_asset_dir,
             queue_id=queue_id,
+            force=any_rotated,
+            source_pages=pages,
         )
         metadata["ocr"] = ocr_results
 
         # Track pipline execution time for metrics
         with TimeContext(f"### {self.pipeline_name} LLMPipeline info") as tc:
-            self.execute_llm_pipeline(frames, metadata, ocr_results, runtime_conf, root_asset_dir)
-            metadata[f"delta_time_{self.pipeline_name}"] = tc.now()
-        self.store_metadata(ref_id, ref_type, root_asset_dir, metadata)
-        store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
+            self.execute_llm_pipeline(
+                frames, metadata, ocr_results, runtime_conf, pages, root_asset_dir
+            )
+
+            metadata[
+                f"delta_time_{self.pipeline_name}{f'_{min(pages)}-{max(pages)}' if pages else ''}"
+            ] = tc.now()
+
+        # OCR only stored in results directory until merger node, Preserves S3 and local disk space
         del metadata["ocr"]
+        self.store_metadata(
+            ref_id,
+            ref_type,
+            root_asset_dir,
+            metadata,
+            merge_page_sets=pages is not None,
+        )
+        store_assets(ref_id, ref_type, root_asset_dir, match_wildcard="*.json")
 
         return metadata
 
-    def execute_llm_pipeline(self, frames, metadata, ocr_results, runtime_conf: dict, root_asset_dir: str = None):
+    def execute_llm_pipeline(
+        self,
+        frames,
+        metadata,
+        ocr_results,
+        runtime_conf: dict,
+        pages: Optional[List[int]] = None,
+        root_asset_path: str | None = None,
+    ):
         if self.classifier_groups:
             if "classifications" not in metadata:
                 metadata["classifications"] = []
@@ -184,43 +223,36 @@ class LLMPipeline(BasePipeline):
         processing_group_pipeline = defaultdict(list)
         grouped_sub_classifiers = defaultdict(dict)
 
-        page_classifier_enabled = runtime_conf.get("page_classifier", {}).get(
-            "enabled",
-            is_component_enabled(
-                self.default_pipeline_config.get("page_classifier"), True
-            ),
-        )
-
-        if page_classifier_enabled:
-            for group, classifier_group in self.classifier_groups.items():
-                classifier_component, sub_classifiers = self.build_classifier_component(
-                    classifier_group, group
+        for group, classifier_group in self.classifier_groups.items():
+            if runtime_conf.get("page_classifier") and not runtime_conf.get(
+                "page_classifier"
+            ).get("enabled", True):
+                self.logger.debug(
+                    f"Skipping disabled page classifier for group: {group}"
                 )
-                processing_group_pipeline[group].append(classifier_component)
-                grouped_sub_classifiers[group] = sub_classifiers
+                continue
+
+            classifier_component, sub_classifiers = self.build_classifier_component(
+                classifier_group, group
+            )
+            processing_group_pipeline[group].append(classifier_component)
+            grouped_sub_classifiers[group] = sub_classifiers
 
         llm_task_config = runtime_conf.get("llm_tasks", {})
         for group, indexer_group in self.indexer_groups.items():
             self.logger.info(
                 f"Processing llm pipeline/group :  {self.pipeline_name}, {group}"
             )
-            group_llm_tasks = []
-            for task, enabled in indexer_group.get("llm_tasks", {}).items():
-                runtime_task = llm_task_config.get(task, {})
-                if not runtime_task and enabled:
-                    self.logger.info(f"Using Default Task {task}")
-                    group_llm_tasks.append(task)
-                elif runtime_task.get("enabled", enabled):
-                    group_llm_tasks.append(task)
-                else:
-                    self.logger.info(f"Skipping Task {task} as it is disabled")
-
             processing_group_pipeline[group].append(
                 LLMIndexerPipelineComponent(
                     name="mmllm_pipeline_component",
                     document_indexers=indexer_group["indexers"],
-                    llm_tasks=group_llm_tasks,
-                    root_asset_path=root_asset_dir,
+                    root_asset_path=root_asset_path,
+                    llm_tasks=[
+                        task
+                        for task, enabled in indexer_group.get("llm_tasks", {}).items()
+                        if llm_task_config.get(task, {}).get("enabled", enabled)
+                    ],
                 )
             )
 
@@ -231,23 +263,59 @@ class LLMPipeline(BasePipeline):
                 sub_classifiers,
                 frames,
                 ocr_results,
-                "indexing_pipeline",
+                f"{self.pipeline_name}_{group}",
                 include_ocr_lines=True,
             )
             if "indexes" in results:
                 for task_name, index in results["indexes"].items():
+                    if pages is not None:
+                        remapped = {}
+                        for local_page, item in index["pages"].items():
+                            source_page = pages[int(local_page)]
+                            item["best"]["page"] = source_page
+                            for detail in item["details"]:
+                                detail["page"] = source_page
+                            remapped[source_page] = item
+                        index["pages"] = remapped
+                        index["page_numbers"] = list(remapped)
                     metadata["indexes"].append(
                         {
                             "group": group,
                             "task": task_name,
                             "index": index,
+                            "pipeline": self.pipeline_name,
                         }
                     )
             if "classifiers" in results:
+                # Re-assign original page numbers
+                if pages:
+                    zero_index_pages = results["classifiers"]["pages"]
+                    assert len(zero_index_pages) == len(pages)
+                    results["classifiers"]["page_numbers"] = pages
+                    reconciled_pages = {}
+                    for local_page, classification in zero_index_pages.items():
+                        page = pages[int(local_page)]
+                        best = classification["best"]
+                        if hasattr(best, "page"):
+                            best.page = page
+                        else:
+                            best["page"] = page
+                        for detail in classification["details"]:
+                            detail["page"] = page
+                            for subclassifier in detail.get("sub_classifier", []):
+                                subclassifier["page"] = page
+                                for subclassifier_detail in subclassifier.get(
+                                    "details", []
+                                ):
+                                    subclassifier_detail["page"] = page
+                        reconciled_pages[page] = classification
+                    results["classifiers"]["pages"] = reconciled_pages
+
                 metadata["classifications"].append(
                     {
                         "group": group,
                         "classification": results["classifiers"],
+                        "pipeline": self.pipeline_name,
                     }
                 )
 
@@ -258,7 +326,9 @@ class LLMPipeline(BasePipeline):
         root_asset_dir: str,
         metadata: dict[str, Any],
         infix: str = "meta",
-    ) -> None:
+        save: bool = True,
+        merge_page_sets: bool = False,
+    ) -> dict[str, Any]:
         """
         Store current metadata for the document. Format is {ref_id}.meta.json in the root asset directory
         :param ref_id: reference id of the document
@@ -268,12 +338,19 @@ class LLMPipeline(BasePipeline):
         :param infix: infix to use for the metadata file, default is "meta" e.g. {ref_id}.meta.json
         :return: None
         """
-        filename, _, _ = split_filename(ref_id)
-        meta_filename = f"{filename}.{infix}.json"
-        # Save pipeline checkpoint
-        pipeline_meta_path = os.path.join(root_asset_dir, self.pipeline_name)
-        ensure_exists(pipeline_meta_path)
-        store_json_object(metadata, os.path.join(pipeline_meta_path, meta_filename))
+        meta_filename = f"{ref_id}.{infix}.json"
+
+        if save:
+            # Save pipeline checkpoint
+            pipeline_meta_path = os.path.join(root_asset_dir, self.pipeline_name)
+            ensure_exists(pipeline_meta_path)
+            checkpoint_path = os.path.join(pipeline_meta_path, meta_filename)
+            checkpoint = metadata
+            if merge_page_sets and os.path.isfile(checkpoint_path):
+                previous = load_json_file(checkpoint_path, True)
+                if previous.get("job_id") == metadata["job_id"]:
+                    checkpoint = update_existing_meta(previous, metadata)
+            store_json_object(checkpoint, checkpoint_path)
 
         # Main save to meta file
         meta_path = os.path.join(root_asset_dir, meta_filename)
@@ -285,8 +362,11 @@ class LLMPipeline(BasePipeline):
         else:
             self.logger.warning(f"No previous meta found : {meta_path}")
 
-        self.logger.info(f"Storing metadata : {meta_path}")
-        store_json_object(metadata, meta_path)
+        if save:
+            self.logger.info(f"Storing metadata : {meta_path}")
+            store_json_object(metadata, meta_path)
+
+        return metadata
 
     def execute(
         self,

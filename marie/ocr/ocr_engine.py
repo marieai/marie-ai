@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 import cv2
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 from marie.boxes import BoxProcessorCraft, BoxProcessorUlimDit, PSMode
 from marie.boxes.box_processor import BoxProcessor
@@ -170,7 +171,9 @@ class OcrEngine(ABC):
         is_crop_to_content_enabled = kwargs.get("crop_to_content", False)
         padding = 0
 
-        for i, img in enumerate(frames):
+        for i, img in tqdm(
+            enumerate(frames), total=len(frames), desc="OCR", unit="frame"
+        ):
             try:
                 if is_crop_to_content_enabled:
                     img = crop_to_content(img)

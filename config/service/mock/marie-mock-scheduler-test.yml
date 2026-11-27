@@ -194,6 +194,7 @@ with:
       - gen5_extract
       - mock_parallel_subgraphs
       - mock_annotator_llm
+      - mock_llm_handoff
 
     query_planners:
       watch_wheels: True
@@ -207,6 +208,26 @@ prefetch: 4
 
 # Multiple mock executors with different configurations for scheduler testing
 executors:
+  # Separate deployments make the downstream handoff observable in the scheduler.
+  - name: mock_llm_prepare
+    uses: &mock_llm_handoff_executor
+      jtype: LlmHandoffExecutorMock
+      metas:
+        py_modules:
+          - marie.executor.mock.llm_handoff_executor
+      with:
+        storage:
+          s3:
+            <<: *s3_conf_shared
+            enabled: True
+    timeout_ready: 3000000
+    replicas: 1
+
+  - name: mock_llm_reader
+    uses: *mock_llm_handoff_executor
+    timeout_ready: 3000000
+    replicas: 1
+
   # Real LLM annotator executor for AIMock-backed gateway stress testing.
   # This must stay on DocumentAnnotatorLLMExecutor so the path exercises:
   # gateway -> scheduler -> annotator_llm://annotator/llm -> LLMAnnotator -> OpenAIEngine.
@@ -242,6 +263,7 @@ executors:
       OPENAI_API_BASE: ${{ ENV.OPENAI_API_BASE }}
       LLM_QUEUE_ENABLED: ${{ ENV.LLM_QUEUE_ENABLED }}
       LLM_QUEUE_URL: ${{ ENV.LLM_QUEUE_URL }}
+      LLM_QUEUE_FABRIC_GROUP_ID: default
 
   - name: plugin_daemon_executor          # MUST equal the scheme: plugin_daemon_executor://
     uses:

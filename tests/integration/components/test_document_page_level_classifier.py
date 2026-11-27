@@ -3,7 +3,7 @@ import os
 
 import psutil
 
-from marie.components import TransformersDocumentClassifier
+from marie.components.document_classifier import TransformersPageLevelClassifier
 from marie.logging_core.profile import TimeContext
 from marie.ocr.util import get_words_and_boxes
 from marie.registry.model_registry import ModelRegistry
@@ -48,7 +48,7 @@ def test_sequence_classifier():
         print("resolved_model_name_or_path", resolved_model_name_or_path)
         return
 
-    classifier = TransformersDocumentClassifier(model_name_or_path=model_name_or_path)
+    classifier = TransformersPageLevelClassifier(model_name_or_path=model_name_or_path)
 
     for i in range(32):
         documents = docs_from_file("~/tmp/models/mpc/158955602_1.png")

@@ -82,6 +82,7 @@ services:
         /bin/sh /query-explorer/bootstrap.sh
     environment:
       CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_QUERY_READER_PASSWORD: ${CLICKHOUSE_QUERY_READER_PASSWORD:-}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-marie}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Supply the existing marie system password}
     depends_on:

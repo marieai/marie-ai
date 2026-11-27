@@ -1,3 +1,6 @@
+{{- if and .Values.enabled .Values.queryExplorer.enabled (not .Values.schema.enabled) }}
+{{- fail "clickhouse.queryExplorer.enabled requires clickhouse.schema.enabled" }}
+{{- end }}
 {{- if and .Values.enabled .Values.schema.enabled (eq (include "marie.lifecycleSuspended" .) "false") }}
 apiVersion: v1
 kind: ConfigMap

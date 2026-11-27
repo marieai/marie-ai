@@ -2,7 +2,6 @@ import json
 import os.path
 
 import pytest
-
 from marie.registry.model_registry import ModelRegistry
 
 
@@ -66,3 +65,16 @@ def test_get_local_path_from_path(test_input, model_zoo_dir):
     config = ModelRegistry.get(model_dir, **kwargs)
 
     assert config == model_dir
+
+
+def test_checkpoint_prefers_explicit_then_safetensors_then_bin(tmp_path):
+    model = tmp_path / 'local'
+    model.mkdir()
+    (model / 'marie.json').write_text('{"_name_or_path": "local"}')
+    for name in ('pytorch_model.bin', 'model.safetensors'):
+        (model / name).touch()
+        assert ModelRegistry.checkpoint(model) == str(model / name)
+    (model / 'override.bin').touch()
+    assert ModelRegistry.checkpoint(model, checkpoint='override.bin') == str(
+        model / 'override.bin'
+    )

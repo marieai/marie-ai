@@ -8,7 +8,7 @@ The legacy `otel.otel_traces` table is now `telemetry.spans`: one row per span, 
 
 ## Ownership and artifacts
 
-Bootstrap reuses the deployment’s existing ClickHouse operator connection. Compose generates and retains a reader password in the existing data volume; Helm uses one reader Secret. The application never provisions users. `studio_query_definer` cannot log in (`HOST NONE`); `studio_query` has SELECT on the five curated views, the internal version/readiness view and four columns of its own `system.quota_usage` metadata. No base, file/network, arbitrary dictionary, process-list or access-management grants are assigned to the reader.
+Bootstrap reuses the deployment’s existing ClickHouse operator connection. Compose retains the shared reader password in the ClickHouse data volume. Helm mounts a reader Secret. Studio separately provisions organization readers for active organizations when SQL explorer is enabled. `studio_query_definer` cannot log in (`HOST NONE`); `studio_query` has SELECT on the five curated views, the internal version/readiness view and four columns of its own `system.quota_usage` metadata. No base, file/network, arbitrary dictionary, process-list or access-management grants are assigned to the reader.
 
 Studio owns explicit columns and price expressions in `packages/@marie/config/src/observability-query.ts`, `packages/@marie/db/src/utils/observability-query-schema.ts` and `trace-cost-sql.ts`. From the Studio checkout, generate or verify both deployment artifacts:
 
@@ -19,33 +19,67 @@ pnpm --dir packages/api exec tsx scripts/generate-query-explorer-schema.ts --ai-
 
 `views.sql` and the Helm `files/query-explorer-views.sql` must match that output. The Helm `files/query-explorer-bootstrap.sh` must match this directory's bootstrap script. Ship both repos' matching artifact versions together. The version view also probes the pricing dictionary; missing pricing dependencies fail application readiness.
 
-## Compose, including existing volumes
+## Script and Docker Compose
 
-Use the existing ClickHouse Compose file and the same connection settings used to start it. There is no overlay Compose file or additional connection configuration. With ClickHouse running, apply the SQL explorer schema:
+On the Marie-AI host, set the existing operator's `CLICKHOUSE_PASSWORD` in the deployment environment. The default user is `marie` and the database is `telemetry`. To use a credential you already manage for Studio, set `CLICKHOUSE_QUERY_READER_PASSWORD` before the first bootstrap. Use a single-line random secret of at least 32 bytes for Studio's managed organization readers.
 
-Set the existing system identity to `marie`, database to `telemetry`, and supply its existing password through `CLICKHOUSE_PASSWORD`. Compose rejects an empty/missing password. Where the deployment already defines `CLICKHOUSE_APP_PASSWORD`, the final environment-file entry can use `CLICKHOUSE_PASSWORD=${CLICKHOUSE_APP_PASSWORD}` to reuse it. Do not introduce a second system credential or commit passwords.
-
-```bash
-docker compose --project-directory . -f Dockerfiles/docker-compose.clickhouse.yml --profile schema run --rm --no-deps clickhouse-query-schema
-```
-
-If your normal Compose command supplies an environment file or project name, supply those same options here so the job uses the same credentials and volume. The command does not restart the server. Existing deployments must first apply the current OTel schema, including the pricing dictionary and materialized columns; an empty-volume entrypoint alone cannot migrate them.
-
-The job generates a private reader password once at `/var/lib/clickhouse/query-explorer/reader-password` in the existing data volume and reuses it on subsequent runs. It does not print the password. An operator can retrieve it locally:
+Run from the Marie-AI checkout:
 
 ```bash
-docker exec marie-clickhouse cat /var/lib/clickhouse/query-explorer/reader-password
+./bootstrap-marie.sh --env-file /path/to/marie-ai.env
 ```
 
-In Studio, open **Settings → Integrations → ClickHouse**, enter that value in **SQL reader password**, turn on **SQL explorer**, and save. Studio reuses the host and port already configured there. The next query uses the saved settings without an API restart. No SQL explorer environment variables or cancellation signing secret are needed.
+With ClickHouse enabled, bootstrap waits for service health, applies telemetry tables, organization views and pricing objects, then installs the shared SQL explorer views, grants and reader. The job signs in as `studio_query` and reads the version view and pricing probe before declaring success. A schema or reader check failure stops bootstrap. On a fresh volume, the job retains the supplied reader password or generates one. Subsequent runs reuse it. A conflicting supplied password stops the job and identifies the mismatch.
 
-Bootstrap is repeatable and changes only the feature-managed identities, grants, profile, quota and views. It does not reset application or ingestion credentials. The operator connection must have authority to manage those objects; the application never bootstraps through its ordinary database account.
+For an existing ClickHouse service started by this script, reapply only its schema with:
+
+```bash
+docker compose --env-file /path/to/marie-ai.env --project-name marie-infrastructure \
+  --project-directory . -f Dockerfiles/docker-compose.clickhouse.yml \
+  --profile schema run --rm -T --no-deps clickhouse-query-schema
+```
+
+For a standalone Compose install, use the project name that owns the ClickHouse data volume. If Compose generated the credential, transfer the contents of `/var/lib/clickhouse/query-explorer/reader-password` from the ClickHouse container to Studio's secret manager, excluding the trailing newline.
 
 ## Helm
 
-Set `clickhouse.enabled`, `clickhouse.schema.enabled` and `clickhouse.queryExplorer.enabled` true, and supply `clickhouse.queryExplorer.readerSecret.name`/`.key` through your existing secret-management process. The existing OTel schema Job then applies the views and restricted reader after the OTel schema, using its existing operator connection. There is one schema Job, no separate query bootstrap credential and no additional Studio Helm settings.
+Create a Secret in the Marie-AI release namespace with the shared reader password under the key `password`. Add these settings to the deployment values alongside the existing ClickHouse operator configuration:
 
-Enter the same reader password in Studio's existing ClickHouse panel and enable the switch after verifying the target deployment. Reader Secret values are never templated into the schema ConfigMap. SQL RBAC state persists in the ClickHouse data volume, so this path needs no new users.d mount or reload. To rotate, update the reader Secret, rerun the schema Job and save the new reader password in Studio. Qualify install, upgrade, rotation and rollback on the actual deployment before enablement.
+```yaml
+clickhouse:
+  enabled: true
+  schema:
+    enabled: true
+  queryExplorer:
+    enabled: true
+    readerSecret:
+      name: studio-query-reader
+      key: password
+```
+
+Install or upgrade the release with those values:
+
+```bash
+helm upgrade --install marie deploy/helm/charts/marie -n marie -f /path/to/deployment-values.yaml --wait
+```
+
+For the local Kubernetes bootstrap wrapper, use `./bootstrap-marie.sh --helm-values /path/to/deployment-values.yaml`. The post-install and post-upgrade Job applies the telemetry schema first, then mounts the Secret and provisions the shared reader. Telemetry-only Helm deployments can leave `queryExplorer.enabled` at its default of `false`.
+
+## Connect Studio
+
+Configure the Studio API on its own host with its reachable ClickHouse endpoint and the same `CLICKHOUSE_QUERY_READER_PASSWORD`. For a Studio Helm deployment, inject it into `api.extraEnv` (split API) or `application.extraEnv` (combined deployment). For example:
+
+```yaml
+api:
+  extraEnv:
+    - name: CLICKHOUSE_QUERY_READER_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: studio-query-reader
+          key: password
+```
+
+For separate clusters or namespaces, provision the same secret value in each location through your deployment secret manager. Restart the Studio API after changing its environment. In **Settings → Integrations → ClickHouse**, enable **SQL explorer** and save. **Shared telemetry** uses `studio_query`. **Current organization** requires a ready organization reader managed by Studio.
 
 ## Limits and cancellation
 

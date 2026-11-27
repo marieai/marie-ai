@@ -129,6 +129,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     TZ=${TZ} \
+    TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata \
     PYTHONUNBUFFERED=1
 
 # vLLM/Triton compile runtime launchers on first use.
@@ -151,6 +152,7 @@ RUN apt-get update -o APT::Update::Error-Mode=any && \
         libpq5 \
         openssh-client \
         poppler-utils \
+        tesseract-ocr-osd \
         python3.12 \
         python3.12-dev \
         tzdata && \

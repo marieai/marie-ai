@@ -31,7 +31,7 @@ spec:
       spec:
         containers:
           - name: marie
-            image: marieai/marie-gateway:5.2.1-cpu
+            image: marieai/marie-gateway:5.2.2-cpu
             # ... container config
   executorGroupSpecs:
     - groupName: ocr-gpu
@@ -41,7 +41,7 @@ spec:
         spec:
           containers:
             - name: marie
-              image: marieai/marie:5.2.1-cuda
+              image: marieai/marie:5.2.2-cuda
               resources:
                 limits:
                   nvidia.com/gpu: "1"

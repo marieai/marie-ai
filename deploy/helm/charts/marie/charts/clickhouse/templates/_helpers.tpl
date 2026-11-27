@@ -53,14 +53,3 @@ ClickHouse image
 {{- end }}
 {{- end }}
 {{- end }}
-
-{{/*
-ClickHouse service account name
-*/}}
-{{- define "clickhouse.serviceAccountName" -}}
-{{- if .Values.global.serviceAccount.create }}
-{{- default (printf "%s" .Release.Name) .Values.global.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.global.serviceAccount.name }}
-{{- end }}
-{{- end }}

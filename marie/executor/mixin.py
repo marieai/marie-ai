@@ -79,6 +79,9 @@ class StorageMixin:
             )
             self.asset_tracking_enabled = False
 
+        self.logger.info(f"storage_enabled  = {self.storage_enabled}")
+        self.logger.info(f"asset_tracking_enabled  = {self.asset_tracking_enabled}")
+
     # @Timer(text="stored in {:.4f} seconds")
     def store(
         self, ref_id: str, ref_type: str, store_mode: str, docs: DocList[StorageDoc]

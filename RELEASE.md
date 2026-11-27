@@ -2,6 +2,8 @@
 
 Marie is shipped from two package management systems, PyPi and Docker Hub. This article clarifies the release cycle and version identifier behind each system.
 
+For version-by-version changes and upgrade notes, see [CHANGELOG.md](CHANGELOG.md) or the [documentation release notes](docs/docs/changelog.md).
+
 <!-- START doctoc generated TOC please keep comment here to allow auto update -->
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
