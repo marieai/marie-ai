@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from docarray import DocList
+from marie.registry.model_registry import ModelRegistry
 from PIL import Image
 from torch.nn import Module
 from torch.utils.data import DataLoader
@@ -39,7 +40,6 @@ from marie.models.doc_classification.lmv3_document_classifier import (
     LayoutLMv3DocumentClassifier,
 )
 from marie.models.utils import initialize_device_settings, logger
-from marie.registry.model_registry import ModelRegistry
 
 ARCHITECTURE_REGISTRY = {
     "LayoutLMv3DocumentClassifier": LayoutLMv3DocumentClassifier,
@@ -978,3 +978,6 @@ class TransformersSplittingClassifier(BaseDocumentClassifier):
             document.tags["classification"] = formatted_prediction
 
         return documents
+
+
+TransformersDocumentClassifier = TransformersPageLevelClassifier

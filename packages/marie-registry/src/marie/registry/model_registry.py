@@ -571,7 +571,10 @@ class ModelRegistry:
         """
 
         resolved_path = ModelRegistry.get(
-            name_or_path, version, raise_exceptions_for_missing_entries, **kwargs
+            os.fspath(name_or_path),
+            version,
+            raise_exceptions_for_missing_entries,
+            **kwargs,
         )
 
         candidates = list(

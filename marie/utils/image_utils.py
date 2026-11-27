@@ -1,22 +1,27 @@
+from __future__ import annotations
+
 import hashlib
 import io
 import os
 import time
 from math import ceil
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-import cv2
 import numpy as np
-from PIL import Image
 from rich import print
-from tesserocr import PSM, PyTessBaseAPI
-from tqdm import tqdm
 
 from marie.logging_core.predefined import default_logger as logger
+
+if TYPE_CHECKING:
+    from PIL import Image
+    from tesserocr import PyTessBaseAPI
 
 
 def read_image(image):
     """Read image and convert to OpenCV compatible format"""
+    import cv2
+    from PIL import Image
+
     img = None
     if type(image) == str:
         img = cv2.imread(image)
@@ -44,6 +49,9 @@ def read_image(image):
 
 
 def paste_fragment(overlay, fragment, pos=(0, 0)):
+    import cv2
+    from PIL import Image
+
     col = list(np.random.choice(range(256), size=3))
     color = [int(col[0]), int(col[1]), int(col[2])]
     fragment = cv2.copyMakeBorder(
@@ -56,6 +64,8 @@ def paste_fragment(overlay, fragment, pos=(0, 0)):
 
 
 def viewImage(image, name="Display"):
+    import cv2
+
     cv2.namedWindow(name, cv2.WINDOW_AUTOSIZE)
     cv2.imshow(name, image)
     cv2.waitKey(0)
@@ -71,6 +81,8 @@ def imwrite_dpi(output_filename, cv_image, dpi=(300, 300)):
 
 def imwrite(output_path, img, dpi=None):
     """Save OpenCV image"""
+    import cv2
+
     try:
         if dpi is None:
             cv2.imwrite(output_path, img)
@@ -163,6 +175,8 @@ def convert_to_bytes(
     @return:
     """
 
+    from PIL import Image
+
     if isinstance(frame, np.ndarray):
         pil_img = Image.fromarray(frame)
     elif isinstance(frame, Image.Image):
@@ -177,6 +191,8 @@ def convert_to_bytes(
 
 def unsharp_mask(image, kernel_size=(5, 5), sigma=1.0, amount=1.0, threshold=0):
     """Return a sharpened version of the image, using an unsharp mask."""
+    import cv2
+
     blurred = cv2.GaussianBlur(image, kernel_size, sigma)
     sharpened = float(amount + 1) * image - float(amount) * blurred
     sharpened = np.maximum(sharpened, np.zeros(sharpened.shape))
@@ -197,6 +213,8 @@ def crop_to_content(frame: np.ndarray, content_aware=True) -> np.ndarray:
     @param content_aware: if enabled we will apply more aggressive crop method
     @return: new cropped frame
     """
+
+    import cv2
 
     start = time.time()
     # conversion required, or we will get 'Failure to use adaptiveThreshold: CV_8UC1 in function adaptiveThreshold'
@@ -312,6 +330,8 @@ def ensure_max_page_size(
                     new_height = int(new_width / aspect_ratio)
 
             # Resize the frame
+            import cv2
+
             resized_frame = cv2.resize(
                 frame, (new_width, new_height), interpolation=cv2.INTER_AREA
             )
@@ -323,18 +343,21 @@ def ensure_max_page_size(
 
 
 def detect_page_rotation(img, api: Optional[PyTessBaseAPI] = None) -> Dict[str, Any]:
+    from PIL import Image
+
     owns_api = api is None
-    _img = img.copy()
+    if owns_api:
+        from tesserocr import PSM, PyTessBaseAPI
+
+        api = PyTessBaseAPI(lang="osd", psm=PSM.OSD_ONLY)
+    _img = img
     try:
-        if owns_api:
-            api = PyTessBaseAPI(lang="osd", psm=PSM.OSD_ONLY)
-        else:
+        if not owns_api:
             api.Clear()
 
         if isinstance(_img, (str, bytes, os.PathLike)):
-            from marie.utils.docs import load_image
-
-            _img = load_image(_img)
+            with Image.open(_img) as source:
+                _img = source.convert("RGB")
         if isinstance(_img, np.ndarray):
             _img = Image.fromarray(_img).convert("RGB")
         elif isinstance(_img, Image.Image):
@@ -362,7 +385,7 @@ def detect_page_rotation(img, api: Optional[PyTessBaseAPI] = None) -> Dict[str, 
             "rotate": 0,
             "orientation": 0,
             "orientation_conf": 0,
-            "error": e,
+            "error": str(e),
         }
     finally:
         if api is not None:
@@ -374,6 +397,8 @@ def rotate_image_frames(
     threshold: float = 2.0,
     api: Optional[PyTessBaseAPI] = None,
 ) -> Tuple[dict, bool]:
+    from tqdm import tqdm
+
     any_rotated = False
     page_rotation = dict()
 
